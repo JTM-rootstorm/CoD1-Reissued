@@ -60,7 +60,118 @@ that, DLL data produced 50 bogus weak entries in the EXE).
   (CoDSP 0x528277, gamex86 0x2008126B, cgamex86 0x3004AB5B,
   uix86 0x40023A8B).
 
+## Miles 6.5e digital reverb: behaviour
+Observed in the game's mss32.dll (Miles 6.5e, image base 0x21100000;
+scratch Ghidra project, no names applied) to make x86recomp's
+Miles-compatible reverb (runtime/audio/digital_reverb) produce the same
+output. Addresses are the evidence; constants are listed with where
+they live and what they are for.
+
+API and state
+- Room type n (0x21115930) = set reverb (time, predelay, damping) and
+  levels (dry 1, wet) from entry n of a 26-entry table at 0x21155838,
+  16 bytes per entry: wet, time, damping, predelay (floats). n is the
+  EAX environment number and is not range-checked.
+- Set reverb (0x2112B0F0) stores the three values and the tail length
+  round((time + predelay) * 1000) ms (1000.0f at 0x2114BE08), and
+  recomputes the coefficients. Only when the driver wet level and time
+  are both above 1e-4 (0x2114BD1C) does it also wake the reverb and move
+  the read position to `round(rate * predelay)` samples behind the
+  write position (wrapping in the ring).
+- Set levels (0x2112AA10) stores dry/wet and wakes the reverb when wet
+  and time are above 1e-4. Waking = timeout at now + tail + 100 ms
+  (AIL_ms_count) and the active flag set.
+- A sample starting, resuming or getting a buffer (0x2112B690/B760/
+  B940), or getting new reverb levels while playing (0x2112A8B0), wakes
+  it when the sample's wet, the driver's wet and the time are all above
+  1e-4.
+- Driver open: dry 1, wet 1, time 0 (off); a sample opens with dry 1,
+  wet 0. The driver dry level multiplies every sample's dry gains.
+
+Buffers (driver open, 0x2112AA70)
+- One zeroed allocation holds a mono ring of 32-bit samples and the
+  delay lines. Ring length: the maximum predelay (DIG preference 2,
+  default 500 ms at 0x21156618) in samples, rounded up to whole mixer
+  fragments.
+- Four comb delay lines of round(rate * d) samples, d = 0.0297,
+  0.0371, 0.0411, 0.0437 s (floats at 0x21142238..0x21142244), and two
+  allpass lines of 0.005 and 0.0017 s (0x21142248, 0x2114224C).
+
+Per mixer fragment (0x2112DF90)
+- Before mixing (0x2112BCC0): if active and the ms clock has passed the
+  timeout, it goes inactive (ring and delay lines keep their contents
+  until it wakes again); otherwise the ring slot at the write position
+  is cleared.
+- While active, every sample whose wet scale round(driver wet x sample
+  wet x sample volume x master x 2048) (max 2048) is non-zero is mixed
+  mono into that slot (in 0x2112BD40) and pushes the timeout to
+  now + tail + 100 ms if it is closer than that.
+- After mixing, while active (0x2112B040): one fragment of ring samples
+  starting at the read position runs through the reverb and is added
+  to the stereo 32-bit build buffer (16-bit samples x gains out of
+  2048); both positions advance by one fragment and wrap.
+
+Coefficients (0x2112ACE0), each stored as a float
+- inv = float(1 / time). Comb gain i = pow(0.001, inv * d_i), 0.001
+  being the double at 0x2114BD38 (the float 0.001 widened): -60 dB
+  after `time` seconds.
+- Allpass gains: pow(0.001, 0.005 / 0.0968535) and
+  pow(0.001, 0.0017 / 0.032924) (decay times at 0x21142250/54).
+- Damping low-pass: 2nd-order Butterworth by the bilinear transform,
+  c = 1 / tan(damping * pi/8) (pi/8 float at 0x2114BD34), so the cutoff
+  is damping/8 of the rate: a0 = 1 / ((sqrt2 + c) c + 1),
+  b1 = 2 (1 - c^2) a0, b2 = ((1 - sqrt2 c) + c^2) a0.
+  Damping 0 (rooms 1 padded cell, 4 living room) gives c = inf and NaN
+  coefficients: that reverb adds nothing (a NaN converted to an integer
+  is the indefinite value, low 32 bits 0) and its state stays NaN until
+  the driver reopens.
+
+Per sample (0x2112ADE0), x the ring sample
+- Low-pass: y = ((2 p1 + p2) + a0 x) - b1 y1 - b2 y2, where p1, p2 are
+  the last two values of a0 x stored as floats, and y1, y2 the last two
+  of float(y + 1e-10) (1e-10 at 0x2114BD30).
+- Combs: s = float(((c1 + c0) + c3) + c2) of the four lines' current
+  outputs, then each line's slot becomes float(g_i * c_i + y) (feed
+  after the sum).
+- Allpass 1 (gain g, line value a): v = g a + s, stored as a float;
+  o = float(a - g v).
+- Allpass 2 (gain h, line value b): p = float(h b); left: w = 0.25 o + p
+  (0.25 at 0x2114BD2C), stored in the line; L = b - h w. Right uses
+  0.15 (0x2114BD28) for w and is not stored: R = b - h (0.15 o + p).
+- L and R are rounded to nearest integers (64-bit, low 32 bits kept)
+  and added to the build buffer; mono drivers get L only.
+- Arithmetic: x87, control word never set by Miles, so the Windows
+  default 53-bit precision on its mixer thread: every operation above
+  rounds to double, every "float(...)" to float. Rounding to single
+  precision instead changes 112 of the 120 test scenarios.
+
 ## Run log
+### 2026-10-12: Miles-compatible digital reverb (x86recomp 4d0597e)
+- The behaviour of mss32 6.5e's digital master reverb is written up in
+  "Miles 6.5e digital reverb: behaviour" below; x86recomp's
+  runtime/audio/digital_reverb implements that description and matches
+  the original bit for bit (ctest digital_reverb_oracle, which lifts the
+  routines from the install's mss32.dll at build time; configure with
+  -DCOD1_MSS32_DLL="<Call of Duty>/mss32.dll").
+- AIL_3D_provider_attribute (0x2111DB30) stores -1 before the lookup.
+  The game presets its "EAX3 room LF" probe to 0 (0x4417FA), so with
+  the HLE's old "leave unchanged" every provider counted as EAX
+  (0x14F47F0 = 1) and the room setter 0x445190 only reached the digital
+  reverb for "underwater". Fixed in the same x86recomp commit.
+- In game: rooms reach the reverb from 0x445190 (mss_roomtype /
+  mss_wetlevel when modified, via 0x4452E0 in the sound update
+  0x445780; the setReverb script call, only in sewer.gsc: "stoneroom",
+  .7, 3; cgame syscall 0xD6). The wet level reaches 2D samples at start
+  (0x442850) and 3D samples as effects level (0x44542C). With
+  `+set mss_roomtype 7 +set mss_wetlevel 0.5` the main menu arms room 7
+  (concert hall) and it times out after 4.1 s, but every sound reset
+  (cinematic end, 0x445A15) sets "generic", 0 again, and in levels
+  cgame's shell-shock update (0x30021820) does so every frame when no
+  shock is active, overriding sewer's stoneroom right after it is set.
+  No sample with a wet send was heard in the scenes reached (training,
+  pathfinder, sewer, menu), so the reverb ran silently; whether the
+  original behaves the same is unverified.
+
 ### 2026-10-12: EAX (x86recomp 23adb0b)
 - Provider choice (0x4417F0): `mss_3d_provider` names one of the
   enumerated providers (fallback Fast 2D). Then

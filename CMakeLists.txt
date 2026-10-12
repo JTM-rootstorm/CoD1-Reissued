@@ -36,3 +36,10 @@ set(COD1_GAME_EXE "" CACHE FILEPATH "unpacked CoDSP.exe for EXE-derived tests")
 recomp_add_lift_tests(EXE "${COD1_GAME_EXE}"
   SYMBOLS "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
   MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest")
+
+# x86recomp's Miles-compatible digital reverb against the original
+# routines of the installed game's mss32.dll (Miles 6.5e), lifted into the
+# build tree at build time. Configure with
+#   -DCOD1_MSS32_DLL="<Call of Duty>/mss32.dll"
+set(COD1_MSS32_DLL "" CACHE FILEPATH "the game's mss32.dll for digital_reverb_oracle")
+recomp_add_digital_reverb_test(DLL "${COD1_MSS32_DLL}")
