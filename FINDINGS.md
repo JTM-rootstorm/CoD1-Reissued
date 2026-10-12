@@ -13,14 +13,15 @@ through gfx::Device so macOS/Metal stays open (ARCHITECTURE.md).
   multi-module support, 56c26cf) and linked into cod1; the three game
   DLLs are GameConfig::lifted_dlls, mapped at startup at their
   preferred bases. Coverage below.
-- The run gets through the Win32 setup, the file system (all pk3s),
-  configs, CPU detection and client init to R_Init, and stops loading
-  opengl32.dll (see "Run log"). The engine console log goes to stdout.
-- The engine has not reached its own LoadLibrary of a game DLL yet. The
-  loader path was exercised with a throwaway harness (see "Run log").
+- The game boots to its main menu: intro cinematics with sound (atvi,
+  iw_logo, cod_intro), the menu with its backdrop, menu music, at the
+  autoconfigured best settings (1024x768, picmip 0, 44 kHz). See
+  "Run log".
+- Game patches are replacements of lifted functions (manifest
+  `replace`, src/): so far one cinematic fix (src/cinematic.cpp).
 
-Next: the opengl32/wgl HLE on gfx::Device; the game DLLs load after
-the renderer starts (as in RtCW SP, to be confirmed).
+Next: starting a level (New Game); then widescreen/FOV, UI scaling and
+high frame rates.
 
 ## Lift coverage (x86recomp 5640e2f, before SSE support; no manifest tuning)
 Measured with one lift per module; the multi-module lift (56c26cf)
@@ -53,6 +54,46 @@ that, DLL data produced 50 bogus weak entries in the EXE).
   uix86 0x40023A8B).
 
 ## Run log
+### 2026-10-12: cinematics, menu, autoconfigure (x86recomp 7f40262)
+- Cinematic clock (0x407040): with sound, the frame to show is
+  (bytes loaded into the streaming sample + AIL_sample_position) in ms
+  x fps (0x443CD0), and a cinematic whose frame does not advance for
+  4000/fps ms is stopped. AIL_sample_position on a double-buffered
+  sample must be the offset into the buffer playing now; it was 0, so
+  the clock moved only in 100 ms steps and the movies stopped early.
+- Cinematic slots (16 x 0x1D0 at 0x86A4A8, current index 0x56EE44): the
+  run loop keeps the highest frame asked for (+0x14C) and decodes until
+  the frame count reaches it; nothing resets it when a slot is reused.
+  The original recovers only if the first info chunk restarts the clock
+  at a different millisecond from the reset (0x406DA0). atvi.roq's
+  nextmap starts iw_logo.roq synchronously, both land in the same
+  millisecond, and the stale target (312) made the loop decode all of
+  iw_logo at once, paced only by the 32 x 100 ms audio ring: it ended
+  after 2.3 of 5.8 s and cod_intro never started. Probably a latent bug
+  in the original that a fast machine exposes. Fixed by replacing
+  0x406DA0 (src/cinematic.cpp: also clears the target). Now atvi plays
+  10.3 s, iw_logo 5.6 s, cod_intro 80.5 s (their full lengths).
+- The menu backdrop is static (shaders main_back_top/main_back_bottom,
+  campaign variants by ui_campaign); there is no slideshow in the menu
+  itself, the photo montage is cod_intro.roq. It was invisible because
+  the GL HLE swapped the cull modes (2D quads are drawn with
+  glCullFace(GL_FRONT)); fixed in x86recomp.
+- Safe mode: CoDSP writes a marker file (__CoDSP in the install dir,
+  in our overlay) at startup and removes it on a clean quit. If it is
+  there, "Run In Safe Mode?" (Yes/No/Cancel) appears and Yes runs
+  safemode.cfg (11 kHz sound, picmip 2). The MessageBox HLE used to
+  answer Yes silently, so every start after a killed run was in safe
+  mode (the low-quality sound). Message boxes are now real dialogs.
+- Autoconfigure (0x42F5D0) picks the configure.csv row with the highest
+  cpu MHz / sys MB / vid MB not above the machine's: CPU MHz is RDTSC
+  timed against QPC (was 1000: x86recomp's TSC ran at 1 GHz, now 3),
+  system memory capped at 1 GB, video memory from DirectDraw (now
+  GameConfig::video_memory_mb = 256). The best row is 2000/512/256:
+  r_mode 6, picmip 0/0, mss_khz 44. A change in the measured CPU speed
+  brings up "Set Optimal Settings?" (0x451540) on the next start.
+- Still open: two "[mp3float] Header missing" warnings when the menu
+  music (MP3 through Miles streams) starts.
+
 ### 2026-10-12: renderer up through R_Init (x86recomp OpenGL HLE)
 opengl32 loads; QGL takes all 336 entry points; mode 4 (800x600
 "fullscreen", a virtual display mode) is set; pixel format 1 and a GL

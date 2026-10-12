@@ -66,5 +66,8 @@ int main(int argc, char** argv) {
   // The SP game modules, loaded by the engine with LoadLibrary and lifted
   // with the EXE (see CLAUDE.md, Lift).
   game.lifted_dlls = {{"gamex86.dll"}, {"cgamex86.dll"}, {"uix86.dll"}};
+  // The top row of configure.csv (autoconfigure): full texture detail
+  // and 44 kHz sound.
+  game.video_memory_mb = 256;
   return recomp::RunProcess(game, exe, game_dir, game_args);
 }

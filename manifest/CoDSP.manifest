@@ -6,8 +6,13 @@
 #   probe <hexva> [name]   call recomp::Probe() on entry (runtime logs it)
 #   resume <hexva>         this call/jmp abandons the current call chain
 #                          (SEH): throw GuestResume to the owning frame
+#   replace <hexva> [name] src/ defines f_<VA>; the lifted body becomes
+#                          f_<VA>_lifted
 
 # SEH: the MSVC 7 CRT's __except_handler3 *calls* the __except block,
 # which starts with `mov esp, [ebp-18h]` and never returns. Same code as
 # Dungeon Siege's (VC6) handler, found by its byte pattern.
 resume 00528277
+
+# Cinematic slot reset: also clears the stale target frame (src/cinematic.cpp).
+replace 00406DA0
