@@ -24,7 +24,7 @@ screen, the remaining imports listed in "Run log"), then the
 opengl32/wgl HLE on gfx::Device; the game DLLs load after the renderer
 starts (as in RtCW SP, to be confirmed).
 
-## Lift coverage (x86recomp 5640e2f, no manifest tuning yet)
+## Lift coverage (x86recomp 5640e2f, before SSE support; no manifest tuning)
 Measured with one lift per module; the multi-module lift (56c26cf)
 gives the same function and instruction counts per module (its pointer
 scans only accept targets in the module the pointer is in; without
@@ -38,14 +38,16 @@ that, DLL data produced 50 bogus weak entries in the EXE).
 | uix86.dll | 541 + 228 | 41 470 | 356 |
 
 - Every module has the same ~330 SSE2 sites (movlpd, pextrw, mulsd,
-  addsd, ...): the statically linked MSVC 7 CRT's SSE2 libm, taken only
-  when the CPU reports SSE2. Our Cpuid reports a Pentium III without
-  SSE, so they should never run (to verify when the CRT's
-  __sse2_available check is found).
-- CoDSP.exe also has packed-single SSE (addps, mulps, shufps, movaps,
-  prefetchnta), presumably engine SIMD paths chosen by CPU detection,
-  and a few dozen junk decodes (aaa, daa, in/out, iretd) from weak
-  entries that are really data.
+  addsd, ...): the statically linked MSVC 7 CRT's SSE2 libm, taken when
+  the CPU reports SSE2. CoDSP.exe also has packed-single SSE (addps,
+  mulps, shufps, movaps, prefetchnta), presumably engine SIMD paths
+  chosen by CPU detection.
+- Since x86recomp e24e849 the CPU is reported as SSE2-class and SSE/SSE2
+  is lifted exactly: all three DLLs lift with no unimplemented sites;
+  CoDSP.exe keeps 84, all junk decodes from weak entries that are really
+  data (aaa, daa, in/out, iretd, les, ...) plus one SSE3 fisttp (SSE3
+  is not claimed). lift_sse passes CoDSP.exe's 244 SSE forms bit for
+  bit (2.44M checks at 10k trials); ctest with COD1_GAME_EXE: 6/6.
 - Rich header: everything built with VS.NET 2002 (build 9466).
 - SEH: the CRT's __except_handler3 matches DS1's byte for byte; its
   continuation call is a manifest `resume` site in every module
