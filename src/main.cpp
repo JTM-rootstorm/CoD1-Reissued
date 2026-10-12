@@ -63,5 +63,8 @@ int main(int argc, char** argv) {
   game.registry = {{key, "InstallPath", game.guest_dir},
                    {key, "Version", "1.5b"},
                    {key, "Language", "1"}};
+  // The SP game modules, loaded by the engine with LoadLibrary and lifted
+  // with the EXE (see CLAUDE.md, Lift).
+  game.lifted_dlls = {{"gamex86.dll"}, {"cgamex86.dll"}, {"uix86.dll"}};
   return recomp::RunProcess(game, exe, game_dir, game_args);
 }

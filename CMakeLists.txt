@@ -8,6 +8,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # x86recomp: the lifter, x87 model and runtime (a sibling checkout).
 set(X86RECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../x86recomp"
     CACHE PATH "x86recomp source tree")
+# dxvk-native (d3d9 only, SDL3 WSI): the gfx::Device backend on Linux,
+# and with it the DirectDraw HLE the engine probes video memory through.
+# Built by the Dungeon Siege project from its tools_ext/dxvk.
+set(DXVK_NATIVE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../Dungeon Siege/tools_ext/dxvk-native"
+    CACHE PATH "dxvk-native install prefix")
 
 enable_testing()
 add_subdirectory("${X86RECOMP_DIR}" x86recomp)
@@ -17,8 +23,8 @@ add_subdirectory("${X86RECOMP_DIR}" x86recomp)
 recomp_add_lifted(cod1_lifted "${CMAKE_CURRENT_SOURCE_DIR}/generated")
 if(TARGET cod1_lifted)
   add_executable(cod1 src/main.cpp $<TARGET_OBJECTS:cod1_lifted>)
-  target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32)
-  set_target_properties(cod1 PROPERTIES
+  target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32 recomp_d3d7)
+  set_target_properties(cod1 PROPERTIES BUILD_RPATH "${DXVK_NATIVE_DIR}/lib64"
     ENABLE_EXPORTS ON)  # symbol names in fault backtraces
 endif()
 

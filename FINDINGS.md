@@ -9,18 +9,27 @@ through gfx::Device so macOS/Metal stays open (ARCHITECTURE.md).
   tools/unpack_steam.py.
 - Ghidra (cod1_recomp.gpr, plain auto-analysis) has the unpacked
   CoDSP.exe and the three SP DLLs; symbols exported per module.
-- Trial lifts with the unchanged DS1 lifter (below) cover all four
-  modules apart from CPUID-gated SSE/SSE2 code.
-- The EXE alone lifts, builds and runs: the CRT starts, WinMain runs,
-  and it stops at the first missing import, ddraw!DirectDrawCreateEx
-  (called from 0x44FC60, early in startup; probably video-memory
-  detection, to be checked in Ghidra).
+- All four modules are lifted in one recomp_lift run (x86recomp
+  multi-module support, 56c26cf) and linked into cod1; the three game
+  DLLs are GameConfig::lifted_dlls, mapped at startup at their
+  preferred bases. Coverage below.
+- The run gets past video-memory detection (DirectDraw, through
+  x86recomp's existing ddraw HLE) and stops at the first missing
+  import, gdi32!CreateSolidBrush (see "Run log").
+- The engine has not reached its own LoadLibrary of a game DLL yet. The
+  loader path was exercised with a throwaway harness (see "Run log").
 
-Next: x86recomp multi-module lifting + LoadLibrary of lifted DLLs; the
-small ddraw surface CoD uses (DirectDrawEnumerateExA, DirectDrawCreateEx);
-then the opengl32/wgl HLE on gfx::Device.
+Next: the Win32 surface before the renderer (console window, splash
+screen, the remaining imports listed in "Run log"), then the
+opengl32/wgl HLE on gfx::Device; the game DLLs load after the renderer
+starts (as in RtCW SP, to be confirmed).
 
 ## Lift coverage (x86recomp 5640e2f, no manifest tuning yet)
+Measured with one lift per module; the multi-module lift (56c26cf)
+gives the same function and instruction counts per module (its pointer
+scans only accept targets in the module the pointer is in; without
+that, DLL data produced 50 bogus weak entries in the EXE).
+
 | Module | Functions (Ghidra + discovered) | Instructions | Unimplemented sites |
 |---|---|---|---|
 | CoDSP.exe | 3290 + 1999 | 389 369 | 549 |
@@ -42,6 +51,54 @@ then the opengl32/wgl HLE on gfx::Device.
   continuation call is a manifest `resume` site in every module
   (CoDSP 0x528277, gamex86 0x2008126B, cgamex86 0x3004AB5B,
   uix86 0x40023A8B).
+
+## Run log
+### 2026-10-12: four modules lifted (x86recomp 56c26cf)
+`cod1 --game-dir ... --exe unpacked/CoDSP.exe`:
+1. CRT start, WinMain; the "did not quit properly, run in safe mode?"
+   MessageBox (the HLE returns its default button), as no clean-exit
+   marker exists yet.
+2. 0x44FC60 is a video-memory probe: DirectDrawCreateEx(guid,
+   IID_IDirectDraw7) then IDirectDraw7::GetAvailableVidMem(DDSCAPS_
+   VIDEOMEMORY) and Release; the caller enumerates adapters with
+   DirectDrawEnumerateExA. x86recomp's ddraw HLE (recomp_d3d7) already
+   does all of it without creating a device, so cod1 links it
+   (with dxvk-native, needed for gfx::Device anyway).
+3. Stops: `unimplemented import gdi32.dll!CreateSolidBrush` from
+   0x453583, in 0x4533C0. That function references the `viewlog` cvar,
+   like Q3's Win32 console window setup (Sys_CreateConsole; a likeness
+   only, not confirmed). The function before it (0x4531D0) creates the
+   "CoD Splash Screen" window with a Static child showing cod.bmp.
+
+Imports with no handler yet, across all four modules (COD1_TRACE=1
+lists them at startup): gdi32 ChoosePixelFormat, CreateSolidBrush,
+DescribePixelFormat, Get/SetDeviceGammaRamp, SetPixelFormat,
+SwapBuffers; kernel32 CompareStringA/W, CopyFileA, FatalAppExitA,
+GetSystemDirectoryA, GetTimeZoneInformation, GlobalSize,
+Module32First/Next, MulDiv, SetConsoleCtrlHandler, SetEndOfFile,
+SetEnvironmentVariableA/W, SetErrorMode, SetThreadExecutionState;
+user32 ChangeDisplaySettingsA, ClipCursor, CloseWindow, LoadImageA,
+Register/UnregisterHotKey, ReleaseCapture, SetCapture, SetTimer;
+shell32 ShellExecuteA; winmm joyGetDevCapsA, joyGetNumDevs,
+joyGetPosEx, midiIn* (6), timeBegin/EndPeriod; mss32: 28 AIL functions
+beyond Dungeon Siege's set (3D provider/sample attributes,
+sample/stream ms positions and playback rate, volume_pan, reverb
+levels, ADPCM, sample buffers for the streaming path). Dynamic:
+GetProcAddress(kernel32, InitializeCriticalSectionAndSpinCount /
+GlobalMemoryStatusEx) returns NULL with a warning.
+
+Game DLL loading, checked with a throwaway harness (not committed) that
+called the kernel32 thunks before the entry point: for each DLL,
+LoadLibraryA (full path, bare name, and "UIX86" without extension) runs
+_DllMainCRTStartup (the static CRT's init: heap, locale tables,
+GetModuleFileNameA) and returns the image base; GetProcAddress gives
+dllEntry/vmMain by name and dllEntry as ordinal 1; GetModuleHandleA
+and GetModuleFileNameA work while loaded; FreeLibrary runs DllMain
+detach, after which GetModuleHandleA fails; a second LoadLibraryA maps
+the DLL afresh and attaches again. The same with gamex86 lifted and
+loaded at --base 50000000 (relocated): exports at 0x5004xxxx, DllMain
+fine. A config/lift base mismatch stops at startup ("entry point
+20075E1B is not lifted").
 
 ## The install (Steam app 2620, v1.5b)
 | File | What | Notes |

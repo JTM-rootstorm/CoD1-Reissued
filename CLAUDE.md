@@ -34,12 +34,19 @@ CLAUDE.md, also used by DS1); this repo holds what is specific to CoD.
 ## Build
 - `cmake --preset release && cmake --build --preset release` (debug:
   `--preset debug`). Output in out/build/<preset>/.
+- dxvk-native (the d3d9 gfx::Device backend, and the DirectDraw HLE) is
+  taken from the Dungeon Siege project's build
+  (../../Dungeon Siege/tools_ext/dxvk-native); override with
+  -DDXVK_NATIVE_DIR. A build tree configured before that default existed
+  needs `cmake --preset release -UDXVK_NATIVE_DIR` once.
 - Symbols (after any Ghidra change that matters), per module:
   `python3 -I ../../x86recomp/tools/pe_symbols.py unpacked/CoDSP.exe --out symbols/CoDSP`
   and `bash /usr/share/ghidra/support/analyzeHeadless "$PWD" cod1_recomp -process CoDSP.exe -noanalysis -readOnly -scriptPath ../../x86recomp/tools/ghidra -postScript ExportFunctions.java symbols/CoDSP/functions.tsv -postScript ExportJumpTables.java symbols/CoDSP/jumptables.tsv`
-- Lift (then re-run cmake; the generated file list is globbed):
-  `out/build/release/x86recomp/tools/lifter/recomp_lift --exe unpacked/CoDSP.exe --symbols symbols/CoDSP --manifest manifest/CoDSP.manifest --out generated`
-  (EXE only until x86recomp lifts several modules.)
+- Lift all four modules in one run (then re-run cmake; the generated
+  file list is globbed):
+  `G="$HOME/.local/share/Steam/steamapps/common/Call of Duty"; out/build/release/x86recomp/tools/lifter/recomp_lift --exe unpacked/CoDSP.exe --symbols symbols/CoDSP --manifest manifest/CoDSP.manifest --module "$G/gamex86.dll" --symbols symbols/gamex86 --manifest manifest/gamex86.manifest --module "$G/cgamex86.dll" --symbols symbols/cgamex86 --manifest manifest/cgamex86.manifest --module "$G/uix86.dll" --symbols symbols/uix86 --manifest manifest/uix86.manifest --out generated`
+  The DLLs are listed in GameConfig::lifted_dlls (src/main.cpp); a DLL
+  given --base must get the same base there.
 - Run: `out/build/release/cod1 --game-dir "$HOME/.local/share/Steam/steamapps/common/Call of Duty" --exe unpacked/CoDSP.exe`
   (COD1_TRACE=1 logs every HLE call; COD1_BACKGROUND=1 for automated
   runs).
