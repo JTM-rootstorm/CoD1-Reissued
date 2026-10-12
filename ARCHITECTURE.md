@@ -12,6 +12,16 @@
   frame-rate-dependent behaviour (physics, timers, animation steps).
 - Users bring their own copy; the repo holds no game code or data.
 
+## Recompilation is the scaffold
+The end product is a native source port: the lifted code gets CoD running
+natively first, then hand-written C++ replaces it one subsystem at a time
+until nothing lifted is left, on Linux and macOS alike. The widescreen,
+UI and frame-rate work is the first of those replacements. The lifted
+code stays bit-exact (integer, x87, SSE) because it is the reference each
+replacement is checked against. ioq3/iortcw help find names and
+structure, but replacements are written from CoD's own behaviour, never
+from their code.
+
 ## Decisions (2026-10-12)
 - **Static recompilation** of CoDSP.exe and the game/cgame/ui DLLs, not
   a source port on ioq3/iortcw (those stay references only).
@@ -39,6 +49,13 @@
   multitexture -> texture stage states, client arrays (guest pointers,
   separate strides) repacked into interleaved vertices, depth range and
   clip-space z adjusted. wgl*/pixel format/SwapBuffers map onto SDL3.
+- CPU: x86recomp reports a fixed SSE2-class CPU, so CoD runs its SSE
+  paths as on any real PC: MSVC 7's SSE2 maths library (pow, exp, log,
+  sin/cos... in every module) and the EXE's packed-single loops. The
+  scaffold lifts them exactly (runtime/sse.cpp). In the native port the
+  CRT maths becomes the host libm and the SIMD loops portable C++ (or
+  SIMDe/sse2neon where it matters on Apple Silicon), each checked
+  against the lifted version.
 - Audio: Miles 6.5e through recomp_mss32, extended for the calls CoD1
   adds (reverb levels, room types, 3D sample offsets).
 - Input/window: SDL3 behind the USER32 HLE (no DirectInput in CoD1).
