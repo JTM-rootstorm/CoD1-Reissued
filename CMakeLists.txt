@@ -23,7 +23,8 @@ add_subdirectory("${X86RECOMP_DIR}" x86recomp)
 recomp_add_lifted(cod1_lifted "${CMAKE_CURRENT_SOURCE_DIR}/generated")
 if(TARGET cod1_lifted)
   add_executable(cod1 src/main.cpp $<TARGET_OBJECTS:cod1_lifted>)
-  target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32 recomp_d3d7)
+  target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32 recomp_d3d7
+                        recomp_opengl)
   set_target_properties(cod1 PROPERTIES BUILD_RPATH "${DXVK_NATIVE_DIR}/lib64"
     ENABLE_EXPORTS ON)  # symbol names in fault backtraces
 endif()

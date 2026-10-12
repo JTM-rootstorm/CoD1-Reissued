@@ -53,6 +53,30 @@ that, DLL data produced 50 bogus weak entries in the EXE).
   uix86 0x40023A8B).
 
 ## Run log
+### 2026-10-12: renderer up through R_Init (x86recomp OpenGL HLE)
+opengl32 loads; QGL takes all 336 entry points; mode 4 (800x600
+"fullscreen", a virtual display mode) is set; pixel format 1 and a GL
+context on a gfx::Device (dxvk on the RTX 4080). The renderer picks
+GL_ARB_multitexture (4 units), texture_env_add/combine, compiled vertex
+arrays and WGL_EXT_swap_control; it queries GL_MAX_LIGHTS and uses
+fixed-function lighting (glLightModelfv first). Shader scripts load and
+R_Init finishes. Alt+Tab is "blocked" with RegisterHotKey(NULL, 0,
+MOD_ALT, VK_TAB) (the Win9x path uses SPI_SETSCREENSAVERRUNNING).
+No frame is presented before sound init.
+
+Stops in Miles init: the "Miles Fast 2D Positional Audio" provider is
+chosen, then AIL_3D_provider_attribute("Maximum supported samples")
+(capped to 32 by the game) and an "EAX3 room LF" probe;
+AIL_set_3D_distance_factor(0.0254, inches to metres). Sounds are kept
+as AILSOUNDINFO (format 1 PCM or 0x11 IMA ADPCM, data, len, rate, bits,
+channels, samples, block size) and played from memory: 2D through
+set_sample_type/set_sample_address/set_sample_adpcm_block_size, 3D
+through set_3D_sample_info, with Miles 6.5 float volume/pan, reverb
+levels and ms positions. Sounds above the engine's rate/bits/channel
+limits are converted with AIL_process_digital_audio (0x445A30). A
+streaming voice (0x443D10) feeds a sample through
+AIL_sample_buffer_ready/AIL_load_sample_buffer.
+
 ### 2026-10-12: Win32 bring-up up to R_Init (x86recomp after e24e849)
 The engine now starts through to the renderer:
 - Console window (0x4533C0 is its WndProc, Q3 ConWndProc-like: two
