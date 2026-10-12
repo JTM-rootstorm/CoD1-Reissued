@@ -23,6 +23,13 @@ through gfx::Device so macOS/Metal stays open (ARCHITECTURE.md).
 Next: starting a level (New Game); then widescreen/FOV, UI scaling and
 high frame rates.
 
+Planned (x86recomp, for this and other games of the era): EAX. CoD
+probes for EAXMan.dll and Miles' "EAX3 room LF" and falls back to "Miles
+Fast 2D Positional Audio" without them. Goal: offer EAX-capable Miles 3D
+providers (and the EAX property sets games query) rendered through
+OpenAL Soft (EFX reverb/filters; it also implements the EAX 1-5 API),
+portable to macOS, instead of the plain 2D mixer.
+
 ## Lift coverage (x86recomp 5640e2f, before SSE support; no manifest tuning)
 Measured with one lift per module; the multi-module lift (56c26cf)
 gives the same function and instruction counts per module (its pointer
