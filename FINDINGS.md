@@ -13,16 +13,14 @@ through gfx::Device so macOS/Metal stays open (ARCHITECTURE.md).
   multi-module support, 56c26cf) and linked into cod1; the three game
   DLLs are GameConfig::lifted_dlls, mapped at startup at their
   preferred bases. Coverage below.
-- The run gets past video-memory detection (DirectDraw, through
-  x86recomp's existing ddraw HLE) and stops at the first missing
-  import, gdi32!CreateSolidBrush (see "Run log").
+- The run gets through the Win32 setup, the file system (all pk3s),
+  configs, CPU detection and client init to R_Init, and stops loading
+  opengl32.dll (see "Run log"). The engine console log goes to stdout.
 - The engine has not reached its own LoadLibrary of a game DLL yet. The
   loader path was exercised with a throwaway harness (see "Run log").
 
-Next: the Win32 surface before the renderer (console window, splash
-screen, the remaining imports listed in "Run log"), then the
-opengl32/wgl HLE on gfx::Device; the game DLLs load after the renderer
-starts (as in RtCW SP, to be confirmed).
+Next: the opengl32/wgl HLE on gfx::Device; the game DLLs load after
+the renderer starts (as in RtCW SP, to be confirmed).
 
 ## Lift coverage (x86recomp 5640e2f, before SSE support; no manifest tuning)
 Measured with one lift per module; the multi-module lift (56c26cf)
@@ -55,6 +53,42 @@ that, DLL data produced 50 bogus weak entries in the EXE).
   uix86 0x40023A8B).
 
 ## Run log
+### 2026-10-12: Win32 bring-up up to R_Init (x86recomp after e24e849)
+The engine now starts through to the renderer:
+- Console window (0x4533C0 is its WndProc, Q3 ConWndProc-like: two
+  solid brushes and a timer on WM_CREATE, WM_CTLCOLOR colouring): needs
+  the system control classes; x86recomp now provides static/edit/button
+  with host window procedures, and a read-only multi-line edit echoes
+  what the game appends to stdout. That is the engine's console log
+  (Com_Printf), visible in the terminal from here on.
+- Timers (SetTimer/KillTimer, WM_TIMER synthesised like Windows), MulDiv,
+  SetErrorMode, GetTimeZoneInformation (host offset, no DST rules),
+  GlobalMemoryStatusEx, InitializeCriticalSectionAndSpinCount, the
+  winmm joystick/MIDI-in calls (no devices), timeBegin/EndPeriod,
+  SetEnvironmentVariable, GetSystemDirectoryA, SetEndOfFile, CopyFileA,
+  GlobalSize, LoadImageA (splash bitmap: existence only, nothing drawn),
+  GetSystemMetrics 16/17.
+- The game writes `__CoDSP` (hidden, the "did not quit properly" marker)
+  into its install directory. x86recomp now treats the install as
+  read-only with a per-user overlay ($XDG_DATA_HOME/cod1/install/),
+  so the Steam folder is never modified. (Earlier runs had left the
+  marker in the Steam folder; removed by hand.)
+- CPU detection (0x452FF0) toggles EFLAGS bit 21 to test for CPUID; the
+  flags model now keeps AC and ID, and 16-bit pusha/popa (66 60/66 61)
+  around its cpuid are lifted. Result: "Intel Pentium III", 1.00 GHz,
+  SSE supported.
+- With no clean-exit marker the game asks "Run In Safe Mode?"; the
+  MessageBox HLE takes the default (Yes), so safemode.cfg runs and the
+  renderer is forced to 640x480.
+- "fs_basepath is write protected" is the Q3-style cvar message for a
+  config setting a CVAR_INIT cvar; it is printed on Windows too.
+
+Log excerpt: FS_Startup lists all pk3s (30160 files), execs default.cfg,
+safemode.cfg, autoconfigure ("800 cpu MHz 512 sys MB 64 vid MB"),
+Client Initialization, then `R_Init` -> "Initializing OpenGL subsystem"
+-> LoadLibrary("C:\WINDOWS\system32\opengl32.dll") fails -> "Could
+not load OpenGL" fatal error. Next: the opengl32/wgl HLE on gfx::Device.
+
 ### 2026-10-12: four modules lifted (x86recomp 56c26cf)
 `cod1 --game-dir ... --exe unpacked/CoDSP.exe`:
 1. CRT start, WinMain; the "did not quit properly, run in safe mode?"
