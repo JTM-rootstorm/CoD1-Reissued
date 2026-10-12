@@ -37,9 +37,15 @@ recomp_add_lift_tests(EXE "${COD1_GAME_EXE}"
   SYMBOLS "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
   MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest")
 
-# x86recomp's Miles-compatible digital reverb against the original
-# routines of the installed game's mss32.dll (Miles 6.5e), lifted into the
-# build tree at build time. Configure with
+# x86recomp's Miles-compatible digital reverb, and its Miles 6.5 sample
+# levels and Fast 2D, against the original routines of the installed
+# game's mss32.dll (Miles 6.5e) and miles/msssoft.m3d next to it, lifted
+# into the build tree at build time. Configure with
 #   -DCOD1_MSS32_DLL="<Call of Duty>/mss32.dll"
-set(COD1_MSS32_DLL "" CACHE FILEPATH "the game's mss32.dll for digital_reverb_oracle")
+set(COD1_MSS32_DLL "" CACHE FILEPATH
+    "the game's mss32.dll for digital_reverb_oracle and fast2d_oracle")
 recomp_add_digital_reverb_test(DLL "${COD1_MSS32_DLL}")
+if(COD1_MSS32_DLL)
+  get_filename_component(_miles_dir "${COD1_MSS32_DLL}" DIRECTORY)
+  recomp_add_fast2d_test(MSS32 "${COD1_MSS32_DLL}" FAST2D "${_miles_dir}/miles/msssoft.m3d")
+endif()

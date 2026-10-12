@@ -145,7 +145,136 @@ Per sample (0x2112ADE0), x the ring sample
   rounds to double, every "float(...)" to float. Rounding to single
   precision instead changes 112 of the 120 test scenarios.
 
+## Miles 6.5e sample levels and Fast 2D: behaviour
+Observed in the game's mss32.dll (6.5e, base 0x21100000) and
+miles/msssoft.m3d (base 0x22400000, the "Miles Fast 2D Positional
+Audio" provider) in a scratch Ghidra project, no names applied, so
+that x86recomp's mixer gives 2D and Fast 2D samples the same channel
+gains. Miles 6.1c (Dungeon Siege: Mss32 balance table, Mssfast.m3d's
+volume/pan) works differently; see x86recomp's mixer.cpp. Arithmetic
+as for the reverb: x87 at 53-bit precision, "float(...)" marks where
+a value is stored as a float; pow is the CRT's (x87 or SSE2 path, by
+the CRT's SSE2 flag: mss32 0x2115AD20, msssoft 0x22417228), acos the
+CRT's x87 one (atan2(sqrt((1 + x)(1 - x)), x) by fpatan; exactly 0 at
+x = 1 and fldpi at x = -1; NaN with a domain error for |x| > 1).
+
+Sample fields (mss32's sample block)
+- 0x64 volume, 0x68 pan, 0x6C left level, 0x70 right level, all
+  floats; 0x78 sample dry level, 0x74 sample wet level.
+- AIL_set_sample_volume_pan (0x2112A930, also AIL_init_sample with
+  1, 0.5 at 0x2112A700, and AIL_set_stream_volume_pan on the stream's
+  sample): volume = float(pow(v, 5/3)) (double 5/3 at 0x2114BD50);
+  pan = p as given; left = float(pow(1 - p, e) x volume), right =
+  float(pow(p, e) x volume) with e = float 0.3 widened (0x2114BD48).
+  No clamping: v < 0 or p outside 0..1 gives NaN levels.
+- AIL_set_sample_volume_levels (0x2112A810): left and right stored as
+  given; volume and pan are derived for the wet send and read-back:
+  if left > 1e-4 (0x2114BD1C): q = pow(right / left, 10/3) (0x2114BD60),
+  pan = float(q / (1 + q)), and volume = left if pan < 1e-4, else
+  float(pow(pan, -e) x right) (-e at 0x2114BD58). Otherwise pan = 0,
+  volume = right.
+- AIL_sample_volume_pan (0x211153E0; streams 0x2111AD70) reports
+  float(pow(volume, 0.6)) (0x2114BD40) and the stored pan;
+  AIL_sample_volume_levels the two levels.
+
+Channel gains (per mixer fragment, 0x2112BDB8)
+- d = driver dry (0x108) x sample dry; gain = round(((level x master)
+  x d) x 2048.0) (2048 double at 0x2114BDF8), per channel; the 64-bit
+  result's low 32 bits are taken and capped at 2048 (0x800) from above
+  only (so NaN or a huge level gives 0). master = driver block 0x10
+  (1.0 from open; CoD never changes it).
+- Digital reverb send: round((((driver wet x sample wet) x volume) x
+  master) x 2048.0), same capping: it follows the derived volume, not
+  the levels.
+- The mixer scales 16-bit samples by these gains (out of 2048); no
+  balance table, so a centred 2D sample (v = 1, p = 0.5) gets
+  0.5^0.3 = -1.8 dB on each channel, a hard-panned one 0 dB on one.
+
+Fast 2D (msssoft.m3d)
+- Listener: position as given; orientation (0x224019B0) keeps face as
+  given (0x22415654..5C, not normalised) and right = up x face, each
+  component float(a - b) of the two float products (0x22413C40..48).
+- Per sample: 0x08 volume (AIL_set_3D_sample_volume's float as
+  given), 0x10 position, 0x44 max and 0x48 min distance (mss32
+  0x2111F91D passes the larger as max, as 6.1c does), 0x54 the 2D
+  sample. Setting the 3D sample's data (0x22401D30) requires PCM
+  ("Not linear PCM data") and mono ("Not mono data"), and resets
+  volume 1, max 200, min 1, face (0,0,1) up (0,1,0), velocity 0,
+  effects level 0, obstruction and exclusion 0; not the position.
+- Every change to a sample's position, volume, distances, effects
+  levels, and every listener move or turn (0x22401470: all samples),
+  runs the update (0x22401000):
+  1. d = sqrt((dz^2 + dy^2) + dx^2) of the double differences
+     sample - listener. If d > max: with "Mute at maximum" (provider
+     preference 1, default 1, at 0x2241322C; CoD never sets it) the
+     sample gets volume/pan (0, 0.5), i.e. silence (unless it is
+     stopped, status 8: then nothing changes) and the update ends;
+     without it d = max. Below, D = float(d) (or max).
+  2. g = float(pow(volume, 5/3)) (0x2240E340). m = min if min >= 1e-4,
+     else 1e-4 (0x2240E33C). If 1e-4 + m < D:
+     g = float((m / ((D - m) x rolloff + m)) x g), rolloff = provider
+     factor at 0x22413230, 1.0 (CoD never sets it): 1/distance falloff,
+     -6 dB per doubling past min_dist.
+  3. The direction n = the float differences normalised (0x22402980):
+     length sqrt((x^2 + y^2) + z^2), each component float(c x 1/length);
+     (1, 0, 0) if the length is 0.
+  4. front = float(face . n); pan = 0.5 if D <= 1e-4, else
+     acos(right . n) x float(1/pi) (0x2240E338), kept as a double; the
+     dot products are ((x + y) + z) of the float products. (At -1 the
+     x87's pi times float(1/pi) rounds to the same double as the
+     double pi's product.)
+  5. v = g, or g x 0.75 (0x2240E34C) if front < 0 (behind).
+     AIL_set_sample_volume_levels(left = float(pan x v),
+     right = float((1 - pan) x v)): a source on the right
+     (right . n = 1) gets 0 on the left and v on the right; centred,
+     v/2 each.
+  6. Velocities (none in CoD: it has no velocity calls) would scale
+     the playback rate (Doppler, 0.355 at 0x2240E328); then
+     AIL_set_sample_reverb_levels(dry = 1 - obstruction,
+     wet = (1 - exclusion) x |effects level|) (0x224013A0 stores the
+     effects level's absolute value).
+- Consequences: centred 0.5 per channel (-6 dB relative to a hard pan's
+  near channel), 45 degrees 0.75 / 0.25, side 1 / 0, behind x 0.75;
+  a slightly-over-1 dot product (unit vectors rounded to floats) makes
+  acos NaN and the sample silent until it moves.
+
+Checked against the Audigy 2 ZS recordings (eax_captures/
+audigy2zs_win98se, fast2d set, relative to front centre): +-45 degrees
+near +3.5, far -6.0 dB (model 3.52 / -6.02); +-90 near +6.0, far
+-52.6 (model 0: the recording's floor); 135 near +1.0, far -8.5
+(1.02 / -8.52); 180 -2.5 both (-2.50); distance 2/4/8 x min: -6.0,
+-12.0, -18.1 (-6.02, -12.04, -18.06).
+
+Miles 6.1c's asymmetry at +-90 degrees (Dungeon Siege) is real: its
+Mssfast.m3d (base 0x22600000) builds its 2049-entry pan table
+(0x22603950) with 127 - floor(acos(i / 1024 - 1) x 127 x c),
+c = 0.31830987732601135 (double at 0x2260B938, just under 1/pi), so a
+source hard left gets acos(-1) x 127 x c = 126.9999965, pan 1, and
+2/128 (-36 dB) on the right channel, while one hard right gets pan 127
+and nothing on the left.
+
 ## Run log
+### 2026-10-12: Miles 6.5e Fast 2D and sample levels (x86recomp 0acb1ee)
+- "Miles 6.5e sample levels and Fast 2D: behaviour" above; x86recomp's
+  runtime/audio/miles65 implements it for 2D samples, streams and Fast
+  2D 3D samples of a Miles 6.5 game (Voice::miles; Dungeon Siege keeps
+  the 6.1c rule, its renders bit-identical; EAX voices keep the 6.1c
+  rule too).
+- ctest fast2d_oracle (configure with -DCOD1_MSS32_DLL; msssoft.m3d is
+  taken from miles/ next to it) lifts msssoft's update and listener
+  setters and mss32's level setters and pow: 240000 results per pow
+  path (x87, SSE2) bit-identical, among them muted, centred, one-channel
+  and NaN (acos domain) cases.
+- Against the Audigy 2 ZS recordings (fast2d set, eax_render --provider
+  fast2d): every L/R level within 0.1 dB of the hardware (45/90/135/180
+  degrees both sides, distance 1-8 x min); before, centre was 0 dB per
+  channel, +-45 near 0 / far -6.1, behind -3.1, and -90 far -36.4.
+- Audible change in game: 2D sounds and music now get 0.5^0.3
+  (-1.8 dB) per channel at centre and volume^(5/3); Fast 2D sounds -6
+  dB per channel at centre relative to hard-panned ones, as in the
+  original. Fast 2D now refuses ADPCM and stereo 3D data, as msssoft
+  does.
+
 ### 2026-10-12: Miles-compatible digital reverb (x86recomp 4d0597e)
 - The behaviour of mss32 6.5e's digital master reverb is written up in
   "Miles 6.5e digital reverb: behaviour" below; x86recomp's
