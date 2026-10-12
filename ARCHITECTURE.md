@@ -1,8 +1,10 @@
-# Architecture (draft)
+# Architecture
 
 ## Goals
 - Call of Duty (2003) single player running natively on Linux x86-64:
   no Wine, no emulator in the product. Multiplayer later, if at all.
+- macOS on Apple Silicon with native Metal rendering: a requirement.
+  Nothing may tie the port to Linux or to host OpenGL.
 - Widescreen at any resolution: Hor+ field of view and a UI/HUD that
   scales without stretching (4:3 menus pillarboxed, HUD anchored to the
   screen edges).
@@ -10,45 +12,38 @@
   frame-rate-dependent behaviour (physics, timers, animation steps).
 - Users bring their own copy; the repo holds no game code or data.
 
-## Open decision: how to get native code
-The engine is closed source and Quake 3 derived; game logic sits in three
-native DLLs. Two ways in:
+## Decisions (2026-10-12)
+- **Static recompilation** of CoDSP.exe and the game/cgame/ui DLLs, not
+  a source port on ioq3/iortcw (those stay references only).
+- **Shared library**: the lifter, x87 model, runtime and HLE are
+  x86recomp (github.com/JTM-rootstorm/x86recomp, a sibling checkout at
+  ../../x86recomp), factored out of DS1-Rebuilt. Generic work (multi-
+  module lifting, opengl32 HLE, SDL_GPU/Metal backend) goes there; this
+  repo holds CoD's GameConfig, manifests, hooks, replacements and docs.
+  x86recomp/ARCHITECTURE.md has the generic design.
+- **Graphics through gfx::Device**: the engine's OpenGL 1.x + ARB
+  extensions are implemented as an opengl32/wgl HLE that drives
+  x86recomp's backend-neutral device, never host GL. Linux bring-up uses
+  the existing d3d9 (dxvk-native) backend; the planned SDL_GPU backend
+  gives Vulkan on Linux and Metal on macOS for DS1 and CoD alike. GL
+  extensions we do not want to implement (ARB_vertex_program, VBOs) are
+  simply not advertised, so the engine takes its fallback paths.
 
-**A. Static recompilation (recommended).** Lift CoDSP.exe and the
-game/cgame/ui DLLs from x86-32 to C++ ahead of time and link them
-against a runtime that reimplements the Windows APIs they use. This is
-what DS1 does, and its lifter, x87 model, guest memory, SEH, threads and
-Win32/Miles HLE already run a 2002 MSVC game playably. The work for CoD1
-is mostly new HLE (opengl32, a few more Win32 calls, Sys_LoadDll for the
-three modules) plus multi-module lifting. Enhancements are written as
-hand-written C++ replacements for specific lifted functions, found in
-Ghidra with ioq3/iortcw as a map.
-
-**B. Source port.** Rebuild the engine from ioq3/iortcw and reverse
-engineer every CoD change (renderer, XModel/XAnim formats, BSP version,
-scripting, AI, menus). Cleaner code in the end but years of work, and
-the GPL sources would make the project GPL.
-
-With A, sharing code with DS1 needs a choice: copy the lifter/runtime
-into this repo and let them diverge, or factor them into a shared
-library both projects use (more work up front, fixes flow both ways).
-
-## Shape under A (to be confirmed)
+## Shape
 - Modules: CoDSP.exe at 0x400000 plus gamex86 (0x20000000), cgamex86
-  (0x30000000) and uix86 (0x40000000) lifted separately and loaded at
-  their preferred bases, so no relocation at runtime. LoadLibrary of
-  `%sx86.dll` resolves to the lifted module; dllEntry/vmMain and the
-  syscall pointer the EXE passes stay guest addresses.
-- Graphics: the engine is OpenGL 1.x plus ARB extensions through a
-  GetProcAddress table, so opengl32 HLE forwards to a host GL
-  compatibility context created with SDL3 (wgl*/pixel format/SwapBuffers
-  map onto SDL). Client-array pointers are guest addresses and translate
-  with the arena base. macOS caps legacy GL at 2.1, which CoD1 fits.
-- Audio: Miles 6.5e; reuse the DS1 Miles HLE (2D/3D samples, streams)
-  and extend for the calls CoD1 adds (reverb levels, room types).
+  (0x30000000) and uix86 (0x40000000), lifted and loaded at their
+  preferred bases. LoadLibrary of `%sx86.dll` maps the lifted module;
+  dllEntry/vmMain and the syscall pointer the EXE passes stay guest
+  addresses. Needs x86recomp's multi-module support (its roadmap).
+- GL state machine on gfx::Device: GL matrices -> transforms, texenv /
+  multitexture -> texture stage states, client arrays (guest pointers,
+  separate strides) repacked into interleaved vertices, depth range and
+  clip-space z adjusted. wgl*/pixel format/SwapBuffers map onto SDL3.
+- Audio: Miles 6.5e through recomp_mss32, extended for the calls CoD1
+  adds (reverb levels, room types, 3D sample offsets).
 - Input/window: SDL3 behind the USER32 HLE (no DirectInput in CoD1).
 - Files: the engine reads pk3 (zip) itself; only Win32 file APIs are
-  needed. Config and saves go under $XDG_DATA_HOME.
+  needed. Config and saves go under $XDG_DATA_HOME/cod1.
 
 ## Enhancements (after a faithful baseline)
 - Resolution: `r_customwidth`/`r_customheight` exist in the EXE; check
@@ -67,8 +62,9 @@ library both projects use (more work up front, fixes flow both ways).
   timers in cgame (view bob, weapon animations, effects) at 144/240 Hz.
 
 ## Milestones (provisional)
-- M0 recon: unpack, Ghidra, inventory imports and modules. (in progress)
-- M1 lifter covers CoDSP.exe and the three DLLs; symbols exported.
+- M0 recon: unpack, Ghidra, inventory imports and modules. (done)
+- M1 lifter covers CoDSP.exe and the three DLLs; symbols exported; the
+  three DLLs load as lifted modules (x86recomp multi-module).
 - M2 boots to the console log: Com_Init, file system on the pk3s, cvars.
 - M3 main menu renders through the opengl32 HLE.
 - M4 single player playable end to end, with sound and RoQ cinematics.

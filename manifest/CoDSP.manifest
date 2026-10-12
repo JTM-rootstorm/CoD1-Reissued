@@ -1,0 +1,13 @@
+# recomp_lift manifest for CoDSP.exe, Steam v1.5b, unpacked with
+# tools/unpack_steam.py (see FINDINGS.md). Line based:
+#
+#   entry <hexva> [name]   extra function entry point
+#   name  <hexva> <name>   name a function (comments in generated code)
+#   probe <hexva> [name]   call recomp::Probe() on entry (runtime logs it)
+#   resume <hexva>         this call/jmp abandons the current call chain
+#                          (SEH): throw GuestResume to the owning frame
+
+# SEH: the MSVC 7 CRT's __except_handler3 *calls* the __except block,
+# which starts with `mov esp, [ebp-18h]` and never returns. Same code as
+# Dungeon Siege's (VC6) handler, found by its byte pattern.
+resume 00528277

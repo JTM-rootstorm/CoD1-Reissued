@@ -1,7 +1,9 @@
 # Call of Duty (PC, 2003) → native Linux port
 
 Rules only. Status, findings and next steps go in FINDINGS.md; design in
-ARCHITECTURE.md.
+ARCHITECTURE.md. The lifter, x87 model, runtime and HLE are the shared
+x86recomp library (../../x86recomp, its own git repo with its own
+CLAUDE.md, also used by DS1); this repo holds what is specific to CoD.
 
 ## Layout
 - Project: ~/Documents/Programming/Recomp/CoD/CoD1 (CoD/ may get sibling
@@ -9,7 +11,14 @@ ARCHITECTURE.md.
 - Game (Steam, v1.5b; NEVER commit or copy into the repo):
   $HOME/.local/share/Steam/steamapps/common/Call of Duty/
   (CoDSP.exe, CoDMP.exe, gamex86.dll, cgamex86.dll, uix86.dll, Main/*.pk3)
+- Library: ~/Documents/Programming/Recomp/x86recomp
+  (github.com/JTM-rootstorm/x86recomp; added with add_subdirectory,
+  X86RECOMP_DIR overrides the path). Library changes are committed
+  there, its rules apply to them, and DS1 must keep building and
+  passing its tests after them.
 - Unpacked EXEs: unpacked/ (gitignored, regenerate, see below)
+- Per-module symbols: symbols/<module>/ (gitignored; CoDSP, gamex86,
+  cgamex86, uix86). Per-module lifter manifests: manifest/<module>.manifest
 - Ghidra project: cod1_recomp.gpr / cod1_recomp.rep (gitignored)
 - Reference sources (GPL, read-only): ../tools_ext/ioq3 (ioquake3) and
   ../tools_ext/iortcw (Return to Castle Wolfenstein SP/MP). Do not edit.
@@ -22,6 +31,24 @@ ARCHITECTURE.md.
 - The unpacker only replays the wrapper's loader statically. Never run the
   wrapped EXE to dump it.
 
+## Build
+- `cmake --preset release && cmake --build --preset release` (debug:
+  `--preset debug`). Output in out/build/<preset>/.
+- Symbols (after any Ghidra change that matters), per module:
+  `python3 -I ../../x86recomp/tools/pe_symbols.py unpacked/CoDSP.exe --out symbols/CoDSP`
+  and `bash /usr/share/ghidra/support/analyzeHeadless "$PWD" cod1_recomp -process CoDSP.exe -noanalysis -readOnly -scriptPath ../../x86recomp/tools/ghidra -postScript ExportFunctions.java symbols/CoDSP/functions.tsv -postScript ExportJumpTables.java symbols/CoDSP/jumptables.tsv`
+- Lift (then re-run cmake; the generated file list is globbed):
+  `out/build/release/x86recomp/tools/lifter/recomp_lift --exe unpacked/CoDSP.exe --symbols symbols/CoDSP --manifest manifest/CoDSP.manifest --out generated`
+  (EXE only until x86recomp lifts several modules.)
+- Run: `out/build/release/cod1 --game-dir "$HOME/.local/share/Steam/steamapps/common/Call of Duty" --exe unpacked/CoDSP.exe`
+  (COD1_TRACE=1 logs every HLE call; COD1_BACKGROUND=1 for automated
+  runs).
+
+## Product constraints
+x86recomp's (its CLAUDE.md): no emulation or Wine in the product, 64-bit
+host only, portable to macOS arm64 + Metal (graphics only through
+gfx::Device, never host OpenGL), exact x87.
+
 ## Rules
 - Paths with spaces ("Call of Duty"): always quote them in shell commands,
   scripts and CMake.
@@ -30,6 +57,9 @@ ARCHITECTURE.md.
 - ioq3/iortcw are GPLv2/GPLv3 and this repo is MIT: use them only to
   understand behaviour and names. Never copy or paraphrase their code into
   this repo.
+- CoD knowledge (paths, registry, engine struct offsets, game patches
+  such as widescreen/FOV/frame-rate fixes) goes in src/ here (GameConfig,
+  hooks, replacements), never in x86recomp.
 - Ghidra names need evidence (strings, call-graph position matching
   ioq3/iortcw, data layout); record it in a plate comment. A function
   that merely looks like a Quake 3 one stays unnamed until confirmed.

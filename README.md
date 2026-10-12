@@ -2,7 +2,8 @@
 
 Work in progress: a native 64-bit Linux port of **Call of Duty** (PC,
 2003), aiming at widescreen with proper UI scaling and high refresh
-rates. Nothing runs yet; see [FINDINGS.md](FINDINGS.md) for status and
+rates, built on the shared x86recomp static-recompilation library.
+Nothing playable yet; see [FINDINGS.md](FINDINGS.md) for status and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the plan.
 
 This repository contains no game code or data. You need your own copy of
@@ -18,6 +19,14 @@ anything (Python 3, no extra packages):
 ```sh
 python3 -I tools/unpack_steam.py "$GAME/CoDSP.exe" -o unpacked/CoDSP.exe
 ```
+
+## Building
+
+Needs an [x86recomp](https://github.com/JTM-rootstorm/x86recomp)
+checkout at `../../x86recomp` (or `-DX86RECOMP_DIR=...`), plus its
+requirements (Clang, CMake 3.25+, Ninja, SDL3, ffmpeg), and Ghidra for
+the function lists. The commands are in [CLAUDE.md](CLAUDE.md) under
+"Build"; nothing playable comes out yet.
 
 ## Legal
 

@@ -1,11 +1,47 @@
 # Findings
 
 ## Status (2026-10-12)
-M0 (recon) in progress. Repo created; the Steam wrapper on CoDSP.exe and
-CoDMP.exe is undone statically by tools/unpack_steam.py; the unpacked
-CoDSP.exe and the three SP game DLLs are imported into Ghidra
-(cod1_recomp.gpr, plain auto-analysis). The approach is still to be
-decided (ARCHITECTURE.md, "Open decision").
+M0 (recon) done; M1 under way. Decided: static recompilation on the
+shared x86recomp library (factored out of DS1 the same day), graphics
+through gfx::Device so macOS/Metal stays open (ARCHITECTURE.md).
+
+- The Steam wrapper on CoDSP.exe and CoDMP.exe is undone statically by
+  tools/unpack_steam.py.
+- Ghidra (cod1_recomp.gpr, plain auto-analysis) has the unpacked
+  CoDSP.exe and the three SP DLLs; symbols exported per module.
+- Trial lifts with the unchanged DS1 lifter (below) cover all four
+  modules apart from CPUID-gated SSE/SSE2 code.
+- The EXE alone lifts, builds and runs: the CRT starts, WinMain runs,
+  and it stops at the first missing import, ddraw!DirectDrawCreateEx
+  (called from 0x44FC60, early in startup; probably video-memory
+  detection, to be checked in Ghidra).
+
+Next: x86recomp multi-module lifting + LoadLibrary of lifted DLLs; the
+small ddraw surface CoD uses (DirectDrawEnumerateExA, DirectDrawCreateEx);
+then the opengl32/wgl HLE on gfx::Device.
+
+## Lift coverage (x86recomp 5640e2f, no manifest tuning yet)
+| Module | Functions (Ghidra + discovered) | Instructions | Unimplemented sites |
+|---|---|---|---|
+| CoDSP.exe | 3290 + 1999 | 389 369 | 549 |
+| gamex86.dll | 1432 + 564 | 146 103 | 333 |
+| cgamex86.dll | 965 + 249 | 83 316 | 356 |
+| uix86.dll | 541 + 228 | 41 470 | 356 |
+
+- Every module has the same ~330 SSE2 sites (movlpd, pextrw, mulsd,
+  addsd, ...): the statically linked MSVC 7 CRT's SSE2 libm, taken only
+  when the CPU reports SSE2. Our Cpuid reports a Pentium III without
+  SSE, so they should never run (to verify when the CRT's
+  __sse2_available check is found).
+- CoDSP.exe also has packed-single SSE (addps, mulps, shufps, movaps,
+  prefetchnta), presumably engine SIMD paths chosen by CPU detection,
+  and a few dozen junk decodes (aaa, daa, in/out, iretd) from weak
+  entries that are really data.
+- Rich header: everything built with VS.NET 2002 (build 9466).
+- SEH: the CRT's __except_handler3 matches DS1's byte for byte; its
+  continuation call is a manifest `resume` site in every module
+  (CoDSP 0x528277, gamex86 0x2008126B, cgamex86 0x3004AB5B,
+  uix86 0x40023A8B).
 
 ## The install (Steam app 2620, v1.5b)
 | File | What | Notes |

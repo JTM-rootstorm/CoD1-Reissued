@@ -1,0 +1,6 @@
+# recomp_lift manifest for cgamex86.dll (Call of Duty SP, Steam v1.5b).
+# Format: see CoDSP.manifest.
+
+# SEH: __except_handler3's call into the __except block (statically
+# linked MSVC 7 CRT, same pattern as in CoDSP.exe).
+resume 3004AB5B
