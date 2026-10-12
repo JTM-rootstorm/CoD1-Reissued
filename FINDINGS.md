@@ -15,13 +15,15 @@ through gfx::Device so macOS/Metal stays open (ARCHITECTURE.md).
   preferred bases. Coverage below.
 - The game boots to its main menu: intro cinematics with sound (atvi,
   iw_logo, cod_intro), the menu with its backdrop, menu music, at the
-  autoconfigured best settings (1024x768, picmip 0, 44 kHz). See
-  "Run log".
+  autoconfigured best settings (1024x768, picmip 0, 44 kHz). New Game
+  (skill popup, briefing, "Click to Start the Mission") starts the
+  training level, which renders correctly and takes mouselook; the
+  level-start autosave is written. See "Run log".
 - Game patches are replacements of lifted functions (manifest
   `replace`, src/): so far one cinematic fix (src/cinematic.cpp).
 
-Next: starting a level (New Game); then widescreen/FOV, UI scaling and
-high frame rates.
+Next: playing through training (weapons, AI, saves/loads); then
+widescreen/FOV, UI scaling and high frame rates. EAX in x86recomp first.
 
 EAX: CoD probes for EAXMan.dll and Miles' "EAX3 room LF" and falls
 back to "Miles Fast 2D Positional Audio" without them; shared support
@@ -58,6 +60,23 @@ that, DLL data produced 50 bogus weak entries in the EXE).
   uix86 0x40023A8B).
 
 ## Run log
+### 2026-10-12: New Game reaches the training level (x86recomp 8afebf1)
+- Two switch jump tables Ghidra did not recover (gamex86 0x20034474,
+  CoDSP 0x4DBD5A; the second with a `mov` scheduled between cmp and
+  ja) were fatal on the way into the level; the lifter now recovers
+  MSVC switch tables itself (2 found in CoD, none needed in DS1).
+- In-level rendering needed three GL HLE fixes: the sky is drawn with
+  w = 0 vertices (directions at infinity) under glDepthRange(1, 1) and
+  an infinite far plane (P22 = -1); w was dropped and glDepthRange never
+  reached the device; and wglSwapIntervalEXT's swap-chain reset left
+  3D drawing with no depth buffer bound (the "streaks" under text and
+  foliage, the sky over everything).
+- Menus take the mouse like the game: SetCursorPos to the centre, then
+  GetCursorPos deltas, applied 1:1 in the UI's 640x480 space (scripted
+  runs: TEST_INPUT `goto` in 640x480 coordinates).
+- Background (automated) runs ignore host mouse/keyboard by design, so
+  clicks on those windows do nothing.
+
 ### 2026-10-12: cinematics, menu, autoconfigure (x86recomp 7f40262)
 - Cinematic clock (0x407040): with sound, the frame to show is
   (bytes loaded into the streaming sample + AIL_sample_position) in ms
