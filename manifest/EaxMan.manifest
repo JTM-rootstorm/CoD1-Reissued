@@ -1,0 +1,6 @@
+# recomp_lift manifest for EaxMan.dll (Creative's EAX Manager, shipped
+# with Call of Duty SP, Steam v1.5b). Format: see CoDSP.manifest.
+
+# SEH: __except_handler3's call into the __except block (statically
+# linked MSVC 6 CRT, same pattern as in the other modules).
+resume 1000952F

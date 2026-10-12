@@ -10,7 +10,7 @@ CLAUDE.md, also used by DS1); this repo holds what is specific to CoD.
   projects for later games; shared external material goes in CoD/tools_ext)
 - Game (Steam, v1.5b; NEVER commit or copy into the repo):
   $HOME/.local/share/Steam/steamapps/common/Call of Duty/
-  (CoDSP.exe, CoDMP.exe, gamex86.dll, cgamex86.dll, uix86.dll, Main/*.pk3)
+  (CoDSP.exe, CoDMP.exe, gamex86.dll, cgamex86.dll, uix86.dll, EaxMan.dll, Main/*.pk3)
 - Library: ~/Documents/Programming/Recomp/x86recomp
   (github.com/JTM-rootstorm/x86recomp; added with add_subdirectory,
   X86RECOMP_DIR overrides the path). Library changes are committed
@@ -18,7 +18,7 @@ CLAUDE.md, also used by DS1); this repo holds what is specific to CoD.
   passing its tests after them.
 - Unpacked EXEs: unpacked/ (gitignored, regenerate, see below)
 - Per-module symbols: symbols/<module>/ (gitignored; CoDSP, gamex86,
-  cgamex86, uix86). Per-module lifter manifests: manifest/<module>.manifest
+  cgamex86, uix86, EaxMan). Per-module lifter manifests: manifest/<module>.manifest
 - Ghidra project: cod1_recomp.gpr / cod1_recomp.rep (gitignored)
 - Reference sources (GPL, read-only): ../tools_ext/ioq3 (ioquake3) and
   ../tools_ext/iortcw (Return to Castle Wolfenstein SP/MP). Do not edit.
@@ -42,9 +42,9 @@ CLAUDE.md, also used by DS1); this repo holds what is specific to CoD.
 - Symbols (after any Ghidra change that matters), per module:
   `python3 -I ../../x86recomp/tools/pe_symbols.py unpacked/CoDSP.exe --out symbols/CoDSP`
   and `bash /usr/share/ghidra/support/analyzeHeadless "$PWD" cod1_recomp -process CoDSP.exe -noanalysis -readOnly -scriptPath ../../x86recomp/tools/ghidra -postScript ExportFunctions.java symbols/CoDSP/functions.tsv -postScript ExportJumpTables.java symbols/CoDSP/jumptables.tsv`
-- Lift all four modules in one run (then re-run cmake; the generated
+- Lift all five modules in one run (then re-run cmake; the generated
   file list is globbed):
-  `G="$HOME/.local/share/Steam/steamapps/common/Call of Duty"; out/build/release/x86recomp/tools/lifter/recomp_lift --exe unpacked/CoDSP.exe --symbols symbols/CoDSP --manifest manifest/CoDSP.manifest --module "$G/gamex86.dll" --symbols symbols/gamex86 --manifest manifest/gamex86.manifest --module "$G/cgamex86.dll" --symbols symbols/cgamex86 --manifest manifest/cgamex86.manifest --module "$G/uix86.dll" --symbols symbols/uix86 --manifest manifest/uix86.manifest --out generated`
+  `G="$HOME/.local/share/Steam/steamapps/common/Call of Duty"; out/build/release/x86recomp/tools/lifter/recomp_lift --exe unpacked/CoDSP.exe --symbols symbols/CoDSP --manifest manifest/CoDSP.manifest --module "$G/gamex86.dll" --symbols symbols/gamex86 --manifest manifest/gamex86.manifest --module "$G/cgamex86.dll" --symbols symbols/cgamex86 --manifest manifest/cgamex86.manifest --module "$G/uix86.dll" --symbols symbols/uix86 --manifest manifest/uix86.manifest --module "$G/EaxMan.dll" --symbols symbols/EaxMan --manifest manifest/EaxMan.manifest --out generated`
   The DLLs are listed in GameConfig::lifted_dlls (src/main.cpp); a DLL
   given --base must get the same base there.
 - Run: `out/build/release/cod1 --game-dir "$HOME/.local/share/Steam/steamapps/common/Call of Duty" --exe unpacked/CoDSP.exe`

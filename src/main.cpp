@@ -63,9 +63,10 @@ int main(int argc, char** argv) {
   game.registry = {{key, "InstallPath", game.guest_dir},
                    {key, "Version", "1.5b"},
                    {key, "Language", "1"}};
-  // The SP game modules, loaded by the engine with LoadLibrary and lifted
+  // The SP game modules and EAX Manager (EAX environments from the maps'
+  // eagle/*.eal files), loaded by the engine with LoadLibrary and lifted
   // with the EXE (see CLAUDE.md, Lift).
-  game.lifted_dlls = {{"gamex86.dll"}, {"cgamex86.dll"}, {"uix86.dll"}};
+  game.lifted_dlls = {{"gamex86.dll"}, {"cgamex86.dll"}, {"uix86.dll"}, {"EaxMan.dll"}};
   // The top row of configure.csv (autoconfigure): full texture detail
   // and 44 kHz sound.
   game.video_memory_mb = 256;

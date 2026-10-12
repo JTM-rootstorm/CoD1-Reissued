@@ -52,8 +52,8 @@ replacements, and the docs.
   them.
 - Linux x86-64 with a Vulkan driver.
 - Clang and LLVM (22 used; the static `libLLVMDemangle.a` and headers),
-  CMake 3.25 or newer, Ninja, Python 3, SDL3 and ffmpeg development
-  packages, and Meson (for dxvk-native).
+  CMake 3.25 or newer, Ninja, Python 3, SDL3, ffmpeg and OpenAL Soft
+  development packages, and Meson (for dxvk-native).
 - Ghidra (12.1 used), headless, to find the game's functions.
 - A checkout of [x86recomp](https://github.com/JTM-rootstorm/x86recomp).
 

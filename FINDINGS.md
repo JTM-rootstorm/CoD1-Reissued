@@ -25,9 +25,10 @@ through gfx::Device so macOS/Metal stays open (ARCHITECTURE.md).
 Next: playing through training (weapons, AI, saves/loads); then
 widescreen/FOV, UI scaling and high frame rates. EAX in x86recomp first.
 
-EAX: CoD probes for EAXMan.dll and Miles' "EAX3 room LF" and falls
-back to "Miles Fast 2D Positional Audio" without them; shared support
-is on x86recomp's roadmap (ARCHITECTURE.md).
+EAX works: with `mss_3d_provider "Creative Labs EAX 3 (TM)"` (a latched
+cvar: takes effect on the next start, or pick it in the sound options)
+the game runs Creative's EAX Manager (EaxMan.dll, lifted as a fifth
+module) on x86recomp's EAX providers. See "Run log".
 
 ## Lift coverage (x86recomp 5640e2f, before SSE support; no manifest tuning)
 Measured with one lift per module; the multi-module lift (56c26cf)
@@ -60,6 +61,29 @@ that, DLL data produced 50 bogus weak entries in the EXE).
   uix86 0x40023A8B).
 
 ## Run log
+### 2026-10-12: EAX (x86recomp 23adb0b)
+- Provider choice (0x4417F0): `mss_3d_provider` names one of the
+  enumerated providers (fallback Fast 2D). Then
+  AIL_3D_provider_attribute(provider, "EAX3 room LF", &v) with v preset
+  to -1: if v changes the provider is EAX 3 and EAX is enabled
+  (0x14F47F0), which loads EAXMan.dll and calls EaxManagerCreate.
+- EAX Manager (Creative's EAGLE runtime) ships in the install
+  (EaxMan.dll, MSVC 6 CRT, imports kernel32/advapi32 and one ole32
+  call for COM self-registration, which the game never uses). Per map
+  the game loads eagle/<mapname>.eal (pak9: the campaign and MP maps,
+  not training) into it (0x447970); each listener move asks it for the
+  environment at the listener (vtable +0x40) and, when that changes,
+  for the environment's EAX 3.0 listener properties (+0x30), passed
+  whole as "EAX all parameters" with air absorption zeroed (0x447B20).
+  Each 3D sound update gets obstruction, occlusion and their LF/room
+  ratios from it (0x447BD0, "EAX2 sample ..." preferences). Without EAX
+  the game sets "EAX2 room" to -10000 (reverb off).
+- Pathfinder's start (outdoors, night) is EAX Manager's "no reverb"
+  environment (26, decay 0.1 s, reflections/reverb -10000 mB); buildings
+  in the .eal get rooms.
+- `mss_roomtype` / `mss_wetlevel` drive Miles 6.5's digital master
+  reverb for 2D sounds.
+
 ### 2026-10-12: New Game reaches the training level (x86recomp 8afebf1)
 - Two switch jump tables Ghidra did not recover (gamex86 0x20034474,
   CoDSP 0x4DBD5A; the second with a `mov` scheduled between cmp and
