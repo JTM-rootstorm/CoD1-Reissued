@@ -737,6 +737,32 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-13: collision traces, analysis (parked)
+- Native replacement of the collision traces is parked in favour of a
+  faster x87 model in x86recomp. Only the analysis below exists.
+- x87 control word on the main thread: 0x027F (PC=53, round to nearest).
+  x86recomp starts threads there. In CoDSP and the three DLLs, every
+  fldcw is in the statically linked CRT: __control87 0x52B587,
+  __ctrlfp 0x5253D2, and _ftol-style chop/restore. _controlfp
+  (0x52B5B9) has one caller, 0x528FE1, which runs _controlfp(_PC_53,
+  _MCW_PC). Not yet confirmed by a runtime capture.
+- x87 exception flags are read only by the CRT's math-error path
+  (__raise_exc 0x5249E8 via 0x5253B7). The trace code tests C0/C2/C3
+  alone.
+- Call graph, by structure against Quake 3's cm_trace.c (not yet named
+  in Ghidra):
+  - 0x41CD60 is the trace entry point (0x118-byte trace work on the
+    stack, capsule support). It is called from 0x41D380 and from
+    0x41D3B0 (transformed).
+  - 0x41CA60 walks the tree (recursive). 0x41C0A0 traces a leaf: its
+    brushes are 0x34 bytes at 0x14BD6EC, its patches 0x2C bytes at
+    0x14BD718, and the checkcount is at 0x14BD720.
+  - 0x41B8F0 traces one brush: the six bounds as implicit axial sides,
+    then the brush's side list.
+  - 0x41B860 > 0x41A350 > 0x4196F0/0x419580/0x41A2D0 handle patches.
+  - Some of these take arguments in registers (whole-program
+    optimisation), e.g. 0x41C0A0: EAX trace work, ESI leaf.
+
 ### 2026-10-13: sound events lost at high fps (macOS, main 8248a19)
 - Results are in "Frame rate", "Sound events lost at high fps". Method:
   temporary `replace` wrappers (not committed) on 0x200067C0, logging
