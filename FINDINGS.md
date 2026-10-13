@@ -48,12 +48,259 @@ native skinning removed them (no frame over 25 ms in a played session;
 "Run log" 2026-10-13).
 
 Next: collision traces (about 45% of the main thread in training, on the
-x87 model); then widescreen/FOV, UI scaling and high frame rates.
+x87 model); then widescreen/FOV, UI scaling and high frame rates (design
+and order: "Widescreen, FOV, 2D placement, frame rate").
 
 EAX works: with `mss_3d_provider "Creative Labs EAX 3 (TM)"` (a latched
 cvar: takes effect on the next start, or pick it in the sound options)
 the game runs Creative's EAX Manager (EaxMan.dll, lifted as a fifth
 module) on x86recomp's EAX providers. See "Run log".
+
+## Widescreen, FOV, 2D placement, frame rate: design (2026-10-13)
+Investigation only: nothing implemented, nothing renamed in Ghidra (the
+Quake 3 names below are likenesses, not confirmed names). Addresses are
+VAs in the unpacked CoDSP.exe, cgamex86 (0x3...), uix86 (0x4...) and
+gamex86 (0x2...). Decided with the user: the RoQ cinematics and the menus
+are 4:3 assets and stay pillarboxed (black bars), not stretched or
+cropped.
+
+### Today (scripted runs in training, isolated XDG_DATA_HOME)
+- `+set r_mode -1 +set r_customwidth 1280 +set r_customheight 720
+  +set r_fullscreen 0` works: a 1286x745 window, back buffer 1280x720.
+  The view is Hor- (fov_x 80 kept, the vertical cut), the HUD is
+  stretched (compass and stance icon are ellipses), text glyphs are not.
+- The same with r_fullscreen 1: "calling CDS: failed, bad mode", then
+  "trying next higher resolution: ok": x86recomp's ChangeDisplaySettingsA
+  only knows 640x480-1600x1200 (4:3 and 5:4, up to the desktop size), so
+  the virtual display becomes a larger 4:3/5:4 mode and the game opens a
+  1280x720 popup in it. The host window is never fullscreen: it is a
+  borderless window of that size, and present stretches the front
+  buffer to the window without keeping the aspect.
+
+### Resolution
+- Renderer cvars (0x4A7A50): r_mode "3" (latched), r_fullscreen "1",
+  r_customwidth "1600", r_customheight "1024", r_customaspect "1",
+  r_displayRefresh "0", r_swapInterval "0" (archived).
+- Mode table at 0x564A28, 13 entries {description, width, height, pixel
+  aspect 1.0}, count at 0x564AF8: 0-10 are 320x240 to 2048x1536 (4:3 and
+  5:4), 11 is 856x480 and 12 is 1920x1200 ("(wide)"). The graphics menu
+  (options_graphics.menu) offers only 3, 4, 6, 7, 8, 9, 10; its 856x480
+  entry is commented out.
+- 0x4A5610 (mode in EAX; out width, height, window aspect): -1 takes
+  r_customwidth/height and window aspect = r_customaspect (a window
+  aspect, not a pixel aspect); a table mode gives w / (h * pixelAspect).
+  The window aspect (glconfig +0x8C, 0x15347CC) is read by neither cgame
+  nor ui.
+- 0x4FDB60 sets the mode ("...setting mode %d:"): fullscreen does
+  ChangeDisplaySettingsA (colour bits, r_displayRefresh), on failure the
+  first EnumDisplaySettings mode at least as large, else windowed.
+  0x4FD810 creates the "Call of Duty" window: fullscreen WS_POPUP at 0,0
+  (style 0x90080000), windowed WS_CAPTION at vid_xpos/vid_ypos (style
+  0x10C80000, AdjustWindowRect).
+- vidWidth/vidHeight: renderer glConfig 0x15347C4/C8, client copy
+  0x143942C/30, cgame 0x300FE984/88 (its glconfig at 0x300FE900, syscall
+  0x50), ui 0x401DE750/54 (glconfig 0x401DE6CC, syscall 0x33).
+
+Design:
+- x86recomp, generic Windows behaviour: Modes() also lists the desktop
+  mode and the common wide sizes up to it (1280x720, 1366x768, 1600x900,
+  1920x1080, 1920x1200, 2560x1080, 2560x1440, 3440x1440, 3840x2160). A
+  top-level popup covering the whole (virtual) screen after a mode change
+  goes host fullscreen (SDL borderless desktop fullscreen, no real mode
+  switch), and Show() blits with the aspect kept (black bars) instead of
+  stretching, so a 4:3 mode on a 16:9 monitor is pillarboxed. An accessor
+  for the desktop size for game code. DS1 (ddraw exclusive mode) shares
+  the path and must keep working. On macOS SDL3 display sizes are points:
+  "native" means points unless the window asks for high pixel density.
+- CoD1: replace 0x4A5610 so that r_mode -1 with r_customwidth/height 0
+  is the desktop size, window aspect w/h. Native resolution is then
+  `seta r_mode -1; seta r_customwidth 0; seta r_customheight 0` (the menu
+  cannot select it); any other size or aspect is r_mode -1 with explicit
+  numbers, windowed or fullscreen.
+
+### FOV
+- 0x30025200 returns fov_x in ST0: cg_fov (vmCvar 0x301E7B40, value at
+  +8; "80", archived) clamped to [1, 160]; while aiming down the sights
+  it moves toward the weapon def's (0x30125668) adsZoomFov (+0x218) by
+  the ADS fraction 0x3011E15C (adsZoomInFrac +0x21C, adsZoomOutFrac
+  +0x220); bits 0xC000 of 0x3011E124 force 55 (state not identified).
+- Callers: the view setup 0x30025C80 (refdef at 0x30125724: x, y, width
+  0x3012572C, height 0x30125730, fov_x 0x30125734, fov_y 0x30125738)
+  computes fov_y = atan2(height, width / tan(fov_x / 2)) * 360 / pi:
+  Hor- on wider screens. It then sets the zoom sensitivity 0x301257AC =
+  fov_x / cg_fov, which 0x30026B10 sends with the usercmds. The script
+  camera path (syscall 0xDB, "setCameraOrigin") sets its own FOV. The sky
+  portal 0x300260A0 ("CG_DrawSkyBoxPortal" errors) recomputes both from
+  0x30025200 the same way.
+- Hor+: replace 0x30025200: the lifted value, then, when the screen
+  aspect A = vidWidth / vidHeight (cgame's glconfig) is above 4/3,
+  fov' = 2 atan(tan(fov / 2) * A / (4/3)). Both callers derive fov_y from
+  it, so the vertical FOV is what 4:3 gets at the same cg_fov, for hip,
+  ADS and the 55 case alike. At 4:3 and below nothing changes. cg_fov 80
+  gives 96.4 at 16:9, 111.5 at 21:9.
+- Mouse feel: wrap 0x30025C80 and, when 0x30025200 ran inside it, write
+  0x301257AC = 4:3 fov / cg_fov again (otherwise the sensitivity grows by
+  fov'/fov).
+- The viewmodel is drawn in the same scene and projection (only
+  r_znear_depthhack differs; there is no gun FOV, cg_gun_* are offsets),
+  so Hor+ keeps its vertical framing. Check the arm's cut ends at 21:9.
+- Scope overlay 0x3000F770: four mirrored quarters of the weapon's
+  adsOverlayShader (weapon def word 0x89) of adsOverlayWidth/Height
+  (0x8B/0x8C) times the screen scales, centred on the aim point from
+  0x3000F500, then black fills from it to the refdef edges in real
+  pixels. 0x3000F500 (also used by the crosshair/reticle code 0x3000FF00,
+  0x30010670, 0x300109A0) turns a view direction into a 640x480 offset
+  with the refdef's fov_x/fov_y, so it follows Hor+ by itself; see the 2D
+  placement for the overlay. 0x3000FF00 also reads fov_x/fov_y directly
+  (0x3001043A, 0x30010166): check the crosshair spread under Hor+.
+
+### 2D placement (menus, HUD)
+- ui: 0x4000C1E0 (fetches the glconfig, fills the display-context table)
+  sets yscale 0x401C045C = H/480, xscale 0x401C0460 = W/640 and a wide
+  bias 0x401C0464 = (W - H*4/3)/2 that nothing reads. The draw helpers
+  multiply by the scales inline (0x40007590, 0x40007660, 0x400076D0,
+  0x40007770, 0x40007BF0, 0x40007C90; 0x40007D80 picks a font by
+  yscale) and draw through 0x40018370 (DrawStretchPic syscall).
+- cgame: 0x3001AF80 sets screenXScale 0x300FE9A0 = W/640 and
+  screenYScale 0x300FE9A4 = H/480; some 20 functions read them inline
+  (0x30012040, 0x300120E0, 0x30012200, 0x30012260, 0x3001CA20,
+  0x3001DFA0, 0x3000F770, 0x3000FF00, ...) and draw through 0x30022DD0
+  (syscall 0x4B) and the text syscall 0x38 (0x30022B40). There is no
+  single adjust function to patch.
+- Engine: 0x40FED0 has the shape of SCR_AdjustFrom640 (client glconfig
+  copy); CIN_DrawCinematic-like 0x4076F0 uses it for the RoQ rectangle
+  and its letterbox bars, then DrawStretchRaw.
+- Renderer: the refexport is filled by 0x4A94C0 (REF_API_VERSION 14)
+  and copied to the client's table at 0x1426D60 by 0x40E460. 2D enters
+  through SetColor 0x4D42A0 (command 1), StretchPic 0x4D4330 (command 2:
+  shader, x, y, w, h, s1, t1, s2, t2), 0x4D43D0 (command 3: the same plus
+  a colour and one more word), 0x4D44D0 (0x2C-byte command), 0x4D45B0
+  (0x48 bytes: four vertices; cgame's rotated quads 0x30012260, syscall
+  0x4E), text 0x4D6400 (command 6: x, y, font, scale, colour, ...,
+  string; also via 0x4D5D60, 0x4D6110, 0x4D6250) and StretchRaw 0x4CCD10
+  (cinematics, drawn at once). The command loop 0x4CEA70 switches on ids
+  1-11; the 2D setup 0x4CCC10 is an ortho of 0..vidWidth x 0..vidHeight,
+  so all 2D arrives in pixels. Text has one uniform scale (0x4CDCC0),
+  which is why glyphs are not stretched.
+- The HUD is ui/hud.menu (localized_english_pak0) painted by cgame's
+  menu code: 0x3003D3E0 ("fps: %f", Menu_PaintAll-like) calls
+  0x3003B710 (Menu_Paint-like: menu in ESI, forcePaint in EAX, flags at
+  +0x48 with visible = 4, fullscreen menus fill 0,0,640,480). Menus:
+  "Compass" (x -25..135, y 345), "stance" and "tankstatus" (100, 434),
+  "weaponinfo" (0..640 at y 420; weapon name and ammo at x 242-637),
+  "Health" (488, 460), "Cursorhints" (300, 325). Outside menus: crosshair
+  and reticles, the scope overlay, script hudelems, centre prints and
+  subtitles (cg_subtitles), the damage direction. Game messages
+  ("Objectives updated.", con_gamemessagetime) are the engine console's
+  and already sit at the screen's left edge.
+
+Design: one placement transform in pixel space where 2D enters the
+renderer. With A = W/H > 4/3, k = (4/3)/A and b = W(1-k)/2 (identity
+when A <= 4/3):
+- stretch: unchanged (the original).
+- center: x' = kx + b, w' = kw; a rectangle spanning the full width
+  stays full width (fades, letterbox bars, full-screen hudelem shaders).
+- left: x' = kx. right: x' = kx + 2b.
+- scope: center, and rectangles touching the left or right screen edge
+  are extended to it (the overlay's black fills).
+Text moves x only (its scale is already uniform); the four-vertex quads
+move each vertex; StretchRaw is a rectangle. Each 2D entry above becomes
+a wrapper that rewrites its x/w arguments in place and calls the lifted
+body. The mode comes from a save/restore stack set by wrappers of:
+- uix86 vmMain: center (pillarboxed menus and loading screens).
+- cgamex86 vmMain: center.
+- Menu_Paint 0x3003B710: by menu name (window name pointer; offset to
+  confirm, +0x20 in Q3TA's layout): Compass, stance, tankstatus left;
+  weaponinfo, Health right; others center.
+- 0x3000F770: scope. 0x3000F500 divides its x output by k in center and
+  scope mode, since the offset is computed with the real fov_x and the
+  transform would shrink it.
+- 0x4076F0: center (cinematics pillarboxed; their bars are full width).
+- Everything the engine draws itself (console, game messages, warning
+  icons): stretch.
+The UI cursor moves in 640x480 space and is drawn through the same
+transform, so it stays on the items. To check: right- or centre-aligned
+text shifts by w(1 - k) (positions move, glyph widths do not); whether
+script hudelems at the screen edges need anchoring.
+
+### Frame rate
+- Com_Frame-like 0x430690 (it holds the error longjmp's setjmp): minMsec
+  = 1000 / com_maxfps (integer; com_maxfps "0" means 1 ms), then it spins
+  on 0x42F180 (event loop, timeGetTime ms) until that much has passed.
+  No sleep: a cap burns a core, and only 1000/n rates exist (120 gives
+  125, 144 gives 166, 240 gives 250). Then 0x430620 (fixedtime,
+  timescale, clamp), the server frame 0x44CF10 and the client frame
+  0x40DF80. r_swapInterval 1 reaches SDL_GPU as VSYNC, 0 as mailbox
+  (x86recomp 32f0634).
+- The server frame runs whole 50 ms game frames (20 Hz) from an
+  accumulator (0x14F484C): AI, scripts, entities and snapshots do not
+  depend on the frame rate.
+- Player movement does. ClientThink-like 0x20012430: pmove_msec
+  (0x20294C80, "8", clamped to 8..33) and pmove_fixed (0x202BD460, "0";
+  when set, the command time is rounded up to a multiple of pmove_msec).
+  Pmove-like 0x20008580 cuts each command into steps of at most 66 ms
+  (pmove_msec when fixed) for 0x20007FD0 (msec clamped to 1..200,
+  frametime msec * 0.001). Without pmove_fixed each frame's usercmd is
+  one step of the frame's integer msec. Quake 3's per-step velocity
+  snapping is not at the end of 0x20007FD0 (CoD recomputes the velocity
+  there from the distance moved when blocked), so how much jump height
+  and speed change with fps is unmeasured. cgame mirrors it (pmove_fixed
+  0x301E6DC0, pmove_msec 0x301034E0).
+- Prediction scales with fps: 0x3001EF70 (CG_PredictPlayerState-like)
+  replays every usercmd newer than the latest snapshot (up to 64)
+  through Pmove 0x30007C30 each frame. Snapshots come at 20 Hz, so a
+  frame replays about fps x (time since the snapshot) commands: roughly
+  2-3 at 60 fps, 7 at 240, and the per-second trace work grows about
+  with fps squared. This is the cgame -> CM trace path that is ~45% of
+  the main thread now.
+- RoQ playback follows the audio clock (0x407040). Animations and
+  effects use integer cg.time. Menu fades: Q3TA's Fade advances one step
+  per frame when fadeCycle is shorter than a frame (hud.menu has
+  fadeCycle 1), so fades would run faster at high fps; not yet located
+  in CoD's code.
+- Budget: the training walk averages 5.45 ms (p99 9.3 ms, run log
+  2026-10-13), about 180 fps; 240 fps needs 4.17 ms.
+
+Design:
+- Pacing: wrap 0x430690 so that it first sleeps until the next frame
+  deadline on a host high-resolution clock (period 1/com_maxfps, not
+  rounded; sleep to ~1 ms before it, then a precise wait such as SDL3's
+  SDL_DelayPrecise), then runs the lifted body. Its own integer wait is
+  then already over: no spinning, and 144/165/240 are exact. Check that
+  the lifted body still catches the longjmp (manifest `setjmp`) when it
+  is f_00430690_lifted. For VRR: r_swapInterval 0 and com_maxfps a few
+  under the refresh rate; fixed refresh: r_swapInterval 1, com_maxfps 0.
+- Measure before changing physics: scripted jumps and runs at com_maxfps
+  60/125/250/333/500 with pmove_fixed 0 and 1 (apex and speed from a
+  probe on the playerstate origin), menu fade durations, gun sway/bob at
+  60 vs 240.
+- If movement depends on fps: fixed pmove steps on both sides (pmove_fixed
+  behaviour) plus interpolating the predicted view origin between the
+  last two steps in cgame, because pmove_fixed alone moves the view at
+  125 Hz.
+- Prediction: keep the predicted playerstate per command number and run
+  only the new commands while the snapshot is unchanged (a full replay
+  on each new snapshot): a native 0x3001EF70 with an oracle test against
+  the full replay. Overlaps the collision-trace work.
+
+### Implementation order
+| # | Item | Where | Size |
+|---|---|---|---|
+| 1 | Hor+: replace 0x30025200, wrap 0x30025C80 (zoom sensitivity); check 4:3 unchanged, 16:9/21:9 screenshots | CoD1 | S, ~60 lines |
+| 2 | Display modes: desktop and wide modes, host fullscreen for full-screen popups, aspect-kept present; desktop-size accessor | x86recomp | M, ~150 lines; DS1 retest |
+| 3 | Native resolution: replace 0x4A5610 (r_mode -1 with 0x0 = desktop) | CoD1 | S, ~30 lines |
+| 4 | Frame pacing wrapper on 0x430690 | CoD1 | S, ~60 lines |
+| 5 | 2D transform: the renderer 2D entries, mode stack, ui/cgame vmMain, 0x4076F0 | CoD1 | M, ~250 lines |
+| 6 | HUD anchors: Menu_Paint by name, scope overlay, 0x3000F500 | CoD1 | S-M, ~100 lines + screenshot checks |
+| 7 | Measurements: pmove vs fps, fades, sway | scripted runs | S |
+| 8 | Prediction cache for 0x3001EF70 + oracle test | CoD1 | L, ~300 lines + test |
+| 9 | Fixed-step pmove with view interpolation, if 7 shows the need | CoD1 | M-L |
+| 10 | Time-based menu fades, if 7 shows the need | CoD1 | S |
+
+FOV first (small, self-contained, the biggest visible gain), then the
+mode work so widescreen can be fullscreen, pacing (cheap), then the 2D
+placement (the stretched HUD is the most visible remaining fault). The
+measurements decide 9 and 10; 8 is what 240 fps needs in CPU time.
 
 ## Lift coverage (x86recomp 5640e2f, before SSE support; no manifest tuning)
 Measured with one lift per module; the multi-module lift (56c26cf)
