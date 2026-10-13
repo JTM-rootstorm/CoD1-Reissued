@@ -344,6 +344,40 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-13: faster exact x87 (x86recomp x87-fast 7e0dc70)
+- The game runs its float maths at the CRT's PC=53/RC=nearest (CW
+  0x027F). The only _controlfp call, 0x528FE1, sets _PC_53, and the
+  GL HLE never touches the CW.
+- Lifted runs had only the PC=24 arithmetic inline, so every fadd,
+  fmul, fcom and rounding fst went out of line. In the scripted
+  training walk the out-of-line x87 helpers were 57.7% of the main
+  thread: run::ArithF32 alone 33%, run::Arith 8%, compares 9%.
+- x86recomp now has these inline and exact (integer only):
+  - PC=53 add/sub/mul/div of up to 53-bit significands;
+  - zero operands;
+  - m32/m64 loads, rounding stores and compares;
+  - single-instruction runs;
+  - an empty mask instead of the tag word;
+  - a control-word layout that no longer misses store forwarding.
+- Scripted training walk: the uncapped walk with COD1_TEST_INPUT, an
+  isolated XDG_DATA_HOME, and F8 bound to quit. Measured over the
+  in-game frames, 12-88 s, three runs of the final build and four of
+  the baseline, repeatable to 0.02 ms:
+  - Mean frame: 5.40 -> 4.77 ms (-11.7%).
+  - p95: 8.5 -> 7.3 ms. p99: 9.4 -> 8.0 ms.
+  - Frames in the window: 14070 -> 15930.
+- Main thread, perf:
+  - Out-of-line x87 helpers: 57.7% -> 1.1%.
+  - The collision code (0x419000-0x41DFFF, now with the x87 work
+    inline) is 60% of the main thread. Before, its self time (19%)
+    plus the helpers was about 77%.
+- What is left is the latency of exact integer arithmetic, about 5 ns
+  per dependent operation. Host doubles would be about 5x faster on
+  this code but need a change to x86recomp's rules.
+- ctest 12/12 with COD1_GAME_EXE and COD1_MSS32_DLL. That includes
+  lift_x87 (4110 forms, 82.2M checks against the CPU), skinning_oracle,
+  digital_reverb_oracle and fast2d_oracle.
+
 ### 2026-10-13: SDL_GPU (Vulkan) is the default backend
 - x86recomp 32f0634: SDL_GPU on Vulkan by default; dxvk-native optional
   (COD1_GFX=d3d9). ctest 12/12 (oracles included) on it.
