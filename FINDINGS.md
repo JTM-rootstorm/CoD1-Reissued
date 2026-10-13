@@ -344,6 +344,35 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-13: x87 runs on host doubles (x86recomp x87-double 79a8931)
+- Under CW 0x027F, x86recomp runs x87 runs on host doubles where that
+  is proven exact. Values must stay in [2^-511, 2^512); PE and C1 come
+  from exact error terms. Anything else leaves for the exact model at
+  that instruction. The proof is in x86recomp ARCHITECTURE.md.
+- Scripted training walk, against x86recomp main 7e0dc70 built from
+  the same tree. Uncapped, windowed (r_swapInterval 0, r_fullscreen
+  0), isolated XDG_DATA_HOME, COD1_TEST_INPUT with F7 bound to
+  "vstr go" (+forward) and F8 to quit. In-game frames 12-88 s, three
+  runs each, interleaved, repeatable to 0.02 ms:
+  - Mean frame: 4.50 -> 3.53 ms (-21.6%).
+  - p95: 7.3 -> 5.9 ms. p99: 8.0 -> 6.35 ms. Max: ~16 -> 10.5 ms.
+  - Frames in the window: 16890 -> 21560.
+  - COD1_X87_DOUBLE=0 on the new build: 4.50 ms, the same as the base.
+  - The base here is 4.50 ms, not 4.77 as in the 7e0dc70 entry, because
+    of windowed mode and the config. Compare within one entry only.
+- Lifted code: 97 -> 113 MB. The double form of each run is emitted
+  next to the exact one. A full build took ~6 min.
+- ctest 12/12 with COD1_GAME_EXE and COD1_MSS32_DLL. That includes
+  lift_x87 (4110 forms, 82.2M checks against the CPU, with more
+  double-exact states under 0x027F), skinning_oracle,
+  digital_reverb_oracle and fast2d_oracle.
+- Memory, measured while checking a report of "18 GB": VmSize 15.8 GB
+  and VmRSS 19.1 GB on both builds. RssAnon is only ~0.2 GB.
+  nvidia-smi gives the process 248 MiB of VRAM. The rest is the
+  NVIDIA Vulkan driver's 8.9 GB /dev/nvidiactl mapping, which the
+  kernel counts as resident (as file and as shmem). It is not an
+  allocation by the port.
+
 ### 2026-10-13: faster exact x87 (x86recomp x87-fast 7e0dc70)
 - The game runs its float maths at the CRT's PC=53/RC=nearest (CW
   0x027F). The only _controlfp call, 0x528FE1, sets _PC_53, and the
