@@ -45,9 +45,12 @@ endif()
 # The CPU skinning is bit-exact only without contraction into FMA, and is
 # per-vertex work: optimised in every build type. It reads guest memory
 # like lifted code, so a fault in it may unwind the same way
-# (-fnon-call-exceptions, see recomp_add_lifted).
+# (-fnon-call-exceptions and, on macOS, frame records in leaf functions:
+# see recomp_add_lifted).
+set(_skinning_options -O2 -ffp-contract=off -fnon-call-exceptions
+    ${RECOMP_FAULT_FRAME_FLAGS})
 set_source_files_properties(src/skinning.cpp PROPERTIES COMPILE_OPTIONS
-  "-O2;-ffp-contract=off;-fnon-call-exceptions")
+  "${_skinning_options}")
 
 # Oracle tests over every instruction form in the EXE. Configure with
 #   -DCOD1_GAME_EXE=unpacked/CoDSP.exe
