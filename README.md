@@ -29,10 +29,10 @@ a static-recompilation library shared with
 Siege):
 
 - The game's 32-bit x86 code (`CoDSP.exe` plus `gamex86.dll`,
-  `cgamex86.dll` and `uix86.dll`) is translated ahead of time into C++,
-  with exact integer, x87 and SSE/SSE2 semantics, and linked with a
-  runtime that reimplements the Windows and Miles Sound System APIs the
-  game uses (OpenGL is next).
+  `cgamex86.dll`, `uix86.dll` and `EaxMan.dll`) is translated ahead of
+  time into C++, with exact integer, x87 and SSE/SSE2 semantics, and
+  linked with a runtime that reimplements the Windows and Miles Sound
+  System APIs the game uses (OpenGL is next).
 - That recompiled code is scaffolding. The aim is native source: lifted
   functions are replaced by hand-written C++ one subsystem at a time
   (widescreen, UI scaling and frame pacing first), each checked against
@@ -106,13 +106,14 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
 
    ```sh
    python3 -I "$X86RECOMP/tools/pe_symbols.py" unpacked/CoDSP.exe --out symbols/CoDSP
-   for m in gamex86 cgamex86 uix86; do
+   for m in gamex86 cgamex86 uix86 EaxMan; do
      python3 -I "$X86RECOMP/tools/pe_symbols.py" "$GAME/$m.dll" --out symbols/$m
    done
    mkdir -p /tmp/cod1_ghidra
    bash /usr/share/ghidra/support/analyzeHeadless /tmp/cod1_ghidra cod1 \
-     -import unpacked/CoDSP.exe "$GAME/gamex86.dll" "$GAME/cgamex86.dll" "$GAME/uix86.dll"
-   for m in CoDSP.exe gamex86.dll cgamex86.dll uix86.dll; do
+     -import unpacked/CoDSP.exe "$GAME/gamex86.dll" "$GAME/cgamex86.dll" "$GAME/uix86.dll" \
+       "$GAME/EaxMan.dll"
+   for m in CoDSP.exe gamex86.dll cgamex86.dll uix86.dll EaxMan.dll; do
      bash /usr/share/ghidra/support/analyzeHeadless /tmp/cod1_ghidra cod1 \
        -process "$m" -noanalysis -readOnly -scriptPath "$X86RECOMP/tools/ghidra" \
        -postScript ExportFunctions.java "symbols/${m%.*}/functions.tsv" \
@@ -120,7 +121,7 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
    done
    ```
 
-6. **Lift** all four modules (the C++ goes to `generated/`, also ignored)
+6. **Lift** all five modules (the C++ goes to `generated/`, also ignored)
    and build:
 
    ```sh
@@ -129,6 +130,7 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
      --module "$GAME/gamex86.dll" --symbols symbols/gamex86 --manifest manifest/gamex86.manifest \
      --module "$GAME/cgamex86.dll" --symbols symbols/cgamex86 --manifest manifest/cgamex86.manifest \
      --module "$GAME/uix86.dll" --symbols symbols/uix86 --manifest manifest/uix86.manifest \
+     --module "$GAME/EaxMan.dll" --symbols symbols/EaxMan --manifest manifest/EaxMan.manifest \
      --out generated
    cmake --preset release
    cmake --build --preset release
