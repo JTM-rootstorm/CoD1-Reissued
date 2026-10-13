@@ -72,6 +72,23 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-12: snd_restart and the mouse; in-game restarts crash
+- snd_restart (the sound options' apply, e.g. picking another 3D
+  provider) also restarts the renderer: DestroyWindow of the game window
+  and a new one at the same place, without ClipCursor(NULL) first. The
+  game then never clips again (its mouse is still "active"), so the new
+  window got no grab: mouse look drifted and the pointer escaped. Fixed
+  in x86recomp (a clip outlives its window, as on Windows). Checked
+  with a scripted menu snd_restart then training: relative motion turns
+  the view as before the restart.
+- From inside a level the menu runs "savegame internal\snd_restart;
+  disconnect; snd_restart; loadgame internal\snd_restart" (same for
+  vid_restart), and the disconnect ends in the CRT's longjmp (jmp edx at
+  0x51CAB1) back to 0x4306A6 in 0x430690: fatal, unlifted indirect
+  target. Needs setjmp/longjmp support in the lifter (open).
+- cod1 now quotes game arguments with spaces (`-- +set mss_3d_provider
+  "Creative Labs EAX 3 (TM)"` reached the game as "Creative").
+
 ### 2026-10-12: Miles 6.5e Fast 2D and sample levels (x86recomp 0acb1ee)
 - x86recomp's runtime/audio/miles65 implements docs/miles.md's "Miles
   6.5e sample levels and Fast 2D" for 2D samples, streams and Fast

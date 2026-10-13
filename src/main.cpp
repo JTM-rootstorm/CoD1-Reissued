@@ -30,7 +30,12 @@ int main(int argc, char** argv) {
     } else if (!std::strcmp(argv[i], "--")) {
       for (i++; i < argc; i++) {
         if (!game_args.empty()) game_args += ' ';
+        // Quoted, as on a Windows command line, so an argument with spaces
+        // stays one.
+        bool quote = std::strpbrk(argv[i], " \t");
+        if (quote) game_args += '"';
         game_args += argv[i];
+        if (quote) game_args += '"';
       }
     } else {
       std::fprintf(stderr,
