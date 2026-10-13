@@ -11,6 +11,13 @@ pk3s with Python's zipfile) it plays the intro cinematic and, with
 `-- +map training` and a scripted click to start the mission, reaches
 the training level: sky, terrain, alpha-tested foliage, models, HUD,
 autosave. Not yet played by hand or compared against the d3d9 backend.
+Killed (scripted) runs leave the __CoDSP safe-mode marker in the overlay,
+~/Library/Application Support/cod1/install on macOS; background runs then
+take safe mode's default and safemode.cfg's picmip 2 / 11 kHz end up in
+main/config.cfg. Delete the marker before each run (and that config once
+it has them): autoconfigure then picks 2000/512/256 (r_mode 6, picmip 0,
+44 kHz) as on Linux. With the HLE sync barriers (x86recomp 0869565) the
+training run is unchanged.
 
 ## Status (2026-10-12)
 M0 (recon) done; M1 under way. Decided: static recompilation on the
