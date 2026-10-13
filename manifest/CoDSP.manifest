@@ -5,7 +5,10 @@
 #   name  <hexva> <name>   name a function (comments in generated code)
 #   probe <hexva> [name]   call recomp::Probe() on entry (runtime logs it)
 #   resume <hexva>         this call/jmp abandons the current call chain
-#                          (SEH): throw GuestResume to the owning frame
+#                          (SEH, longjmp): throw GuestResume to the owning
+#                          frame
+#   setjmp <hexva> [name]  a setjmp function: its callers catch
+#                          GuestResume, its return points become entries
 #   replace <hexva> [name] src/ defines f_<VA>; the lifted body becomes
 #                          f_<VA>_lifted
 
@@ -13,6 +16,14 @@
 # which starts with `mov esp, [ebp-18h]` and never returns. Same code as
 # Dungeon Siege's (VC6) handler, found by its byte pattern.
 resume 00528277
+
+# setjmp/longjmp (MSVC 7 CRT): the error routine 0x42E660 longjmps to
+# the setjmp in 0x42FDE0 (startup: build banner, "Error during
+# initialization" on a drop) or 0x430690 (e.g. disconnect). __setjmp3
+# saves ebp/ebx/edi/esi/esp/return address in the jmp_buf; _longjmp
+# unwinds the SEH chain, restores them and ends in `jmp [edx+14h]`.
+setjmp 0052E84C __setjmp3
+resume 0051CAB1
 
 # Cinematic slot reset: also clears the stale target frame (src/cinematic.cpp).
 replace 00406DA0

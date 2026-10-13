@@ -81,11 +81,23 @@ does with them:
   in x86recomp (a clip outlives its window, as on Windows). Checked
   with a scripted menu snd_restart then training: relative motion turns
   the view as before the restart.
-- From inside a level the menu runs "savegame internal\snd_restart;
-  disconnect; snd_restart; loadgame internal\snd_restart" (same for
-  vid_restart), and the disconnect ends in the CRT's longjmp (jmp edx at
-  0x51CAB1) back to 0x4306A6 in 0x430690: fatal, unlifted indirect
-  target. Needs setjmp/longjmp support in the lifter (open).
+- From inside a level the restart is "savegame internal\snd_restart"
+  (same for vid_restart); once the save is written ("Game saved for
+  snd_restart") the game queues "disconnect;snd_restart;loadgame
+  internal\snd_restart" itself. The disconnect is an error drop
+  ("ERROR: Disconnected"), which ends in the CRT's longjmp (jmp at
+  0x51CAB1) back to 0x4306A6 in 0x430690: was fatal, unlifted indirect
+  target.
+- Fixed with x86recomp b66a6ec (setjmp/longjmp; manifest `setjmp
+  0052E84C` for __setjmp3, `resume 0051CAB1` on _longjmp's jmp): its
+  two callers, 0x42FDE0 and 0x430690, catch the drop and continue at
+  their setjmp return points 0x42FE16 / 0x4306A6. Checked with a
+  scripted F11 bound to "savegame internal\snd_restart" in training:
+  disconnect, Miles re-init, training reloads from the internal save,
+  and after the briefing click the level plays on. Binding the whole
+  line instead disconnects before the save is written (the save
+  completes after the rest of the line has run), so its loadgame finds
+  no save: an artefact of that test bind, not of the menu.
 - cod1 now quotes game arguments with spaces (`-- +set mss_3d_provider
   "Creative Labs EAX 3 (TM)"` reached the game as "Creative").
 
