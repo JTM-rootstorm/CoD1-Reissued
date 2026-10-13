@@ -11,9 +11,13 @@ set(X86RECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../x86recomp"
 # dxvk-native (d3d9 only, SDL3 WSI): the gfx::Device backend on Linux,
 # and with it the DirectDraw HLE the engine probes video memory through.
 # Built by the Dungeon Siege project from its tools_ext/dxvk.
-set(DXVK_NATIVE_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../Dungeon Siege/tools_ext/dxvk-native"
-    CACHE PATH "dxvk-native install prefix")
+# macOS uses x86recomp's SDL_GPU (Metal) backend instead.
+if(APPLE)
+  set(_dxvk_default "")
+else()
+  set(_dxvk_default "${CMAKE_CURRENT_SOURCE_DIR}/../../Dungeon Siege/tools_ext/dxvk-native")
+endif()
+set(DXVK_NATIVE_DIR "${_dxvk_default}" CACHE PATH "dxvk-native install prefix")
 
 enable_testing()
 add_subdirectory("${X86RECOMP_DIR}" x86recomp)
