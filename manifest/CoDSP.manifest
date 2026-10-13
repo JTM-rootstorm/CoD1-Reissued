@@ -27,3 +27,7 @@ resume 0051CAB1
 
 # Cinematic slot reset: also clears the stale target frame (src/cinematic.cpp).
 replace 00406DA0
+
+# CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
+replace 005070E0
+replace 00507D20

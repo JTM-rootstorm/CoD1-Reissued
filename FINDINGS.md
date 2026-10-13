@@ -39,13 +39,16 @@ through gfx::Device so macOS/Metal stays open (ARCHITECTURE.md).
   training level, which renders correctly and takes mouselook; the
   level-start autosave is written. See "Run log".
 - Game patches are replacements of lifted functions (manifest
-  `replace`, src/): so far one cinematic fix (src/cinematic.cpp).
+  `replace`, src/): one cinematic fix (src/cinematic.cpp), and native
+  CPU skinning (src/skinning.cpp, bit-exact; "Run log" 2026-10-13).
 
 Training plays through to completion (2026-10-12, played by hand on EAX
-3), with occasional frame-rate drops not yet investigated.
+3). Its frame-rate drops were CPU-bound: x86recomp's GL draw path and
+native skinning removed them (no frame over 25 ms in a played session;
+"Run log" 2026-10-13).
 
-Next: the frame-rate drops in training; then widescreen/FOV, UI scaling
-and high frame rates.
+Next: collision traces (about 45% of the main thread in training, on the
+x87 model); then widescreen/FOV, UI scaling and high frame rates.
 
 EAX works: with `mss_3d_provider "Creative Labs EAX 3 (TM)"` (a latched
 cvar: takes effect on the next start, or pick it in the sound options)
@@ -94,6 +97,63 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-13: native CPU skinning (src/skinning.cpp)
+- Frame drops in training were CPU-bound on the main thread; after
+  x86recomp's GL draw path speed-up (branch gl-draw-perf) the x87/SSE
+  model was 72-84% of it, and in the user's heaviest stretch the two SSE
+  skinning functions alone were 59%: 0x507D20 (weighted) 43% and
+  0x5070E0 (rigid) 16%, packed SSE through the SoftFloat lanes.
+- Both are slots of the surface function table at 0x564270 (5: rigid,
+  10: weighted; the other slots include the non-SSE versions), called
+  through it from 0x4CA987, 0x4CC6EC and 0x4CCB06. Layouts (arg block,
+  surface, vertices, extra bones, matrices) are in src/skinning.cpp
+  and in the Ghidra plate comments. Each: RB_CheckOverflow (0x500A60,
+  named from its error strings), indexes appended by 0x480820 (+ first
+  vertex), texcoords by 0x42B0A0 (a memcpy with the structure of Quake
+  3's Com_Memcpy, left unnamed), then per vertex position and normal
+  into the tessellator, stored with 16-byte movups at a 12-byte stride.
+  The normal of a weighted vertex takes the first bone only.
+- Replaced natively (manifest `replace 005070E0` / `replace 00507D20`):
+  same per-lane IEEE single operations in the same order (the two
+  functions sum the translation row at different points), compiled
+  with -ffp-contract=off; a vertex with a NaN result is redone with
+  SSE's NaN rules (first NaN operand quietened, else 0xFFC00000), which
+  host arithmetic does not follow. The lifted callees are called as the
+  original's call sites do (same frame depth and return addresses), and
+  the argument slot gets the original's last value. Not reproduced:
+  MXCSR's sticky flags (no ldmxcsr in any module; the only stmxcsr, in
+  the CRT's SSE2 math entries at 0x51A7A0, 0x51AB30, 0x52E2D0 and in
+  cgame/ui, mask with 0x1F80), scratch/XMM registers and EFLAGS (all
+  three call sites overwrite them first).
+- ctest skinning_oracle (configure with -DCOD1_GAME_EXE): the originals
+  lifted with --only and run on the SSE model against the native code,
+  memory and callee-saved registers compared byte for byte: 6000 random
+  surfaces (zeros, denormals, infinities, quiet/signalling NaNs, overflow
+  and underflow, raw bits; 245733 NaN outputs) plus captured game calls
+  (-DCOD1_SKINNING_CAPTURE=ON build, COD1_SKINNING_CAPTURE=file): 3703
+  calls from a training walk, 0 mismatches. Mutations (NaN operand
+  order, default NaN sign, add order, argument slot, NaN redo, 12-byte
+  store) each fail it. `--only` leaves out noreturn callees, so the
+  test lists them too.
+- Scripted training walk (uncapped, gl-draw-perf x86recomp, 3 runs each,
+  repeatable to 0.1 ms): skinning was 29.5% of the main thread in the
+  15-30 s stretch (12.1% over the walk), now 0.4%; that stretch's
+  frame time 7.0-8.5 -> 5.9-6.4 ms, walk mean 5.86 -> 5.45 ms, p95 9.4
+  -> 8.6 ms, p99 10.5 -> 9.3 ms. The SSE model is now ~0% of the main
+  thread; the x87 model is still 60%, mostly collision traces (0x41B8F0
+  14%, 0x41CD60 13%, 0x41D3B0 7%, 0x419EE0 6%, 0x4196F0 4%).
+- The user's manual training session (perf 300 Hz, COD1_HITCH=25, own
+  config: vsync 60 Hz, ~130 s in game) against the same kind of session
+  on the gl-draw-perf build before it: main thread busy 72% -> 60% of
+  the in-game time; the stretch that was saturated for ~25 s (98-100%
+  busy at 20-48 s, skinning up to 69% of it) has no counterpart: the
+  busiest 5 s is now 95%, most 50-80%. Skinning 33.8% -> 0.6%, SSE
+  model 33.3% -> ~0%. No frame over 25 ms once in game (before: one of
+  31.5 ms at mission start). What fills the main thread now: x87 model
+  59% (leaf), collision traces from cgame (0x3001EF70 > 0x30007C30 >
+  CM 0x41CD60 / 0x41C0A0) ~45% (self: 0x41B8F0 18%, 0x4196F0 15%,
+  0x41CD60 7%, 0x41D3B0 5%), GL draw 6.5%.
+
 ### 2026-10-12: snd_restart and the mouse; in-game restarts crash
 - snd_restart (the sound options' apply, e.g. picking another 3D
   provider) also restarts the renderer: DestroyWindow of the game window
