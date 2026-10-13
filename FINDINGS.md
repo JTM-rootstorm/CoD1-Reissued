@@ -22,8 +22,11 @@ through gfx::Device so macOS/Metal stays open (ARCHITECTURE.md).
 - Game patches are replacements of lifted functions (manifest
   `replace`, src/): so far one cinematic fix (src/cinematic.cpp).
 
-Next: playing through training (weapons, AI, saves/loads); then
-widescreen/FOV, UI scaling and high frame rates. EAX in x86recomp first.
+Training plays through to completion (2026-10-12, played by hand on EAX
+3), with occasional frame-rate drops not yet investigated.
+
+Next: the frame-rate drops in training; then widescreen/FOV, UI scaling
+and high frame rates.
 
 EAX works: with `mss_3d_provider "Creative Labs EAX 3 (TM)"` (a latched
 cvar: takes effect on the next start, or pick it in the sound options)
