@@ -8,13 +8,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # x86recomp: the lifter, x87 model and runtime (a sibling checkout).
 set(X86RECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../x86recomp"
     CACHE PATH "x86recomp source tree")
-# dxvk-native (d3d9 only, SDL3 WSI): the gfx::Device backend on Linux,
-# and with it the DirectDraw HLE the engine probes video memory through.
-# Built by the Dungeon Siege project from its tools_ext/dxvk.
-# macOS uses x86recomp's SDL_GPU (Metal) backend instead.
-if(APPLE)
-  set(_dxvk_default "")
-else()
+# Graphics go through x86recomp's SDL_GPU backend (Vulkan, Metal on macOS).
+# dxvk-native (d3d9 only, SDL3 WSI), as the Dungeon Siege project builds it
+# in its tools_ext, is optional: it adds the d3d9 backend (COD1_GFX=d3d9),
+# the reference image.
+set(_dxvk_default "")
+if(NOT APPLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../Dungeon Siege/tools_ext/dxvk-native")
   set(_dxvk_default "${CMAKE_CURRENT_SOURCE_DIR}/../../Dungeon Siege/tools_ext/dxvk-native")
 endif()
 set(DXVK_NATIVE_DIR "${_dxvk_default}" CACHE PATH "dxvk-native install prefix")
@@ -30,8 +29,10 @@ if(TARGET cod1_lifted)
                  $<TARGET_OBJECTS:cod1_lifted>)
   target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32 recomp_d3d7
                         recomp_opengl)
-  set_target_properties(cod1 PROPERTIES BUILD_RPATH "${DXVK_NATIVE_DIR}/lib64"
-    ENABLE_EXPORTS ON)  # symbol names in fault backtraces
+  set_target_properties(cod1 PROPERTIES ENABLE_EXPORTS ON)  # symbol names in fault backtraces
+  if(DXVK_NATIVE_DIR)
+    set_target_properties(cod1 PROPERTIES BUILD_RPATH "${DXVK_NATIVE_DIR}/lib64")
+  endif()
   # Dev only: records calls of the CPU skinning functions for
   # skinning_oracle (tests/skinning_capture.cpp).
   option(COD1_SKINNING_CAPTURE "record CPU skinning calls (COD1_SKINNING_CAPTURE=file)" OFF)

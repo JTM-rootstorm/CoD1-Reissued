@@ -97,6 +97,14 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-13: SDL_GPU (Vulkan) is the default backend
+- x86recomp 32f0634: SDL_GPU on Vulkan by default; dxvk-native optional
+  (COD1_GFX=d3d9). ctest 12/12 (oracles included) on it.
+- Same scripted runs on both backends (COD1_SHOT_EVERY): the training
+  briefing is identical (0 pixels over 2% fuzz); in-level frames look
+  the same, 35 dB PSNR at equal frame numbers from animation timing
+  (the NPC and trees move). Same 15 loading hitches either way.
+
 ### 2026-10-13: native CPU skinning (src/skinning.cpp)
 - Frame drops in training were CPU-bound on the main thread; after
   x86recomp's GL draw path speed-up (branch gl-draw-perf) the x87/SSE

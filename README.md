@@ -37,10 +37,9 @@ Siege):
   functions are replaced by hand-written C++ one subsystem at a time
   (widescreen, UI scaling and frame pacing first), each checked against
   the exact lifted version, until nothing lifted is left.
-- Graphics go through x86recomp's backend-neutral fixed-function device:
-  Direct3D 9 via dxvk-native (Vulkan) for bring-up on Linux, SDL_GPU
-  (Vulkan, Metal) later. Host OpenGL is never used, which keeps macOS
-  open.
+- Graphics go through x86recomp's backend-neutral fixed-function device
+  on SDL_GPU: Vulkan on Linux, Metal on macOS. Host OpenGL is never
+  used.
 
 This repository holds what is specific to Call of Duty: the Steam DRM
 unpacker, the game configuration, lifter manifests, (later) the native
@@ -53,7 +52,7 @@ replacements, and the docs.
 - Linux x86-64 with a Vulkan driver.
 - Clang and LLVM (22 used; the static `libLLVMDemangle.a` and headers),
   CMake 3.25 or newer, Ninja, Python 3, SDL3 and ffmpeg development
-  packages, and Meson (for dxvk-native).
+  packages, and glslang (`glslangValidator`, for the shaders).
 - Ghidra (12.1 used), headless, to find the game's functions.
 - A checkout of [x86recomp](https://github.com/JTM-rootstorm/x86recomp).
 
@@ -71,7 +70,10 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
    X86RECOMP="$REPO/../../x86recomp"
    ```
 
-2. **dxvk-native** (DXVK v3.1.1, Direct3D 9 only, SDL3 window system):
+2. **dxvk-native** (optional, needs Meson; DXVK v3.1.1, Direct3D 9 only,
+   SDL3 window system). It adds the d3d9 backend (`COD1_GFX=d3d9`), used
+   as the reference image when checking the SDL_GPU one; the build finds
+   the Dungeon Siege project's copy, or pass `-DDXVK_NATIVE_DIR`:
 
    ```sh
    git clone --branch v3.1.1 https://github.com/doitsujin/dxvk.git
@@ -95,8 +97,7 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
 4. **Configure and build the lifter**:
 
    ```sh
-   cmake --preset release -DDXVK_NATIVE_DIR=/path/to/dxvk-native \
-     -DRECOMP_LLVM_ROOT=/usr/lib/llvm/22
+   cmake --preset release -DRECOMP_LLVM_ROOT=/usr/lib/llvm/22
    cmake --build --preset release --target recomp_lift
    ```
 

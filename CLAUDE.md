@@ -34,11 +34,11 @@ CLAUDE.md, also used by DS1); this repo holds what is specific to CoD.
 ## Build
 - `cmake --preset release && cmake --build --preset release` (debug:
   `--preset debug`). Output in out/build/<preset>/.
-- dxvk-native (the d3d9 gfx::Device backend, and the DirectDraw HLE) is
-  taken from the Dungeon Siege project's build
-  (../../Dungeon Siege/tools_ext/dxvk-native); override with
-  -DDXVK_NATIVE_DIR. A build tree configured before that default existed
-  needs `cmake --preset release -UDXVK_NATIVE_DIR` once.
+- Graphics: x86recomp's SDL_GPU backend (Vulkan; Metal on macOS) by
+  default. dxvk-native, the optional d3d9 reference backend
+  (COD1_GFX=d3d9), is taken from the Dungeon Siege project's build
+  (../../Dungeon Siege/tools_ext/dxvk-native) when it exists; override
+  with -DDXVK_NATIVE_DIR.
 - Symbols (after any Ghidra change that matters), per module:
   `python3 -I ../../x86recomp/tools/pe_symbols.py unpacked/CoDSP.exe --out symbols/CoDSP`
   and `bash /usr/share/ghidra/support/analyzeHeadless "$PWD" cod1_recomp -process CoDSP.exe -noanalysis -readOnly -scriptPath ../../x86recomp/tools/ghidra -postScript ExportFunctions.java symbols/CoDSP/functions.tsv -postScript ExportJumpTables.java symbols/CoDSP/jumptables.tsv`

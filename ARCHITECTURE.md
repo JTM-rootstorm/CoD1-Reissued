@@ -33,11 +33,12 @@ from their code.
   x86recomp/ARCHITECTURE.md has the generic design.
 - **Graphics through gfx::Device**: the engine's OpenGL 1.x + ARB
   extensions are implemented as an opengl32/wgl HLE that drives
-  x86recomp's backend-neutral device, never host GL. Linux bring-up uses
-  the existing d3d9 (dxvk-native) backend; the planned SDL_GPU backend
-  gives Vulkan on Linux and Metal on macOS for DS1 and CoD alike. GL
-  extensions we do not want to implement (ARB_vertex_program, VBOs) are
-  simply not advertised, so the engine takes its fallback paths.
+  x86recomp's backend-neutral device, never host GL. Its SDL_GPU backend
+  gives Vulkan on Linux and Metal on macOS for DS1 and CoD alike; the
+  d3d9 (dxvk-native) backend it was brought up on is an optional
+  reference. GL extensions we do not want to implement
+  (ARB_vertex_program, VBOs) are simply not advertised, so the engine
+  takes its fallback paths.
 
 ## Shape
 - Modules: CoDSP.exe at 0x400000 plus gamex86 (0x20000000), cgamex86
