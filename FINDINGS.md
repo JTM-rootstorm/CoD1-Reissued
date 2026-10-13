@@ -5,11 +5,12 @@ Builds and starts on an M3 Pro with x86recomp's SDL_GPU backend on Metal
 (no dxvk; CMake leaves DXVK_NATIVE_DIR empty on Apple hosts). A fresh
 Ghidra 12.1.4 analysis plus EaxMan.dll lifts to the module counts in the
 table below (CoDSP 5291, gamex86 1996, cgamex86 1214, uix86 769
-functions; EaxMan 339). The engine runs through file system, sound and
-OpenGL init (GL HLE on gfx::Device), then stops with "17 sound file(s)
-are missing or in a bad format": the install it was run against had
-damaged pk3s (pak2/pak4 not zips, CRC failures in most others; checked
-with Python's zipfile). Next: rerun against an intact install.
+functions; EaxMan 339). With an intact install (an earlier copy had
+damaged pk3s: "17 sound file(s) are missing or in a bad format"; test
+pk3s with Python's zipfile) it plays the intro cinematic and, with
+`-- +map training` and a scripted click to start the mission, reaches
+the training level: sky, terrain, alpha-tested foliage, models, HUD,
+autosave. Not yet played by hand or compared against the d3d9 backend.
 
 ## Status (2026-10-12)
 M0 (recon) done; M1 under way. Decided: static recompilation on the
