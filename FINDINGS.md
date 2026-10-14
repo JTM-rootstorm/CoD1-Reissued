@@ -38,8 +38,9 @@ Placement (by who draws; k = (4/3)/A, b = W(1-k)/2):
   whole width stay full width (fades, full-screen overlays).
 - Left/Right by HUD menu name in cgame's Menu_Paint 0x3003B710 (menu in
   ECX, name at +0x20): Compass, stance, tankstatus left; weaponinfo,
-  Health right. The engine's notify lines 0x409130 ("Objectives
-  updated.") left.
+  Health right. The engine's notify lines 0x409130: left ones
+  ("Objectives updated.") left, centred ones (fourth argument nonzero:
+  bold messages such as the tank tutorial's) centred.
 - Scope: the overlay 0x3000F770, centred with edge-touching rectangles
   extended. The aim point 0x3000F500 (x offset to [EDI] in 640 units)
   is divided by k in centred modes, since it is computed with the 3D
@@ -50,8 +51,8 @@ Placement (by who draws; k = (4/3)/A, b = W(1-k)/2):
   callee's; the quad's points are put back). Text keeps its placement by
   command address until 0x4CDCC0 runs it; 0x40FED0 then places each
   glyph. The render commands run on the main thread here.
-- COD1_2D_LOG=1 logs each caller of each entry once (entry, return
-  address, placement, first arguments).
+- COD1_2D_LOG=1 logs each caller of each entry once per placement
+  (entry, return address, placement, first arguments, a text's string).
 
 Verified (pathfinder and the menus, 1920x1080 fullscreen, before =
 main 8248a19; screenshots in the session's report):
@@ -64,8 +65,17 @@ main 8248a19; screenshots in the session's report):
   edge. Console unchanged.
 - At 2560x1440 (r_mode -1 0x0) the briefing, the opening text and "Game
   Saved" fit and are centred.
-- Not exercised: the scope overlay and the aim point (no scoped weapon
-  in these runs), the tank HUD, reticles. Right- or centre-aligned text
+- Tank (tankdrivecountry): compass and tank icon left, the damage box
+  right, the turret reticle and the tutorial text centred.
+- Scope (pavlov, kar98k_pavlovsniper): round, centred, black to every
+  edge; its circle is 508 px across at 1920x1080 as at 1440x1080 (before:
+  an ellipse).
+- Cheats for such runs: `+set thereisacow 1337 +devmap <map>` (devmap
+  alone says "Cheats are not enabled"), then `god` in the console;
+  `give` works only for weapons the level precaches (`+bind F7 "give
+  kar98k_pavlovsniper"`, since scripted keys cannot type `_`). ADS is
+  MOUSE2 (`toggle cl_run`).
+- Not seen: reticles of other weapons. Right- or centre-aligned text
   inside a HUD group shifts by w(1 - k) against its anchor (not visible
   in these screens).
 

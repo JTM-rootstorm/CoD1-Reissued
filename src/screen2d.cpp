@@ -145,12 +145,14 @@ void Log(const char* entry, Ctx& c, Place p) {
   if (!on) return;
   static uint32_t seen[512];
   static int n = 0;
-  const uint32_t ret = Rd32(c.esp);
+  const uint32_t ret = Rd32(c.esp), key = ret ^ (uint32_t(p) << 28);
   for (int i = 0; i < n; i++)
-    if (seen[i] == ret) return;
-  if (n < 512) seen[n++] = ret;
+    if (seen[i] == key) return;
+  if (n < 512) seen[n++] = key;
   std::fprintf(stderr, "2d: %s from %08X place %d |", entry, ret, int(p));
   for (int i = 0; i < 6; i++) std::fprintf(stderr, " %g", RdF(c.esp + 4 + 4 * i));
+  if (!std::strcmp(entry, "Text") && Rd32(c.esp + 24))
+    std::fprintf(stderr, " \"%.40s\"", reinterpret_cast<const char*>(GPtr(Rd32(c.esp + 24))));
   std::fprintf(stderr, "\n");
 }
 
@@ -364,10 +366,12 @@ void f_3000F500(Ctx& c) {
   WrF(px, RdF(px) / s.k);
 }
 
-// The engine's notify lines ("Objectives updated.", ...), drawn while the
-// HUD is: they keep to the screen's left edge.
+// The engine's notify lines, drawn while the HUD is: left ones
+// ("Objectives updated.") keep to the screen's left edge, centred ones
+// (bold messages such as the tutorial's; fourth argument nonzero, the
+// line is placed at x minus half its width) stay centred.
 void f_00409130(Ctx& c) {
-  Placing p(Place::Left);
+  Placing p(Rd32(c.esp + 16) ? Place::Center : Place::Left);
   f_00409130_lifted(c);
 }
 
