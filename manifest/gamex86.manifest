@@ -4,3 +4,7 @@
 # SEH: __except_handler3's call into the __except block (statically
 # linked MSVC 7 CRT, same pattern as in CoDSP.exe).
 resume 2008126B
+
+# pmove_fixed without rounding command times up (src/pmove_fixed.cpp).
+replace 20012430
+replace 20008580

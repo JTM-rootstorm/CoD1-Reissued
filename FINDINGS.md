@@ -1,5 +1,45 @@
 # Findings
 
+## pmove_fixed without rounding (2026-10-13, branch pmove-sound-events)
+Fix (b) for "Sound events lost at high fps", 2 (under "Frame rate"),
+in src/pmove_fixed.cpp. It applies only with pmove_fixed 1; pmove_fixed 0
+runs the originals unchanged.
+- Server: the ClientThink 0x20012430 wrapper hides pmove_fixed (the vmCvar
+  integer reads 0 during the call), so the command time is no longer
+  rounded up. Pmove 0x20008580 then runs only the whole pmove_msec
+  steps (8..33, ClientThink's clamp) that fit before the command time,
+  leaving the remainder pending. It still does this through the lifted
+  Pmove, with pm->pmove_fixed set and a shortened cmd.serverTime. The
+  original's 1000 ms and 50 ms catch-up limits apply first.
+- cgame: the same in prediction 0x3001EF70 and Pmove 0x30007C30. Steps
+  begin at ps.commandTime, and each one uses the first command that
+  reaches its end. The server and prediction therefore run the same
+  steps with the same commands.
+- A command that completes no step still updates the view angles
+  (0x20006FD0 / 0x30006710), as the original fixed path did for every
+  command.
+- View: PmoveSingle 0x30007680 records the origin at each step end (64
+  entries keyed by step). After prediction, cg.predictedPlayerState's
+  origin is shown interpolated between the ends at ct - step and ct by
+  pending / step, which is one step behind the newest command. The true
+  origin is put back before the next prediction, because the original
+  compares against it for misses. There is no interpolation across more
+  than 32 units (teleports) or on the no-prediction path.
+- Not interpolated: the view height during stance changes and the bob
+  cycle, both 125 Hz.
+- Verified, scripted training run, pmove_fixed 1, uncapped (the game loop
+  ran with 1-5 ms frames):
+  - 1820 of 1821 fresh snapshots replayed a command (the other one was
+    at load). Before the change, 1157 of 1611 replayed none at
+    500-850 fps.
+  - cg_showmiss 1 printed no prediction misses.
+  - Footsteps in every stance run on 8 ms steps: stand and crouch 0.25
+    cycle units per ms, prone 0.187 (fix 1 is still open).
+  - The shown origin moves every frame at the true speed: 0.190 units
+    per ms walking (190 u/s), the same across step boundaries.
+  - Sign beeps not yet piloted.
+- pmove_fixed's default is still "0".
+
 ## 2D placement on wide screens, items 5-6 (2026-10-13, branch hud-2d)
 src/screen2d.cpp places all 2D on screens wider than 4:3 (FINDINGS'
 design below, with corrections). At 4:3 and 5:4 nothing changes: the
@@ -525,13 +565,14 @@ temporary trace; both are game logic and will happen on Linux too):
      so restoring the ring without +0x98 hangs it for 2^32 iterations
      (a piloted test did exactly that: one 10 s stall per sign). With
      the fix, the events fire on the next frame that replays, at most
-     8 ms later. Corrected version not yet piloted. (b) Better, together
-     with fix 1: fixed steps that do not round the command time up. Run
-     whole pmove_msec steps and leave the remainder pending, so
-     ps.commandTime <= the newest command time and prediction always runs
-     a command. This also removes the server's dropping of whole commands
-     (a button state shorter than 8 ms is lost with pmove_fixed), but it
-     needs the view interpolation below.
+     8 ms later. Corrected version not yet piloted. (b) Fixed steps
+     that do not round the command time up: run whole pmove_msec steps
+     and leave the remainder pending, so ps.commandTime <= the newest
+     command time and prediction always runs a command. Needs the view
+     interpolation below. Chosen and implemented: see "pmove_fixed
+     without rounding" at the top. A button state shorter than a step
+     can still be missed, as with pmove_fixed: a step uses the command
+     that completes it.
 
 Design:
 - Pacing: wrap 0x430690 so that it first sleeps until the next frame
@@ -549,9 +590,9 @@ Design:
 - If movement depends on fps: fixed pmove steps on both sides plus
   interpolating the predicted view origin between the last two steps in
   cgame, because fixed steps alone move the view at 125 Hz. Not
-  pmove_fixed as it is: it loses player events and still truncates the
-  prone bob (sound events, 2 above). Keep the remainder pending instead
-  of rounding the command time up, and fix the bob separately (1).
+  pmove_fixed as it was: it loses player events and still truncates the
+  prone bob (sound events, 2 above). Done for pmove_fixed 1 (remainder
+  pending, see the top section); the bob (1) is still open.
 - Prediction: keep the predicted playerstate per command number and run
   only the new commands while the snapshot is unchanged (a full replay
   on each new snapshot): a native 0x3001EF70 with an oracle test against
@@ -568,7 +609,7 @@ Design:
 | 6 | HUD anchors: Menu_Paint by name, scope overlay, 0x3000F500 | CoD1 | S-M, ~100 lines + screenshot checks |
 | 7 | Measurements: pmove vs fps, fades, sway | scripted runs | S |
 | 8 | Prediction cache for 0x3001EF70 + oracle test | CoD1 | L, ~300 lines + test |
-| 9 | Fixed-step pmove with view interpolation, if 7 shows the need | CoD1 | M-L |
+| 9 | Fixed-step pmove with view interpolation (done for pmove_fixed 1; default still 0) | CoD1 | M-L |
 | 10 | Time-based menu fades, if 7 shows the need | CoD1 | S |
 
 FOV first (small, self-contained, the biggest visible gain), then the

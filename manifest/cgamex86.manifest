@@ -17,3 +17,8 @@ replace 3003B710
 replace 3001F570
 replace 3000F770
 replace 3000F500
+
+# pmove_fixed without rounding command times up (src/pmove_fixed.cpp).
+replace 3001EF70
+replace 30007C30
+replace 30007680
