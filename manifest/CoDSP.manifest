@@ -31,3 +31,11 @@ replace 00406DA0
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0
 replace 00507D20
+
+# Native resolution: r_mode -1 with r_customwidth/height 0 is the desktop
+# size (src/video_mode.cpp).
+replace 004A5610
+
+# Frame pacing: sleep to an exact 1/com_maxfps grid instead of the
+# millisecond busy wait (src/frame_pacing.cpp).
+replace 00430690

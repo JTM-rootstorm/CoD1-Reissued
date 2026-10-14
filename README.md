@@ -146,6 +146,23 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
    `~/.local/share/cod1`). `COD1_TRACE=1` logs every call into the
    reimplemented Windows API.
 
+   Display and frame rate (set in the console or with `+seta` after
+   `--`):
+   - `r_mode -1` with `r_customwidth 0` and `r_customheight 0` is the
+     desktop's resolution; any other size is `r_mode -1` with the numbers.
+     Wide modes (1280x720 to 3840x2160, up to the desktop) work
+     fullscreen too.
+   - Fullscreen is borderless at the desktop's resolution, with black
+     bars when the mode's shape differs (a 4:3 mode on a 16:9 screen).
+     `COD1_FULLSCREEN=exclusive` switches the display mode instead,
+     `COD1_FULLSCREEN=window` keeps a window the mode's size.
+   - The field of view is Hor+: `cg_fov` is the horizontal FOV at 4:3, and
+     wider screens see more at the sides, not less at the top and bottom.
+     Mouse sensitivity does not change with the aspect.
+   - `com_maxfps` is exact (144 gives 144, not 166) and the cap sleeps
+     instead of keeping a core busy. With a variable-refresh display use
+     `r_swapInterval 0` and a `com_maxfps` a little under its refresh rate.
+
 ## Tests
 
 Configure with `-DCOD1_GAME_EXE="$REPO/unpacked/CoDSP.exe"`, then

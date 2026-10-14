@@ -4,3 +4,7 @@
 # SEH: __except_handler3's call into the __except block (statically
 # linked MSVC 7 CRT, same pattern as in CoDSP.exe).
 resume 3004AB5B
+
+# Hor+ FOV and the zoom sensitivity that goes with it (src/fov.cpp).
+replace 30025200
+replace 30025C80

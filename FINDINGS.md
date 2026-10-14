@@ -1,5 +1,77 @@
 # Findings
 
+## Widescreen and frame rate, items 1-4 (2026-10-13, branch widescreen)
+Items 1-4 of "Widescreen, FOV, 2D placement, frame rate: design" below;
+5-10 (the 2D transform, HUD anchors, fps measurements, the prediction
+cache) are still open. The shared parts are x86recomp's (branch
+widescreen; ARCHITECTURE.md "Display modes, fullscreen and
+presentation", "Frame pacing"): the mode list with the desktop and wide
+sizes, host fullscreen for a window covering the screen
+(COD1_FULLSCREEN=window|desktop|exclusive, default desktop; window for
+COD1_BACKGROUND runs), aspect-kept presentation with the pointer mapped
+through it, DesktopSize/LastPresentation, FramePacer, and
+COD1_FPS_REPORT=s (frame rate and interval spread every s seconds).
+GL_MAX_TEXTURE_SIZE is 8192 now: the renderer refuses a mode wider than
+it ("video card cannot set mode 2560x1440 because GL_MAX_TEXTURE_SIZE is
+only 2048").
+
+- Hor+ (src/fov.cpp, cgamex86 `replace` 0x30025200 and 0x30025C80):
+  fov' = 2 atan(tan(fov / 2) * A * 3/4) when A = vidWidth / vidHeight >
+  4/3, so cg_fov 80 gives 96.4 at 16:9. The view setup's zoom
+  sensitivity is fov / cg_fov again (the original fov, from the call at
+  0x30025329; the sky portal's call stores none). Underwater the original
+  adds a small sine to fov_x before that division; the sensitivity does
+  not follow it now.
+- Native resolution (src/video_mode.cpp, `replace` 0x4A5610): `r_mode -1`
+  with r_customwidth/height 0 is the desktop's size ("...setting mode -1:
+  2560 1440 FS", CDS ok, fullscreen). The desktop is in points: these
+  3840x2160 monitors at scale 1.5 give 2560x1440.
+- Pacing (src/frame_pacing.cpp, `replace` 0x430690): FramePacer.Wait
+  (com_maxfps) before the lifted body, which then sees com_maxfps 0 (its
+  1 ms minimum has always passed); the integer is put back unless the
+  cvar changed during the frame (modificationCount). The lifted body
+  still catches the error longjmp (its try/catch is in
+  f_00430690_lifted).
+
+Verified (training, isolated XDG_DATA_HOME, scripted input, release):
+- Hor+ and sensitivity: 1024x768 against 1366x768, both r_fullscreen 1
+  (a popup at 0,0, so scripted mouse motion drives the virtual cursor).
+  The wide frame's centre 1024 columns match the 4:3 frame before and
+  after a scripted 200-count turn (RMSE 3-8%, from the stretched HUD and
+  NPC animation; the views before and after the turn differ by 30%): same
+  vertical FOV, same turn per count.
+- Before, at 1920x1080 windowed: Hor- (fov_x 80, so 50.6 degrees vertical)
+  with the HUD stretched. After: 64.0 degrees vertical, as at 4:3; the
+  HUD is still stretched (items 5-6).
+- Fullscreen (desktop): 1920x1080 fills the 2560x1440 screen; 1024x768 is
+  pillarboxed (1920x1440 at x 320); r_mode -1 0x0 runs at 2560x1440.
+  Fullscreen and windowed runs turn the same per count (after-turn frames
+  0.3% RMSE apart): relative mouse motion is not scaled by the
+  presentation. Exclusive: host mode 1600x900 for 1024x768 (the display's
+  aspect; Wayland emulates the switch), pillarboxed; a focus loss and
+  regain (COD1_TEST_FOCUS=16,21) leave it fullscreen and running. The
+  d3d9 backend (COD1_GFX=d3d9) pillarboxes the same way.
+- Pacing, 1280x720 windowed, r_swapInterval 0, standing at the start, 10
+  s per run (every presented frame's interval; main thread CPU from
+  /proc):
+
+  | com_maxfps | build | fps | interval median / p1 / p99 ms | main thread CPU |
+  |---|---|---|---|---|
+  | 144 | before (1 ms spin) | 166.26 | 6.2 / 5.3 / 6.2 | 99.6% |
+  | 144 | after | 143.94 | 7.1 / 6.2 / 7.6 | 39.7% |
+  | 240 | before | 244.69 | 4.2 / 3.2 / 4.7 | 99.7% |
+  | 240 | after | 239.99 | 4.2 / 2.7 / 4.8 | 72.5% |
+
+  Frames start on the grid; the presents spread with each frame's work
+  (the 20 Hz server frame lands on some of them), as they did before.
+
+Harness note: windowed runs cannot script mouse motion. CoD clips the
+cursor to its window rectangle, caption included, which is not inside
+the client area, so the cursor is not virtual and TEST_INPUT motion (no
+absolute position) lands at the client origin: the view jumps to the
+upper left. The main build does the same. Runs that turn use r_fullscreen
+1 (COD1_FULLSCREEN=window keeps a mode-sized window for them).
+
 ## macOS arm64 (2026-10-13, branch macos-metal)
 Builds and starts on an M3 Pro with x86recomp's SDL_GPU backend on Metal
 (no dxvk; CMake leaves DXVK_NATIVE_DIR empty on Apple hosts). A fresh
@@ -57,8 +129,9 @@ the game runs Creative's EAX Manager (EaxMan.dll, lifted as a fifth
 module) on x86recomp's EAX providers. See "Run log".
 
 ## Widescreen, FOV, 2D placement, frame rate: design (2026-10-13)
-Investigation only: nothing implemented, nothing renamed in Ghidra (the
-Quake 3 names below are likenesses, not confirmed names). Addresses are
+Investigation only (items 1-4 since implemented: "Widescreen and frame
+rate, items 1-4" above), nothing renamed in Ghidra (the Quake 3 names
+below are likenesses, not confirmed names). Addresses are
 VAs in the unpacked CoDSP.exe, cgamex86 (0x3...), uix86 (0x4...) and
 gamex86 (0x2...). Decided with the user: the RoQ cinematics and the menus
 are 4:3 assets and stay pillarboxed (black bars), not stretched or
