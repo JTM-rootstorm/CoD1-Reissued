@@ -422,6 +422,117 @@ script hudelems at the screen edges need anchoring.
 - Budget: the training walk averages 5.45 ms (p99 9.3 ms, run log
   2026-10-13), about 180 fps; 240 fps needs 4.17 ms.
 
+Sound events lost at high fps (2026-10-13, macOS, measured with a
+temporary trace; both are game logic and will happen on Linux too):
+
+1. Footsteps stop when pmove steps are short. 0x200067C0 (cgame mirror
+   0x30005F00) runs at the end of every pmove step and does Quake 3's
+   PM_Footsteps arithmetic:
+   - On the ground at xyspeed >= 10 it computes bobmove = xyspeed /
+     (ps.speed (+0x44) x dir x move x stance) x K, then
+     `bobCycle = _ftol2(bobCycle + bobmove * pml.msec) & 0xFF` (ps+8,
+     pml.msec 0x20127048 / cgame 0x300D0528; 0x20084140 truncates).
+     The old cycle is an integer, so a step adds floor(bobmove x msec).
+   - 0x200065C0 (cgame 0x30005D00) emits the footstep event when
+     `((old + 64) ^ (new + 64)) & 0x80`: every 128 cycle units.
+   - Scales, stored at spawn (0x20014AB9-0x20014B17): dir is 1, strafe +0x344 0.8 or
+     back +0x348 0.7 (diagonals blend them); move is +0x338 1.0, or
+     +0x334 0.4 while pm_flags 0x80 (set by 0x20007980 on the ground,
+     not prone, with pm_flags 0x20 and button 0x10); stance is prone
+     +0x33C 0.15 or crouch +0x340 0.65 (blended during a stance change
+     through 0x200053C0). At full speed the ratio is 1: a crawl moves at
+     xyspeed 28.50 = 190 x 0.15.
+   - K (cycle units per ms at full speed; with pm_flags 0x80 in brackets):
+     stand 0.335 (0.305), backwards 0.36 (0.325), crouch 0.34 (0.315),
+     prone 0.25.
+   - Steps where K x msec < 1 add nothing, so there are no footsteps and
+     no bob. The limits at full speed:
+
+     | Stance | Silent at msec | Frame rate | Measured cycle units/ms at msec 1 / 2 / 3 / 4 / 8 / 16 / 17 |
+     |---|---|---|---|
+     | prone | <= 3, unreliable at 4 | > 250, unreliable > 200 | 0 / 0 / 0 / 0.186 / 0.149 / 0.248 / 0.235 |
+     | crouch | <= 2 | > 333 | 0 / 0 / 0.333 / 0.25 / - / 0.312 / 0.294 |
+     | stand, back | <= 2 | > 333 | 0 / 0 / 0.333 / 0.25 / 0.25 / 0.312 / 0.294 |
+     | pm_flags 0x80 | <= 3 | > 250 | (not measured) |
+
+     The prone ratio rounds a little under 1, so K x 4 and K x 8 land
+     just under 1 and 2 and some steps floor to one unit less. That is
+     why msec 4 gives 0.186, not 0.25, and why pmove_fixed's 8 ms steps
+     give 0.149. While accelerating the ratio is below 1, so even longer
+     steps add nothing until K x ratio x msec >= 1: a ratio of 0.25 is
+     enough at 60 fps, but at msec 4 the crawl has to be at full speed.
+     This explains why the start of a crawl is silent at high fps. Frame
+     times vary, so at 300-500 fps only the occasional longer frame
+     advances the cycle. Truncation also slows the cadence at normal
+     rates: standing at 60 fps gives 0.29-0.31 units/ms instead of 0.335.
+   - Fix (recommended, not implemented): replace 0x200067C0 and
+     0x30005F00 with one native implementation. Add floor(bobmove x t1)
+     - floor(bobmove x t0), where t1 = ps.commandTime (PmoveSingle sets it
+     to the step's end before the call, 0x20007FD0) and t0 = t1 - msec.
+     Server and prediction see the same command times, so they agree.
+     For a constant bobmove the steps telescope to floor(bobmove x T1) -
+     floor(bobmove x T0), the continuous cadence at any step length. When
+     bobmove changes the error stays below one unit and is unbiased. The
+     cadence is then K exactly, about 10% faster than the original at 60
+     fps. Optionally scale bobmove to match a reference frame rate's cadence. The
+     event call stays 0x200065C0 / 0x30005D00. Do not use a minimum step
+     length instead: it delays the playerstate behind the commands, still
+     truncates, and adds the problems in 2.
+
+2. pmove_fixed loses server events on the player (training's sign
+   beeps). `playsound` on an entity (0x20032A10) calls 0x20046610
+   (G_AddEvent-like). For a client, that puts the event in the
+   playerstate's predictable-event ring: events[seq & 3] (+0x78) =
+   0xAC (0xAD with a notify), parms (+0x88) = alias index,
+   eventSequence (+0x74)++. CoD has no externalEvent.
+   - In cgame, 0x3001EF70 copies cg.snap's playerstate into the
+     predicted one (0x3011E0B4), then replays each command whose
+     serverTime is in (ps.commandTime, newest]. pmove_fixed rounds
+     serverTime up to a multiple of pmove_msec only after that check.
+     Only when at least one command ran does it compare the new state
+     with the previous predicted one: damage 0x3001E510, 0x3001E460, and
+     the event ring 0x3001E7C0, which fires every sequence number the old
+     state lacks or whose event differs. If no command ran it returns.
+     The snapshot's events are then already in the predicted state, and
+     the next frame's comparison sees no difference: they are never
+     played. Snapshot transitions (0x30022090) check events only when
+     0x3010AC2C is set (no prediction; 0x3001EF70 then takes 0x3001ED60).
+   - Server side, with pmove_fixed, ClientThink 0x20012430 rounds the
+     command time up to the next multiple of 8, and Pmove runs to it.
+     The snapshot's commandTime is therefore 0-7 ms ahead of the command
+     the server last ran. Commands inside that bucket are ignored on the
+     server (msec < 1 returns) and skipped by prediction.
+   - A snapshot is used on the frame after the server built it, and the
+     newest command is one frame newer than the one the server last ran
+     (measured: the gap is the frame time, 3-5 ms at 270-420 fps, 16-17
+     at 60). Without pmove_fixed that command always replays: 4699 of
+     4700 fresh snapshots ran one, and the exception was at load. With
+     pmove_fixed it replays only if the frame crossed the 8 ms boundary,
+     so the chance of losing the snapshot's events is about 1 - frame
+     ms / 8. Measured fresh snapshots with no replay: 102 of 920 at
+     ~120 fps (mixed frame times), 1157 of 1611 at 500-850 fps.
+     Piloted, 500-850 fps: all 3 sign events (0xAC, parm 54) arrived on
+     such snapshots. At 60 fps the gap (16 ms) always crosses, which is
+     why the beeps play there.
+   - Lost the same way: damage feedback (+0xD4..+0xE0) and any other
+     server-added player event. Predicted events (footsteps, weapon)
+     are unaffected, because cgame generates them itself.
+   - Fix options. (a) A 0x3001EF70 wrapper: when no command ran, put the
+     previous predicted ring back (+0x74..+0x97), along with the damage
+     count +0xD4 and +0x98. +0x98 is the sequence 0x300019A0
+     (playerstate-to-entity-state) has already turned into entity
+     events. 0x300019A0 loops `for (i = +0x98; i != eventSequence; i++)`,
+     so restoring the ring without +0x98 hangs it for 2^32 iterations
+     (a piloted test did exactly that: one 10 s stall per sign). With
+     the fix, the events fire on the next frame that replays, at most
+     8 ms later. Corrected version not yet piloted. (b) Better, together
+     with fix 1: fixed steps that do not round the command time up. Run
+     whole pmove_msec steps and leave the remainder pending, so
+     ps.commandTime <= the newest command time and prediction always runs
+     a command. This also removes the server's dropping of whole commands
+     (a button state shorter than 8 ms is lost with pmove_fixed), but it
+     needs the view interpolation below.
+
 Design:
 - Pacing: wrap 0x430690 so that it first sleeps until the next frame
   deadline on a host high-resolution clock (period 1/com_maxfps, not
@@ -435,10 +546,12 @@ Design:
   60/125/250/333/500 with pmove_fixed 0 and 1 (apex and speed from a
   probe on the playerstate origin), menu fade durations, gun sway/bob at
   60 vs 240.
-- If movement depends on fps: fixed pmove steps on both sides (pmove_fixed
-  behaviour) plus interpolating the predicted view origin between the
-  last two steps in cgame, because pmove_fixed alone moves the view at
-  125 Hz.
+- If movement depends on fps: fixed pmove steps on both sides plus
+  interpolating the predicted view origin between the last two steps in
+  cgame, because fixed steps alone move the view at 125 Hz. Not
+  pmove_fixed as it is: it loses player events and still truncates the
+  prone bob (sound events, 2 above). Keep the remainder pending instead
+  of rounding the command time up, and fix the bob separately (1).
 - Prediction: keep the predicted playerstate per command number and run
   only the new commands while the snapshot is unchanged (a full replay
   on each new snapshot): a native 0x3001EF70 with an oracle test against
@@ -505,6 +618,17 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-13: sound events lost at high fps (macOS, main 8248a19)
+- Results are in "Frame rate", "Sound events lost at high fps". Method:
+  temporary `replace` wrappers (not committed) on 0x200067C0, logging
+  each step's msec, pm_flags, xyspeed and bobCycle, and on 0x3001EF70,
+  logging per fresh snapshot its commandTime, the newest command time,
+  whether a command replayed, and the new ring events.
+- Scripted runs: training, windowed, r_swapInterval 0, com_maxfps 0,
+  +forward/+back by vstr binds, goprone/gocrouch/+gostand. Background
+  runs ran at 270-420 fps (one dropped to 60 fps when it was occluded).
+  `fixedtime` is cheat-protected, so it cannot force msec. Piloted run:
+  pmove_fixed 1, 500-850 fps, signs read.
 ### 2026-10-13: x87 runs on host doubles (x86recomp x87-double 79a8931)
 - Under CW 0x027F, x86recomp runs x87 runs on host doubles where that
   is proven exact. Values must stay in [2^-511, 2^512); PE and C1 come
