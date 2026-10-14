@@ -10,8 +10,10 @@ replace 30025200
 replace 30025C80
 
 # 2D placement (src/screen2d.cpp): vmMain (the HUD), Menu_Paint (HUD
-# groups by menu name), the scope overlay and its aim point.
+# groups by menu name), the objectives list, the scope overlay and its
+# aim point.
 replace 30018CD0
 replace 3003B710
+replace 3001F570
 replace 3000F770
 replace 3000F500

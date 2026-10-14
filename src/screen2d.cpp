@@ -50,6 +50,7 @@ void f_004076F0_lifted(Ctx& c);
 void f_400079A0_lifted(Ctx& c);
 void f_30018CD0_lifted(Ctx& c);
 void f_3003B710_lifted(Ctx& c);
+void f_3001F570_lifted(Ctx& c);
 void f_3000F770_lifted(Ctx& c);
 void f_3000F500_lifted(Ctx& c);
 void f_00409130_lifted(Ctx& c);
@@ -345,6 +346,13 @@ void f_3003B710(Ctx& c) {
   }
   Placing p(place);
   f_3003B710_lifted(c);
+}
+
+// The objectives list (+scores; "CGAME_MISSIONOBJECTIVES" heading): at
+// 4:3 it sits above the compass, so it keeps to the left edge with it.
+void f_3001F570(Ctx& c) {
+  Placing p(Place::Left);
+  f_3001F570_lifted(c);
 }
 
 // The scope overlay.

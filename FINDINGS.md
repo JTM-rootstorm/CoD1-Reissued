@@ -38,9 +38,11 @@ Placement (by who draws; k = (4/3)/A, b = W(1-k)/2):
   whole width stay full width (fades, full-screen overlays).
 - Left/Right by HUD menu name in cgame's Menu_Paint 0x3003B710 (menu in
   ECX, name at +0x20): Compass, stance, tankstatus left; weaponinfo,
-  Health right. The engine's notify lines 0x409130: left ones
-  ("Objectives updated.") left, centred ones (fourth argument nonzero:
-  bold messages such as the tank tutorial's) centred.
+  Health right. The objectives list 0x3001F570 (+scores, heading
+  "CGAME_MISSIONOBJECTIVES") left: at 4:3 it sits above the compass, so
+  it keeps to the left edge with it. The engine's notify lines
+  0x409130: left ones ("Objectives updated.") left, centred ones (fourth
+  argument nonzero: bold messages such as the tank tutorial's) centred.
 - Scope: the overlay 0x3000F770, centred with edge-touching rectangles
   extended. The aim point 0x3000F500 (x offset to [EDI] in 640 units)
   is divided by k in centred modes, since it is computed with the 3D
@@ -60,9 +62,10 @@ main 8248a19; screenshots in the session's report):
 - Main menu, briefing ("Click to Start the Mission"), loading text and
   the in-game menu stay 4:3 with black bars (before: stretched).
 - HUD: compass round and at the left edge with the stance icon; weapon
-  name, ammo and health at the right; objectives (Tab) and "Game Saved"
-  centred with unstretched glyphs; "Objectives updated." at the left
-  edge. Console unchanged.
+  name, ammo and health at the right; "Game Saved" centred with
+  unstretched glyphs; "Objectives updated." and the objectives list
+  (Tab, above the compass; 2560x1440 on macOS) at the left edge.
+  Console unchanged.
 - At 2560x1440 (r_mode -1 0x0) the briefing, the opening text and "Game
   Saved" fit and are centred.
 - Tank (tankdrivecountry): compass and tank icon left, the damage box
