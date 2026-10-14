@@ -159,6 +159,9 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
    - The field of view is Hor+: `cg_fov` is the horizontal FOV at 4:3, and
      wider screens see more at the sides, not less at the top and bottom.
      Mouse sensitivity does not change with the aspect.
+   - The HUD keeps its shapes on wide screens: compass and stance at the
+     left edge, weapon, ammo and health at the right, the rest centred.
+     Menus, briefings and cinematics stay 4:3 with black bars.
    - `com_maxfps` is exact (144 gives 144, not 166) and the cap sleeps
      instead of keeping a core busy. With a variable-refresh display use
      `r_swapInterval 0` and a `com_maxfps` a little under its refresh rate.

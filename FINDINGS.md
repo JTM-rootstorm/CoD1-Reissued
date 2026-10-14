@@ -1,5 +1,80 @@
 # Findings
 
+## 2D placement on wide screens, items 5-6 (2026-10-13, branch hud-2d)
+src/screen2d.cpp places all 2D on screens wider than 4:3 (FINDINGS'
+design below, with corrections). At 4:3 and 5:4 nothing changes: the
+main menu at 1024x768 is pixel-identical to the build before.
+
+How 2D reaches the renderer (corrections to the design):
+- Rectangles are in pixels: StretchPic 0x4D4330 (x, y, w, h, s1, t1,
+  s2, t2, shader), the gradient form 0x4D43D0 (one more colour for the
+  lower edge: its handler 0x4CD540 gives vertices 0-1 the current colour
+  and 2-3 the argument), the rotated form 0x4D44D0, the four-point quad
+  0x4D45B0 (points, st, shader), and StretchRaw 0x4CCD10 (integers,
+  drawn at once). SetColor is 0x4D42A0.
+- Text is in 640x480 units: every text draw ends in 0x4D6400, which
+  queues command 6 (string at +0x25). When the commands run, 0x4CDCC0
+  turns each glyph into pixels through the refimport AdjustFrom640,
+  which is the client's 0x40FED0 (set at 0x40E5B0): glyph widths scale
+  with W/640, so HUD and menu text was stretched like the rest (the
+  design's "text has one uniform scale" was wrong). The console passes a
+  fixed advance of its own and was never stretched.
+- Black cinematics: the screen-field function 0x410410 clears a wide
+  screen outside of play (client state != 2) with one black StretchPic
+  over the whole screen (return address 0x41047C), meant to leave the
+  sides black under the menus. StretchRaw draws cinematic frames at
+  once, before the queued commands run, so the clear painted over every
+  frame. The code is the same at any wide mode, so the original should
+  show it too (not checked on Windows); this build was the first to run
+  one fullscreen.
+
+Placement (by who draws; k = (4/3)/A, b = W(1-k)/2):
+- Pillar, the 4:3 picture centred: uix86 vmMain 0x400079A0 (menus,
+  briefing and loading screens) and the cinematic draw 0x4076F0. The
+  side clear becomes the two side bars. In play (no side clear) a
+  full-screen UI backdrop gets black bars too: SetColor(black), two
+  white-shader StretchPics, the last colour set again.
+- Center: cgamex86 vmMain 0x30018CD0 (the HUD); rectangles across the
+  whole width stay full width (fades, full-screen overlays).
+- Left/Right by HUD menu name in cgame's Menu_Paint 0x3003B710 (menu in
+  ECX, name at +0x20): Compass, stance, tankstatus left; weaponinfo,
+  Health right. The engine's notify lines 0x409130 ("Objectives
+  updated.") left.
+- Scope: the overlay 0x3000F770, centred with edge-touching rectangles
+  extended. The aim point 0x3000F500 (x offset to [EDI] in 640 units)
+  is divided by k in centred modes, since it is computed with the 3D
+  view's real FOV.
+- Stretch (as before): everything else the engine draws: the console,
+  its background.
+- Rectangles and quads are rewritten when queued (the arguments are the
+  callee's; the quad's points are put back). Text keeps its placement by
+  command address until 0x4CDCC0 runs it; 0x40FED0 then places each
+  glyph. The render commands run on the main thread here.
+- COD1_2D_LOG=1 logs each caller of each entry once (entry, return
+  address, placement, first arguments).
+
+Verified (pathfinder and the menus, 1920x1080 fullscreen, before =
+main 8248a19; screenshots in the session's report):
+- The intro cinematics play, pillarboxed (before: black).
+- Main menu, briefing ("Click to Start the Mission"), loading text and
+  the in-game menu stay 4:3 with black bars (before: stretched).
+- HUD: compass round and at the left edge with the stance icon; weapon
+  name, ammo and health at the right; objectives (Tab) and "Game Saved"
+  centred with unstretched glyphs; "Objectives updated." at the left
+  edge. Console unchanged.
+- At 2560x1440 (r_mode -1 0x0) the briefing, the opening text and "Game
+  Saved" fit and are centred.
+- Not exercised: the scope overlay and the aim point (no scoped weapon
+  in these runs), the tank HUD, reticles. Right- or centre-aligned text
+  inside a HUD group shifts by w(1 - k) against its anchor (not visible
+  in these screens).
+
+Memory (x86recomp b60f5f1, found here): loading a level peaked at 21 GB
+of shared memory at 1024x768 (the build before the widescreen work too)
+and ran the host out of memory at 2560x1440, then kept about 4 GB:
+SDL_GPU cycled the upload buffer on every flush without bound. Now 249
+MB and 329 MB.
+
 ## Widescreen and frame rate, items 1-4 (2026-10-13, branch widescreen)
 Items 1-4 of "Widescreen, FOV, 2D placement, frame rate: design" below;
 5-10 (the 2D transform, HUD anchors, fps measurements, the prediction

@@ -4,3 +4,6 @@
 # SEH: __except_handler3's call into the __except block (statically
 # linked MSVC 7 CRT, same pattern as in CoDSP.exe).
 resume 40023A8B
+
+# 2D placement (src/screen2d.cpp): vmMain (menus stay 4:3).
+replace 400079A0

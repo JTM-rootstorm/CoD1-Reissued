@@ -39,3 +39,19 @@ replace 004A5610
 # Frame pacing: sleep to an exact 1/com_maxfps grid instead of the
 # millisecond busy wait (src/frame_pacing.cpp).
 replace 00430690
+
+# 2D placement on wide screens (src/screen2d.cpp): the renderer's 2D
+# entries (SetColor, StretchPic and its gradient, rotated and four-vertex
+# forms, StretchRaw, queuing a text command), running a text command, the
+# client's AdjustFrom640, the cinematic draw and the notify lines.
+replace 004D42A0
+replace 004D4330
+replace 004D43D0
+replace 004D44D0
+replace 004D45B0
+replace 004CCD10
+replace 004D6400
+replace 004CDCC0
+replace 0040FED0
+replace 004076F0
+replace 00409130
