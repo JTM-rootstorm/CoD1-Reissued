@@ -33,8 +33,9 @@ replace 005070E0
 replace 00507D20
 
 # Native resolution: r_mode -1 with r_customwidth/height 0 is the desktop
-# size (src/video_mode.cpp).
+# size, and the hunk is large enough for it (src/video_mode.cpp).
 replace 004A5610
+replace 0042A980
 
 # Frame pacing: sleep to an exact 1/com_maxfps grid instead of the
 # millisecond busy wait (src/frame_pacing.cpp).

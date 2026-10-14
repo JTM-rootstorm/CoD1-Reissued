@@ -218,7 +218,19 @@ only 2048").
 - Native resolution (src/video_mode.cpp, `replace` 0x4A5610): `r_mode -1`
   with r_customwidth/height 0 is the desktop's size ("...setting mode -1:
   2560 1440 FS", CDS ok, fullscreen). The desktop is in points: these
-  3840x2160 monitors at scale 1.5 give 2560x1440.
+  3840x2160 monitors at scale 1.5 give 2560x1440. Since x86recomp
+  0cadefc the desktop is in pixels; a 5K display (macOS Retina,
+  5120x2880) then failed at renderer start with "Hunk_AllocateTempMemory:
+  failed on 134217744": the renderer takes a 32-bit texture of the screen
+  rounded up to powers of two (8192x4096, exactly 128 MB) from the hunk's
+  temporary memory, and the hunk is com_hunkMegs "128" (0x42A980,
+  Com_InitHunkMemory-like: Cvar_Get("com_hunkMegs", "128", 0x21), 80 MB
+  minimum, malloc once). `replace` 0x42A980 raises the cvar's value and
+  integer (not its string, so the saved config is unchanged) to 128 MB
+  plus that texture's size beyond its 32 MB at 2560x1440: unchanged up to
+  2560x1440, 160 at 3840x2160, 224 at 5120x2880. 5120x2880 fullscreen on
+  an M3 Pro: training 75-100 fps uncapped, GPU-bound (100%), main thread
+  ~40%, process footprint 3.5 GB.
 - Pacing (src/frame_pacing.cpp, `replace` 0x430690): FramePacer.Wait
   (com_maxfps) before the lifted body, which then sees com_maxfps 0 (its
   1 ms minimum has always passed); the integer is put back unless the
