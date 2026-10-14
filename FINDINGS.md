@@ -1,5 +1,70 @@
 # Findings
 
+## Footsteps at any step length (2026-10-13, branch pmove-sound-events)
+Fix 1 for "Sound events lost at high fps" (under "Frame rate"), in
+src/footsteps.cpp: one native implementation replaces 0x200067C0 and its
+cgame mirror 0x30005F00, with pmove_fixed 0 and 1.
+- bobmove (cycle units per ms) is computed as the original does it, in
+  its order of operations, with its float constants: xyspeed / (ps.speed
+  x direction x move x stance scale) x K. The stance is 0x20003460 /
+  0x30002C10, and the stance-change blend is 0x200053C0 / 0x30004B60.
+  Both are called as the originals call them. The airborne (ladder)
+  branch, the reset below xyspeed 1 and pm->xyspeed are kept.
+- A step adds floor(bobmove x t1) - floor(bobmove x t0) (t1 =
+  ps.commandTime, t0 = t1 - pml.msec) instead of truncating bobmove x
+  msec. The footstep function 0x200065C0 / 0x30005D00 is called with the
+  old and new cycle as before. The ladder gets the same advance; it was
+  not tested.
+- Cadence: bobmove exactly, so K at full speed. The truncated original
+  at a reference frame rate was not matched, because it has no single
+  value: on the same steps it gives standing 0.30 at 60 fps, 0.285 at
+  125 and 0.30 at ~333, and prone 0.233 / 0.212 / 0.06. It also blurs
+  the stances' constants (crouch 0.34 and stand 0.335 both come out near
+  0.25-0.30). Against 60 fps, walking footsteps now come about 10%
+  sooner (382 ms apart instead of ~425); against 125 fps (pmove_fixed),
+  about 25% sooner. A scale on bobmove would be the place to change this.
+- Verified, scripted training runs, isolated config, windowed,
+  r_swapInterval 0, with a temporary env-gated trace of every server step
+  (not committed). Segments of 8 s per stance and direction at
+  com_maxfps 0 (300-480 fps: steps of 1-6 ms, mostly 2-3), 333, 250,
+  200, 125, 62 and 59. `fixedtime` stays cheat-protected under spdevmap
+  (sv_cheats reads 0), so 1 ms steps cannot be forced. They are 1-2% of
+  uncapped steps. Steady full-speed steps, cycle units per ms (the
+  original's truncation of the same steps in brackets):
+
+  | pmove_fixed 0 | msec 3 (1-6 mixed) | msec 4 | msec 5 | msec 8 | msec 16 | msec 17 |
+  |---|---|---|---|---|---|---|
+  | stand (K 0.335) | - | - | - | 0.334-0.335 (0.285) | - | 0.334 (0.301) |
+  | back (K 0.36) | 0.362 (0.303) | - | - | 0.360 (0.283) | 0.359 (0.325) | - |
+  | crouch (K 0.34) | 0.340 (0.291) | 0.341 (0.253) | 0.340 (0.224) | 0.339 (0.254) | 0.339 (0.312) | 0.340 (0.300) |
+  | prone (K 0.25) | 0.251 (0.060) | 0.250 (0.195) | 0.250 (0.199) | 0.250 (0.212) | 0.250 (0.235) | 0.249 (0.233) |
+
+  (The segments alternate forward and back, so not every cell was run;
+  crouch and prone use one K for both directions. The background window
+  was throttled to 120 fps for part of the run, so some capped segments
+  ran 8 ms steps; the column is the measured step length.) Footsteps come every
+  128 / bobmove ms: measured 511-530 ms prone (512 expected), 376-382
+  crouched (377), 380-383 standing (382), 353-357 back (356).
+- By step length, over the steady steps of each stance: lengths with
+  100+ steps (2-9, 16, 17) advanced 0.91-1.11 x bobmove x msec, most
+  within 3%. Only the total is exact: with alternating lengths a unit can
+  fall to either. The original's truncation on the same steps: 0 at
+  msec 2 in every stance and at 3 prone, 0.57-0.99 elsewhere. Steps of
+  1 ms (19-30 steady ones per stance) advanced 0.7-1.3 x, within the
+  noise of so few one-unit steps; the original added 0. Events landed
+  on steps of 2-19 ms. On 1 ms steps about 0.1 per stance was due, and
+  none landed.
+- pmove_fixed 1 (8 ms steps throughout): stand 0.334-0.336, back
+  0.360, crouch 0.339 and prone 0.250 cycle units per ms in every
+  segment. One prone segment ran at 0.41, with xyspeed 1.6 times the
+  crawl speed (probably a slope), and its footsteps followed. The original's truncation of the same steps gives 0.25 for
+  stand, back and crouch, and 0.21-0.25 prone (the fix (b) run measured
+  0.187). Footsteps came every 379-381 / 355-357 / 377-382 / 512 ms. One
+  run covers stand and crouch, a second covers prone (the first was
+  stopped during crouch).
+- Not covered: the ladder, strafing and diagonals, and pm_flags 0x80.
+  They use the same advance.
+
 ## pmove_fixed without rounding (2026-10-13, branch pmove-sound-events)
 Fix (b) for "Sound events lost at high fps", 2 (under "Frame rate"),
 in src/pmove_fixed.cpp. It applies only with pmove_fixed 1; pmove_fixed 0
@@ -34,7 +99,7 @@ runs the originals unchanged.
     500-850 fps.
   - cg_showmiss 1 printed no prediction misses.
   - Footsteps in every stance run on 8 ms steps: stand and crouch 0.25
-    cycle units per ms, prone 0.187 (fix 1 is still open).
+    cycle units per ms, prone 0.187 (before fix 1: see the section above).
   - The shown origin moves every frame at the true speed: 0.190 units
     per ms walking (190 u/s), the same across step boundaries.
   - Sign beeps not yet piloted.
@@ -505,7 +570,8 @@ temporary trace; both are game logic and will happen on Linux too):
      times vary, so at 300-500 fps only the occasional longer frame
      advances the cycle. Truncation also slows the cadence at normal
      rates: standing at 60 fps gives 0.29-0.31 units/ms instead of 0.335.
-   - Fix (recommended, not implemented): replace 0x200067C0 and
+   - Fix (implemented: "Footsteps at any step length" at the top):
+     replace 0x200067C0 and
      0x30005F00 with one native implementation. Add floor(bobmove x t1)
      - floor(bobmove x t0), where t1 = ps.commandTime (PmoveSingle sets it
      to the step's end before the call, 0x20007FD0) and t0 = t1 - msec.
@@ -592,7 +658,7 @@ Design:
   cgame, because fixed steps alone move the view at 125 Hz. Not
   pmove_fixed as it was: it loses player events and still truncates the
   prone bob (sound events, 2 above). Done for pmove_fixed 1 (remainder
-  pending, see the top section); the bob (1) is still open.
+  pending, see the top section); the bob (1) too.
 - Prediction: keep the predicted playerstate per command number and run
   only the new commands while the snapshot is unchanged (a full replay
   on each new snapshot): a native 0x3001EF70 with an oracle test against

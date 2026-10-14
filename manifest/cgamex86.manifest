@@ -22,3 +22,6 @@ replace 3000F500
 replace 3001EF70
 replace 30007C30
 replace 30007680
+
+# Footsteps and the bob cycle at any pmove step length (src/footsteps.cpp).
+replace 30005F00

@@ -8,3 +8,6 @@ resume 2008126B
 # pmove_fixed without rounding command times up (src/pmove_fixed.cpp).
 replace 20012430
 replace 20008580
+
+# Footsteps and the bob cycle at any pmove step length (src/footsteps.cpp).
+replace 200067C0
