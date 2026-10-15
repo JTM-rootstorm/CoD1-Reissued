@@ -70,10 +70,11 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
    X86RECOMP="$REPO/../../x86recomp"
    ```
 
-2. **dxvk-native** (optional, needs Meson; DXVK v3.1.1, Direct3D 9 only,
-   SDL3 window system). It adds the d3d9 backend (`COD1_GFX=d3d9`), used
-   as the reference image when checking the SDL_GPU one; the build finds
-   the Dungeon Siege project's copy, or pass `-DDXVK_NATIVE_DIR`:
+2. **dxvk-native** (optional and off by default, needs Meson; DXVK
+   v3.1.1, Direct3D 9 only, SDL3 window system). It adds the d3d9 backend
+   (`COD1_GFX=d3d9`), the reference image when checking the SDL_GPU one;
+   configure with `-DDXVK_NATIVE_DIR=<install prefix>` (e.g. the Dungeon
+   Siege project's `tools_ext/dxvk-native`) to build it:
 
    ```sh
    git clone --branch v3.1.1 https://github.com/doitsujin/dxvk.git
