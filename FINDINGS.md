@@ -1,5 +1,184 @@
 # Findings
 
+## Renderer (2026-10-19, branch render-native)
+The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),
+checked bit for bit against the lifted originals by ctest render_oracle.
+It is the first stage of a renderer that drives gfx::Device itself; that
+step is only sketched below.
+- What the profile shows (perf --call-graph dwarf, main thread, the
+  training walk; "Run log" 2026-10-19 renderer): the hot functions
+  in the task's list are not all back end. 0x4D94C0, 0x4D8280, 0x4D8420,
+  0x4D9330 and 0x4D6BC0 are the front end's culling, under 0x4DEEC0
+  (the scene submission, called from 0x401A50, which cgame's calls into
+  the engine go through: the collision traces too) > 0x4CB270
+  > 0x4CB210 > the world walk 0x4D9E20 > the cell walk 0x4D96E0
+  (recursive). The back end runs under 0x4D4A60 (from 0x410590, which
+  first runs cgame's frame, then this) > 0x4CEA70 > 0x4CE290 > the draw surface loop 0x4CC670
+  > 0x4F7D00 (flushes the tessellator) > the stage iterators (0x4F7C30 >
+  0x4F6380, which calls glDrawElements per stage, and 0x4F70F0; 0x4F60E0
+  > 0x4F6070 > 0x4F5DE0; the sky's 0x4DD6E0 > RB_ClipSkyPolygons). The
+  0x4C9000-0x4CCFFF range is the surface loop and the draw surface list
+  (R_AddDrawSurf, qsortFast), not tessellation; 0x4D6000-0x4DBFFF is the
+  front end's world and cell culling plus the sky; 0x4F5xxx-0x50Bxxx is
+  the shader stage code (ComputeTexCoords, the tcGen/texmod functions).
+  Only the names below are confirmed; the other roles are from the call
+  graph and stay unnamed.
+- Base shares (bc7cc8e, perf at 400 Hz from 20 s): front end 20.3% of
+  the main thread, all lifted; back end 36.6% inclusive, of which the GL
+  HLE (glDrawElements and under: compaction, DrawVertices, GpuDevice::Draw,
+  state, textures) is 22.3% and lifted code 10.4%; SwapBuffers 3.0%.
+- Names (Ghidra plate comments, evidence there): ClipSkyPolygon 0x4DB660
+  (string "ClipSkyPolygon: MAX_CLIP_VERTS", Q3's sky_clip table at
+  0x564478) and AddSkyPolygon 0x4DB3E0 (vec_to_st table 0x5644C0,
+  sky_mins/maxs 0x11CD800/0x11CD830), both created as functions (Ghidra
+  had neither; the lifter found them), ClearSkyBox 0x4DB9B0 (9999 /
+  -9999), RB_ClipSkyPolygons 0x4DB9F0 (vec3_t p[5], triangles of the
+  tessellator minus the view origin), ComputeTexCoords 0x4F5940 ("ERROR:
+  unknown texmod '%d' in shader '%s'"), qsortFast 0x4CADC0 and its
+  shortsort 0x4CAD70 (cutoff 8, 30-entry stacks, 8-byte drawSurf swaps),
+  R_AddDrawSurf 0x4CAF00 (MAX_DRAWSURFS 0x10000, the sort key from
+  shader->sortedIndex). Plate comments only, CoD's own: the culls, the
+  dlight bits 0x4D68E0, adding a world surface 0x4D6970, the 4x4 matrix
+  product 0x4C94D0 (Q3's myGLMultMatrix sums the other way), the memcpy
+  0x42B0A0 (Com_Memcpy's structure, still unnamed as before).
+- Replaced (manifest `replace`): the culls of a world surface reference
+  0x4D8280, a node of a surface AABB tree 0x4D8420 (recursive: culled on
+  far corners, dlight bits narrowed, near corners against the frustum and
+  the cell's portals decide between adding everything under it, its
+  children or its leaf surfaces one by one), a static model 0x4D9330, an
+  entity 0x4D94C0 and a cell's models and entities 0x4D9650; the dlight
+  bits 0x4D68E0 and 0x4D6970; ClipSkyPolygon and AddSkyPolygon;
+  ComputeTexCoords (the tcGen dispatch, its copies, the vector tcGen and
+  the negating texmod native; the other generators and texmods stay
+  lifted callees); qsortFast; the matrix product; the memcpy (memmove;
+  the lifted original for overlapping buffers or a negative count).
+  Called lifted: R_AddDrawSurf, the entity adder 0x4DEC10, the debug
+  boxes 0x4AD7E0, the tcGen/texmod functions, ri.Error.
+- Exactness notes, all x87 at CW 0x027F (src/x87_value.h):
+  - A plane test sums the far corner's products in the site's order (the
+    frustum loops x+y+z, the near/far plane and the portals z+y+x, the
+    near-corner tests y+x+z and z+y+x). The products of floats are exact
+    in double, so the order only shows when a corner lies within rounding
+    of the plane: the oracle's graze cases build exactly that.
+  - AddSkyPolygon's 4-way unrolled sum keeps x and y on the x87 stack
+    for parts of each pass and stores them at others (y is rounded at the
+    end of a pass but its unrounded value goes on if the loop ends); the
+    face's sign test for y reads the stored float. Each Fst in the source
+    is one of the original's stores.
+  - The matrix product's last term loads a[i][0] for column 0 but b[0][j]
+    for the others (an SNaN memory operand loses to a quiet NaN on the
+    x87, so the operand order shows in NaN payloads).
+  - The dlight test's "o - r < maxs" keeps the bit for a NaN (fcomp +
+    `test ah,1` + je).
+  - TMOD_NONE sets the texmod index to 4, so the loop ends at 5; one at
+    index 5 or later would loop for ever (the original too; the game
+    never has one).
+  - Lifted callees get the original's registers: ComputeTexCoords passes
+    EBX = &texmod->wave to 0x50A8D0 and ESI to 0x508A50, and every call
+    gets EBX/ESI/EDI/EBP as the original has them; the AABB walk writes
+    the narrowed dlight bits into its argument slot as the original.
+  - First measurement: the native culls were only 2x the lifted ones,
+    all of it entry/exit overhead: a SavedRegs guard calls
+    std::uncaught_exceptions() twice per call, and these run thousands of
+    times a frame and mostly return at once. Registers are now restored
+    explicitly where a function changes them (a guest longjmp sets them
+    itself), as cm_trace.cpp's guard does only for its few entries.
+- Oracle (tests/render_test.cpp): the 13 originals lifted with --only,
+  their callees stubbed (tests/render_stubs.manifest) by recorders that
+  log the callee, return address, ESP, the registers it reads and its
+  stack arguments, and leave EAX/ECX/EDX changed; compared: the case's
+  memory, the call logs, ESP, EBX, ESI, EDI, EBP, the x87 stack and
+  control word (and 0x4D68E0's EAX). Random cases: worlds of frustum
+  planes, near/far planes, portals with counters, dlights, AABB trees,
+  surfaces, models, cells and entities, with special values, now and
+  then wide exponents, and graze worlds whose planes pass through a
+  degenerate bounds with products about 2^-53 of the distance; sky
+  polygons from every stage, with near-tied or cancelling sums; shaders
+  with random tcGens, vectors (now and then cancelling) and texmods;
+  sorts of random keys and widths; aliased matrix products; overlapping
+  copies. 385020 random cases per ctest run (3 s), 0 mismatches.
+- Captures (-DCOD1_RENDER_CAPTURE=ON, COD1_RENDER_CAPTURE=file,
+  COD1_RENDER_EVERY, COD1_RENDER_MAX; tests/render_capture.cpp, format in
+  tests/render_capture.h): the entry's registers and arguments and every
+  structure it reads (the cell or tree with its surfaces, models and
+  entities, planes, portals, dlights, the shader's stages and texmods,
+  the tessellator's arrays). Two training walks (straight, and with
+  turns): 36603 calls (cells 5900, trees 6000, surfaces 3588, sky 6000,
+  ComputeTexCoords 6000, sorts 3115, matrices 6000; 113k callee calls),
+  0 mismatches. Pass files with COD1_RENDER_CAPTURES.
+- Line coverage of src/render.cpp under the random cases: 99.2% (not run:
+  the overlapping `rep movs` copy, which the fixed buffers rule out).
+- Mutations: 35 in src/render.cpp; 28 fail the oracle (orders of every
+  plane sum, the counters, the argument slot, the dlight NaN branch, the
+  sky's rounding points and stale y, the vector tcGen order, the texmod
+  registers and TMOD_NONE, the negation's NaN quietening, the sort's
+  compares, the matrix's operand, the memcpy fallback, the source
+  arrays). The other 7 cannot change a result: a native-to-native
+  return address, the sky clip normals' operand order (constants, never
+  NaN), the lerp's operand order and the s/t SNaN rule (a NaN vertex is
+  never interpolated and never reaches those faces), 0.001 against
+  0.001f (no float lies between), y's sign before and after its store (a
+  nonzero sum of floats is at least 2^-149), and the 8-byte swap order
+  (same bytes even for overlapping elements).
+- Frames (-set r_mode 3, com_maxfps 20, fixedtime 50, devmap training,
+  every frame saved with COD1_SHOT_EVERY=1; aligned on the end of the
+  briefing): all 173 loading and briefing frames are identical to the
+  base build's; of 358 in-level frames, all are identical outside the
+  time-faded 2D overlays (the centred title, the objectives line, the HUD
+  row), and inside them they differ exactly as two runs of the base build
+  differ from each other (the level script follows real time: base vs
+  base 46/358 frames fully identical, base vs native 47/358).
+- Training walk ("Run log" 2026-10-19 renderer), base bc7cc8e and native,
+  same x86recomp (98f6a37), interleaved, while another session's runs
+  and builds loaded the machine at times (load 1.4-3.4):
+  - Mean frame 2.33-2.43 ms (six base runs, mean 2.37) -> 2.12-2.31 ms
+    (three runs of the final build; 2.16-2.22 for the build before the
+    entry overhead fix), about -7%. p95 3.0 -> 2.7-3.0, p99 3.1-3.3 ->
+    2.9-3.2 ms.
+  - Main thread: the replaced functions 12.9% -> 4.5% (0x4D94C0 2.56 ->
+    0.73, 0x4D8280 2.00 -> 0.68, 0x4D8420 1.55 -> 0.55, ClipSkyPolygon +
+    AddSkyPolygon 2.63 -> 0.48, ComputeTexCoords 1.26 -> 0.22, the memcpy
+    1.08 -> 0.34, the matrix product 0.47 -> 0.09, 0x4D9330 0.39 -> 0.10);
+    front end 20.3% -> 16.5%; the GL HLE 21.3% -> 22.4% of a faster
+    frame. qsortFast gains nothing (integer code lifts well: 0.057 vs
+    0.055 s on the oracle's sorts).
+- Left lifted, next in line: the portal projection 0x4D6BC0 (1.0%, x87,
+  3.6 KB), the draw surface loop 0x4CC670 (0.7%), the cell walk 0x4D96E0
+  and the colour generators under 0x4F60E0.
+
+### Sketch: the stage iterator on gfx::Device
+What the GL HLE does for each glDrawElements of the stage iterator today
+(x86recomp src/runtime/gl/context.cpp, gfx/gpu_device.cpp), and what a
+native iterator replacing 0x4F7C30/0x4F6380/0x4F70F0 would skip:
+- Compaction: the indices are remapped to the vertices they use (an epoch
+  table over draw_verts_). The tessellator's vertices are already dense
+  0..numVertexes-1: the native path draws tess.indexes as they are.
+- State: ApplyState re-derives about 20 D3D-style render states from the
+  GL enables every draw and diffs them; ApplyTextures decodes each unit's
+  texenv into stage combiner states and sampler states; ApplyMatrices
+  re-sends the transforms. A shader stage's stateBits (blend, depth
+  write/func, alpha test), cull type, polygon offset and multitexture env
+  are fixed at shader load: the native path keys a prebuilt pipeline per
+  stage and binds textures by image (no GL name lookup), and sets the
+  transforms once per entity/view, not per draw.
+- Vertices: per draw the HLE scans every position's w (xyzw test),
+  gathers position, colour (swizzled RGBA -> BGRA per vertex) and
+  texture coordinates into scratch (MapDraw), then GpuDevice::Draw copies
+  them again into its frame arena and widens the indices to 32 bits. The
+  positions are the same for every stage of a shader: the native path
+  uploads tess.xyz (and normals where lit) once per flush as one stream,
+  and per stage only svars.colors (a device format in RGBA order, no
+  swizzle) and that stage's texture coordinates, with 16-bit indices
+  once per flush. This needs multi-stream vertex input in gfx::Device
+  (Draw takes one interleaved FVF buffer today); a first step can
+  interleave per stage into the arena directly (one copy, no gather).
+- Per draw left: GpuDevice::Draw's uniform build and pipeline lookup,
+  reduced to a key compare when the stage is the previous one.
+- Order: the draws and their state must stay in the original's order for
+  the frames to match; 2D, cinematics and the GL calls outside the stage
+  iterators stay on the GL HLE, so the HLE's cached state must be
+  invalidated (or shared) wherever the native path changes device state.
+
 ## XAnim evaluation (2026-10-19, branch xanim-native)
 CoDSP.exe's skeletal animation evaluation is native C++ (src/xanim.cpp),
 checked bit for bit against the lifted originals by ctest xanim_oracle:
@@ -1445,6 +1624,25 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-19: renderer hot path native, measured
+- Profiles: the scripted training walk under perf (perf as the game's
+  parent: Yama ptrace_scope 1), `perf record -e cycles:u -F 400 -D 20000
+  --user-callchains --call-graph dwarf,16384` (perf_event_paranoid 2
+  refuses call chains without --user-callchains: EACCES), main thread
+  only (perf script --tid), shares by owning lifted/native function with
+  the HLE below glDrawElements counted apart.
+- Timing: the walk as in the pmove entry (frames 12-88 s), base bc7cc8e
+  (a worktree built from the same generated code) against render-native,
+  interleaved, each run after the other session's games had ended
+  (a flock in the shared notes folder serialises this group's runs).
+  Results: "Renderer".
+- Frames: `+exec walk.cfg +set r_mode 3 +set com_maxfps 20 +set
+  fixedtime 50 +devmap training`, clicks at 8 and 10 s, COD1_SHOT_EVERY=1;
+  frames aligned at the end of the briefing (its longest run of equal
+  frames). fixedtime makes game time per frame fixed, but the level's
+  script and the 2D fades still follow real time: compare a native run
+  with two base runs, not one.
+
 ### 2026-10-19: native XAnim evaluation, measured
 - Method: the scripted training walk ("native player movement" below:
   isolated XDG_DATA_HOME, windowed, r_swapInterval 0, com_maxfps 0,
