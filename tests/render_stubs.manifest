@@ -1,0 +1,24 @@
+# Added to manifest/CoDSP.manifest for render_oracle_test: the functions
+# the replaced renderer functions call, stubbed (recording each call) in
+# tests/render_test.cpp.
+replace 004AD7E0
+replace 004DEC10
+replace 004CAF00
+replace 0050A2B0
+replace 0050ABF0
+replace 0050A7C0
+replace 0050A3D0
+replace 0050A380
+replace 0050A420
+replace 0050A4D0
+replace 0050A5C0
+replace 0050A720
+replace 0050A820
+replace 0050AA30
+replace 0050A8D0
+replace 0050A9B0
+replace 0050A980
+replace 00508A50
+replace 0050AA80
+replace 0050A890
+replace 0050AE10

@@ -69,6 +69,10 @@ void f_0049DE20(Ctx& c) { f_0049DE20_lifted(c); }
 // reaches it.
 void f_0051B3DD_lifted(Ctx& c);
 void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
+// The memcpy 0x42B0A0, native in the game (src/render.cpp): here only
+// lifted code reaches it.
+void f_0042B0A0_lifted(Ctx& c);
+void f_0042B0A0(Ctx& c) { f_0042B0A0_lifted(c); }
 void f_0049DB90(Ctx& c);  // unzOpen(EAX path) -> EAX unz_s
 void f_0049E2A0(Ctx& c);  // unzGoToFirstFile(ESI s)
 void f_0049E2E0(Ctx& c);  // unzGoToNextFile(ESI s)

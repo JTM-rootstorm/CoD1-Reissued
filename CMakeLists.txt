@@ -33,6 +33,7 @@ if(TARGET cod1_lifted)
                  src/screen2d.cpp
                  src/pmove_fixed.cpp src/pmove.cpp src/unzip.cpp
                  src/zlib.cpp src/jpeg_idct.cpp src/crt.cpp src/xanim.cpp
+                 src/render.cpp
                  $<TARGET_OBJECTS:cod1_lifted>)
   target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32 recomp_d3d7
                         recomp_opengl ZLIB::ZLIB)
@@ -61,6 +62,15 @@ if(TARGET cod1_lifted)
       "LINKER:--wrap=_ZN6recomp3gen10f_0041D870ERNS_3CtxE"
       "LINKER:--wrap=_ZN6recomp3gen10f_0041A730ERNS_3CtxE"
       "LINKER:--wrap=_ZN6recomp3gen10f_0041A820ERNS_3CtxE")
+  endif()
+  # Dev only: records calls of the renderer entry points src/render.cpp
+  # replaces, for render_oracle (tests/render_capture.cpp).
+  option(COD1_RENDER_CAPTURE "record renderer calls (COD1_RENDER_CAPTURE=file)" OFF)
+  if(COD1_RENDER_CAPTURE)
+    target_sources(cod1 PRIVATE tests/render_capture.cpp)
+    foreach(_va 004D9650 004D8420 004D8280 004DB660 004F5940 004CADC0 004C94D0)
+      target_link_options(cod1 PRIVATE "LINKER:--wrap=_ZN6recomp3gen10f_${_va}ERNS_3CtxE")
+    endforeach()
   endif()
   # Dev only: records Pmove calls with their traces for pmove_oracle
   # (tests/pmove_capture.cpp).
@@ -114,6 +124,10 @@ set_source_files_properties(src/jpeg_idct.cpp PROPERTIES COMPILE_OPTIONS
 # overlays).
 set_source_files_properties(src/xanim.cpp PROPERTIES COMPILE_OPTIONS
   "${_skinning_options};-fno-strict-aliasing")
+# The renderer's culling, sky and texture coordinates likewise (x87 results
+# in host doubles), with the originals' wrapping integer arithmetic.
+set_source_files_properties(src/render.cpp PROPERTIES COMPILE_OPTIONS
+  "${_skinning_options};-fno-strict-aliasing;-fwrapv")
 # The pk3 reads overlay unzip's structures on guest memory.
 set_source_files_properties(src/unzip.cpp PROPERTIES COMPILE_OPTIONS
   "-fnon-call-exceptions;${RECOMP_FAULT_FRAME_FLAGS};-fno-strict-aliasing")
@@ -176,6 +190,36 @@ if(EXISTS "${COD1_GAME_EXE}")
     "${_skinning_options};-fno-strict-aliasing")
   set(COD1_CM_CAPTURES "" CACHE STRING "captured traces for cm_trace_oracle (a list of files)")
   add_test(NAME cm_trace_oracle COMMAND cm_trace_oracle_test "${COD1_GAME_EXE}" ${COD1_CM_CAPTURES})
+endif()
+
+# The native renderer functions (src/render.cpp) against the originals,
+# lifted from COD1_GAME_EXE like skinning_oracle's, with the functions they
+# call stubbed (tests/render_stubs.manifest): tests/render_test.cpp, on
+# random cases and on captured calls (tests/render_capture.cpp) listed in
+# COD1_RENDER_CAPTURES.
+if(EXISTS "${COD1_GAME_EXE}")
+  set(_dir "${CMAKE_CURRENT_BINARY_DIR}/render_oracle")
+  set(_gen "${_dir}/gen/gen_000.cpp" "${_dir}/gen/table.cpp")
+  set(_manifest "${_dir}/render_test.manifest")
+  add_custom_command(OUTPUT ${_gen}
+    COMMAND ${CMAKE_COMMAND} -E cat "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_stubs.manifest" > "${_manifest}"
+    COMMAND recomp_lift --exe "${COD1_GAME_EXE}"
+            --symbols "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
+            --manifest "${_manifest}"
+            --only 004D68E0,004D6970,004D8280,004D8420,004D9330,004D94C0,004D9650,004DB3E0,004DB660,004F5940,004CADC0,004C94D0,0042B0A0,0051CA3C,0051D2B0,0051D2C1,0052CDBF --insns-per-file 1000000 --out "${_dir}/gen"
+    DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_stubs.manifest"
+    COMMENT "Lifting the renderer functions for render_oracle_test")
+  add_executable(render_oracle_test tests/render_test.cpp tests/render_native.cpp ${_gen})
+  target_include_directories(render_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_link_libraries(render_oracle_test PRIVATE recomp_x87 recomp_image)
+  set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
+    "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
+  set_source_files_properties(tests/render_native.cpp PROPERTIES COMPILE_OPTIONS
+    "${_skinning_options};-fno-strict-aliasing;-fwrapv")
+  set(COD1_RENDER_CAPTURES "" CACHE STRING "captured renderer calls for render_oracle (a list of files)")
+  add_test(NAME render_oracle COMMAND render_oracle_test "${COD1_GAME_EXE}" ${COD1_RENDER_CAPTURES})
 endif()
 
 # The native pk3 reads (src/unzip.cpp) against the original unzip and

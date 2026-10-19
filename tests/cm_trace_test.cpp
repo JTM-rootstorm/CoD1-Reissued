@@ -72,6 +72,10 @@ void f_0049EAA0(Ctx& c) { f_0049EAA0_lifted(c); }
 // reaches it.
 void f_0051B3DD_lifted(Ctx& c);
 void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
+// The memcpy 0x42B0A0, native in the game (src/render.cpp): here only
+// lifted code reaches it.
+void f_0042B0A0_lifted(Ctx& c);
+void f_0042B0A0(Ctx& c) { f_0042B0A0_lifted(c); }
 }  // namespace gen
 
 PeImage* g_exe = nullptr;

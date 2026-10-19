@@ -67,6 +67,26 @@ replace 0049D8A0
 # libjpeg stays lifted.
 replace 00519140
 
+# The renderer (src/render.cpp). Front end: the culling of a surface AABB
+# tree's nodes and surfaces, a cell's static models and entities, the
+# dlight bits of a bounds and adding a world surface. Back end:
+# ClipSkyPolygon, AddSkyPolygon and ComputeTexCoords. Under both:
+# qsortFast of the draw surfaces, the 4x4 matrix product and the memcpy
+# 0x42B0A0.
+replace 004D68E0
+replace 004D6970
+replace 004D8280
+replace 004D8420
+replace 004D9330
+replace 004D94C0
+replace 004D9650
+replace 004DB3E0
+replace 004DB660
+replace 004F5940
+replace 004CADC0
+replace 004C94D0
+replace 0042B0A0
+
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0
 replace 00507D20
