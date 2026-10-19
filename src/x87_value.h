@@ -137,6 +137,15 @@ inline St Sqrt(St a) {                                    // FSQRT
   return St(r);
 }
 
+inline St FromInt(int32_t v) { return St(double(v)); }  // FILD m32
+
+// The CRT's _ftol2 (0x52E218): the value truncated, low 32 bits (0 for a NaN
+// and out of range).
+inline int32_t Ftol(St v) {
+  if (!(std::fabs(v.v) < 0x1p63)) return 0;
+  return int32_t(int64_t(v.v));
+}
+
 // FCOM and friends: C++ comparisons (false when unordered).
 #define COD1_X87_CMP(op)                                                   \
   inline bool operator op(St a, St b) { return a.v op b.v; }               \

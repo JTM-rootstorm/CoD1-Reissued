@@ -307,14 +307,6 @@ const Module kCgame{false, 0x300D06B0, 0x300D0500, 0x300CEB8C, 0x300CEB90, 0x300
 
 // ---- x87 helpers ------------------------------------------------------------------
 
-St FromInt(int32_t v) { return St(double(v)); }  // FILD m32
-
-// _ftol2: the value truncated, low 32 bits (0 for a NaN and out of range).
-int32_t Ftol(St v) {
-  if (!(std::fabs(v.v) < 0x1p63)) return 0;
-  return int32_t(int64_t(v.v));
-}
-
 // FISTP m32 at round to nearest (the indefinite 0x80000000 out of range).
 int32_t Fist(St v) {
   const double r = std::nearbyint(v.v);
