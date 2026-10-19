@@ -29,7 +29,7 @@ if(TARGET cod1_lifted)
                  src/fov.cpp src/video_mode.cpp src/frame_pacing.cpp
                  src/screen2d.cpp
                  src/pmove_fixed.cpp src/footsteps.cpp src/unzip.cpp
-                 src/zlib.cpp
+                 src/zlib.cpp src/jpeg_idct.cpp
                  $<TARGET_OBJECTS:cod1_lifted>)
   target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32 recomp_d3d7
                         recomp_opengl ZLIB::ZLIB)
@@ -70,6 +70,9 @@ set_source_files_properties(src/skinning.cpp PROPERTIES COMPILE_OPTIONS
 # The collision traces likewise (x87 results in host doubles, src/x87_value.h),
 # reading the clip map through overlays of guest memory.
 set_source_files_properties(src/cm_trace.cpp PROPERTIES COMPILE_OPTIONS
+  "${_skinning_options};-fno-strict-aliasing")
+# The float IDCT likewise (x87 results in host doubles).
+set_source_files_properties(src/jpeg_idct.cpp PROPERTIES COMPILE_OPTIONS
   "${_skinning_options};-fno-strict-aliasing")
 # The pk3 reads overlay unzip's structures on guest memory.
 set_source_files_properties(src/unzip.cpp PROPERTIES COMPILE_OPTIONS
@@ -191,6 +194,34 @@ if(EXISTS "${COD1_GAME_EXE}")
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
   file(GLOB _pk3s "${COD1_GAME_DIR}/Main/*.pk3")
   add_test(NAME zlib_oracle COMMAND zlib_oracle_test "${COD1_GAME_EXE}" ${_pk3s})
+endif()
+
+# The native float IDCT (src/jpeg_idct.cpp) against the original
+# jpeg_idct_float, lifted like skinning_oracle's: tests/jpeg_idct_test.cpp,
+# on random blocks and every block of the JPEGs in COD1_GAME_DIR/Main's
+# pk3s, whose coefficients it reads with the host's libjpeg.
+if(EXISTS "${COD1_GAME_EXE}")
+  find_package(JPEG REQUIRED)
+  set(_dir "${CMAKE_CURRENT_BINARY_DIR}/jpeg_idct_oracle")
+  set(_gen "${_dir}/gen/gen_000.cpp" "${_dir}/gen/table.cpp")
+  add_custom_command(OUTPUT ${_gen}
+    COMMAND recomp_lift --exe "${COD1_GAME_EXE}"
+            --symbols "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
+            --manifest "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            --only 00519140 --insns-per-file 1000000 --out "${_dir}/gen"
+    DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+    COMMENT "Lifting jpeg_idct_float for jpeg_idct_oracle_test")
+  add_executable(jpeg_idct_oracle_test tests/jpeg_idct_test.cpp tests/jpeg_idct_native.cpp
+                 ${_gen})
+  target_include_directories(jpeg_idct_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_link_libraries(jpeg_idct_oracle_test PRIVATE recomp_x87 recomp_image JPEG::JPEG
+                        ZLIB::ZLIB)
+  set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
+    "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
+  set_source_files_properties(tests/jpeg_idct_native.cpp PROPERTIES COMPILE_OPTIONS
+    "${_skinning_options};-fno-strict-aliasing")
+  file(GLOB _pk3s "${COD1_GAME_DIR}/Main/*.pk3")
+  add_test(NAME jpeg_idct_oracle COMMAND jpeg_idct_oracle_test "${COD1_GAME_EXE}" ${_pk3s})
 endif()
 
 # x86recomp's Miles-compatible digital reverb, and its Miles 6.5 sample

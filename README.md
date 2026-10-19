@@ -176,7 +176,8 @@ Besides x86recomp's own tests, this runs every x87, integer and SSE
 instruction form found in the EXE both lifted and natively on your CPU,
 from random states, and requires bit-identical results; and each native
 replacement against the original it replaces, lifted (the pk3 reads and
-savegame compression over the install's pk3 files).
+savegame compression over the install's pk3 files, the JPEG inverse DCT
+over their images, which needs the libjpeg development package).
 
 ## Legal
 

@@ -46,6 +46,10 @@ replace 0049EAA0
 replace 00497D00
 replace 0049D8A0
 
+# libjpeg 6's float IDCT, jpeg_idct_float (src/jpeg_idct.cpp); the rest of
+# libjpeg stays lifted.
+replace 00519140
+
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0
 replace 00507D20
