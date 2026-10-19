@@ -1,5 +1,113 @@
 # Findings
 
+## Collision traces (2026-10-18, branch collision-traces)
+CoDSP.exe's trace code is native C++ (src/cm_trace.cpp), checked bit for
+bit against the lifted originals by ctest cm_trace_oracle. Profile that
+motivated it: "Run log", 2026-10-18.
+- Replaced (manifest `replace`): CM_BoxTrace 0x41D380, CM_TransformedBox-
+  Trace 0x41D870, its body 0x41D3B0 and CM_Trace 0x41CD60. Under them,
+  native: CM_TraceThroughTree, -Leaf, -Brush, -Patch, the capsule traces
+  (capsule and box through capsule, sphere, vertical cylinder), CoD's
+  terrain (point 0x419580, capsule 0x4196F0, box 0x41A2D0 with its
+  one-time warning, dispatch 0x41A350), the leaf-surface bounds test
+  0x41B690, and the position tests (CM_PositionTest, CM_TestInLeaf,
+  CM_TestBoxInBrush, the two capsule tests, terrain 0x419EE0). Their
+  lifted bodies stay for their other callers (point contents, area
+  code).
+- Called lifted, from the original's call sites: CM_ClipHandleToModel,
+  0x426940 (normalises a vector: its square root is the CRT's _CIsqrt,
+  which sets errno on a NaN), 0x4271E0 (angle vectors, fsincos), patch
+  collision (CM_TraceThroughPatchCollide 0x415A40, CM_PositionTestIn-
+  PatchCollide 0x4163C0), CM_BoxLeafnums_r 0x41A5D0 with its leaf
+  callback, the console print. The trace work (0x118 bytes) stays in
+  CM_Trace's guest frame, so they get the original's pointers; guest
+  frames are made only where such a call needs memory below them. Not
+  replaced: point contents (0x41A730, 0x41A820: about 1.5% of the main
+  thread) and the rest of 0x419000-0x41DFFF (area portals, leaf
+  queries, terrain generation at load).
+- Calling conventions are the originals' whole-program ones, e.g.
+  CM_BoxTrace(EAX results, EDX brushmask, ECX capsule; start, end, mins,
+  maxs, model) and CM_Trace(EAX sphere, EDX mins, ECX maxs; results,
+  start, end, model, origin (unused), brushmask, capsule). results->
+  fraction is the fraction to beat (the wrappers set 1). Every caller
+  of the four entries overwrites EAX, ECX, EDX and EFLAGS before reading
+  them (the cgame syscall exit does `xor eax,eax`), so those are not
+  reproduced; ESP, EBX, ESI, EDI, EBP and the x87 stack depth are.
+- x87 at CW 0x027F (PC=53, round to nearest) is IEEE double arithmetic
+  with a wider exponent: src/x87_value.h keeps each value the original
+  holds on the x87 stack as a double (St) and each one it stores as a
+  float (F32), operand for operand (`St(a) * b + c` is fld a / fmul b /
+  fadd c; two F32s cannot be added by mistake). It is exact while values
+  stay in double range, which float inputs through these few products
+  and quotients cannot leave. NaN results are recomputed with the x87
+  rules (one NaN operand quietened; of two, a QNaN beats a memory SNaN,
+  then the larger significand, equal ones the positive; invalid gives
+  the negative indefinite), which differ from SSE's and arm64's. Each
+  flag test is written as the C++ comparison with the same NaN branch:
+  `test ah,1; je` (taken only for an ordered >=) is `>=`, `test ah,5; jp`
+  is `!(a < b)`, and so on. -ffp-contract=off, -fno-strict-aliasing
+  (overlays of the clip map in guest memory).
+- Not reproduced: the x87 status word (sticky flags, C0-C3; read only by
+  the CRT's math-error path), stale x87 registers, /GS cookies, the dead
+  stack below ESP.
+- Data layouts (src/cm_trace.cpp): cplane_t, cbrush_t (0x34, int16
+  shaders of the six axial planes at +0x28), cbrushside_t, cNode_t (8:
+  plane, int16 children), cLeaf_t (16-bit counts), leaf surfaces (0x2C:
+  patch collide at +0x24 or terrain at +0x28), terrain (u16 tri count,
+  a byte saying which capsule end meets it first, 0x48-byte tris with
+  their plane, two barycentric edge planes, vertex and edge pointers;
+  vertices 0x10 and edges 0x38 with checkcounts), trace_t (0x30,
+  allsolid +0x2E, startsolid +0x2F), traceWork_t (0x118, sphere_t of
+  0x24 at +0xF4), cm globals 0x14BD64C-0x14BD768 (box model 0x14BD740,
+  box brush pointer 0x14BD73C, checkcount 0x14BD720), cm_noCurves
+  (0x14BD64C) and cm_playerCurveClip (0x14C77C0, read by patch
+  collision).
+- ctest cm_trace_oracle (configure with -DCOD1_GAME_EXE; the originals
+  lifted with --only and run on x86recomp's exact x87 model, SoftFloat,
+  not its double runs; CoDSP.exe mapped for its constants and globals;
+  `--only` needs the leaf callback 0x41A4D0 and the eight cases of
+  0x429800, which fills its own jump table, listed): 300 random clip
+  maps (BSP of axial and oblique planes, brushes with oblique and axial
+  sides, terrain height fields with shared vertices and edges, patch
+  collides with random facets, inline models, the box model; half on
+  whole units) with 1000 traces each through all four entries: points,
+  boxes, capsules, spheres, rotations, no-move position tests, level,
+  vertical and whole-unit moves, starts in and next to brushes, surfaces
+  and the box capsule, capsules on terrain vertices and edges with tiny
+  fractions to beat, exactly tangent ones, and zeros, denormals,
+  infinities, NaNs and huge values, the same ones at both ends now and
+  then. Compared: every byte of the clip map (checkcounts, the box
+  model), its globals, the results and arguments, and the registers
+  above. 300000 calls (66096 hits, 33176 start solid, 2929 NaN
+  fractions), 0 mismatches, about 6 s. The native code's line coverage
+  under it is 99.7% (llvm-cov); only the warning's print is not run (it
+  would reach the console's imports). 26 mutations (operand order and
+  precision, NaN rules, branch equalities, registers, stack arguments,
+  checkcount, end points, the box corner, the leaf bounds, a z not
+  restored...) each fail it. Others did not and are equivalent: e.g.
+  `d2 >= epsilon` right after `d2 > 0`, a NaN in a position test (it
+  needs start == end), the end point of the sphere test, which only its
+  start-solid branch reads. A one-ulp change in a double intermediate
+  that is later rounded to float is beyond any such test; the
+  transcription itself is the safeguard there.
+- Captures (-DCOD1_CM_CAPTURE=ON, COD1_CM_CAPTURE=file, COD1_CM_EVERY,
+  COD1_CM_MAX; tests/cm_trace_capture.cpp): the clip map walked from the
+  tree, the models and the box model (nodes, planes, leaves, brushes,
+  sides, shaders, patch collides, terrain with its vertices and edges,
+  cvars) whenever it changes, then sampled calls with what they read and
+  the game's own result, which the lifted original must reproduce from
+  the record. Pass files to the test (COD1_CM_CAPTURES for ctest).
+- Names and evidence: Ghidra plate comments. CM_BoxTrace and
+  CM_TransformedBoxTrace: cgame syscalls 39-42 in 0x401A50 with RtCW's
+  arguments and capsule 0, 0, 1, 1; the others by call-graph position
+  and structure against cm_trace.c / cm_test.c and by data layout.
+  CoD's own terrain functions, the transformed body and the bounds test
+  stay unnamed with comments.
+- Not yet measured (no GPU runs on 2026-10-18): the training walk before
+  and after, a captured training session, and a cg_showmiss 1 run with
+  the position tests native (one with the traces native showed no
+  "Prediction miss").
+
 ## Footsteps at any step length (2026-10-13, branch pmove-sound-events)
 Fix 1 for "Sound events lost at high fps" (under "Frame rate"), in
 src/footsteps.cpp: one native implementation replaces 0x200067C0 and its
@@ -325,8 +433,9 @@ native skinning removed them (no frame over 25 ms in a played session;
 "Run log" 2026-10-13).
 
 Next: collision traces (about 45% of the main thread in training, on the
-x87 model); then widescreen/FOV, UI scaling and high frame rates (design
-and order: "Widescreen, FOV, 2D placement, frame rate").
+x87 model; native since 2026-10-18, "Collision traces"); then
+widescreen/FOV, UI scaling and high frame rates (design and order:
+"Widescreen, FOV, 2D placement, frame rate").
 
 EAX works: with `mss_3d_provider "Creative Labs EAX 3 (TM)"` (a latched
 cvar: takes effect on the next start, or pick it in the sound options)
@@ -737,31 +846,30 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
-### 2026-10-13: collision traces, analysis (parked)
-- Native replacement of the collision traces is parked in favour of a
-  faster x87 model in x86recomp. Only the analysis below exists.
-- x87 control word on the main thread: 0x027F (PC=53, round to nearest).
-  x86recomp starts threads there. In CoDSP and the three DLLs, every
-  fldcw is in the statically linked CRT: __control87 0x52B587,
-  __ctrlfp 0x5253D2, and _ftol-style chop/restore. _controlfp
-  (0x52B5B9) has one caller, 0x528FE1, which runs _controlfp(_PC_53,
-  _MCW_PC). Not yet confirmed by a runtime capture.
-- x87 exception flags are read only by the CRT's math-error path
-  (__raise_exc 0x5249E8 via 0x5253B7). The trace code tests C0/C2/C3
-  alone.
-- Call graph, by structure against Quake 3's cm_trace.c (not yet named
-  in Ghidra):
-  - 0x41CD60 is the trace entry point (0x118-byte trace work on the
-    stack, capsule support). It is called from 0x41D380 and from
-    0x41D3B0 (transformed).
-  - 0x41CA60 walks the tree (recursive). 0x41C0A0 traces a leaf: its
-    brushes are 0x34 bytes at 0x14BD6EC, its patches 0x2C bytes at
-    0x14BD718, and the checkcount is at 0x14BD720.
-  - 0x41B8F0 traces one brush: the six bounds as implicit axial sides,
-    then the brush's side list.
-  - 0x41B860 > 0x41A350 > 0x4196F0/0x419580/0x41A2D0 handle patches.
-  - Some of these take arguments in registers (whole-program
-    optimisation), e.g. 0x41C0A0: EAX trace work, ESI leaf.
+### 2026-10-18: collision traces still lead the main thread
+- Profiled before replacing them (x86recomp main 4735305, x87 on host
+  doubles; CoD1 main dc5a30a): the scripted training walk, uncapped,
+  windowed, isolated XDG_DATA_HOME, COD1_TEST_INPUT (clicks at 8 and
+  10 s, F7 "vstr go" = +forward at 14 s, F8 quit at 90 s), under
+  systemd-run MemoryMax=6G; perf over 12-88 s. A LibreOffice build was
+  using about 9 of the 16 cores meanwhile: shares, not times.
+- Main thread, perf --call-graph dwarf (250 Hz): the collision code is
+  32.8% inclusive (31.1% self in 0x419000-0x41DFFF), still the largest
+  block; GL draw (DrawElements) is 19.4% inclusive.
+  - cgame prediction through the syscall dispatcher 0x401A50:
+    CM_TransformedBoxTrace 0x41D870 17.2% (from 0x3001E960) and
+    CM_BoxTrace 0x41D380 11.7% (from 0x3001EC30); 0x3001EF70 is 35.2%
+    inclusive. The server's 0x44E6C0 calls CM_Trace directly: 1.9%.
+  - Self: CM_TraceThroughBrush 0x41B8F0 8.9%, CM_Trace 0x41CD60 7.5%,
+    terrain 0x4196F0 4.5%, 0x41D3B0 4.0%, CM_TraceThroughLeaf 0x41C0A0
+    2.1%, point contents 0x41A730 1.3%, CM_TraceThroughTree 0x41CA60
+    0.8%. Inclusive: CM_TraceThroughLeaf 17.2%, CM_TraceThroughTree
+    13.1%, CM_TraceThroughPatch 5.7% (terrain 4.8%).
+- The x87 CW is 0x027F on the main thread (fldcw only in the CRT:
+  __control87 0x52B587, __ctrlfp 0x5253D2, _ftol-style chop/restore;
+  _controlfp 0x52B5B9 has one caller, 0x528FE1, which sets _PC_53). The
+  x87 exception flags are read only by the CRT's math-error path
+  (__raise_exc 0x5249E8 via _statusfp 0x5253B7).
 
 ### 2026-10-13: sound events lost at high fps (macOS, main 8248a19)
 - Results are in "Frame rate", "Sound events lost at high fps". Method:

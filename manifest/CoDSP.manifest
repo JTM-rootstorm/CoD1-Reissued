@@ -28,6 +28,13 @@ resume 0051CAB1
 # Cinematic slot reset: also clears the stale target frame (src/cinematic.cpp).
 replace 00406DA0
 
+# Collision traces: CM_Trace, CM_BoxTrace, the body of
+# CM_TransformedBoxTrace and CM_TransformedBoxTrace (src/cm_trace.cpp).
+replace 0041CD60
+replace 0041D380
+replace 0041D3B0
+replace 0041D870
+
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0
 replace 00507D20

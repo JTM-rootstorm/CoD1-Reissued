@@ -22,7 +22,7 @@ add_subdirectory("${X86RECOMP_DIR}" x86recomp)
 # recomp_lift; see CLAUDE.md for the command).
 recomp_add_lifted(cod1_lifted "${CMAKE_CURRENT_SOURCE_DIR}/generated")
 if(TARGET cod1_lifted)
-  add_executable(cod1 src/main.cpp src/cinematic.cpp src/skinning.cpp
+  add_executable(cod1 src/main.cpp src/cinematic.cpp src/skinning.cpp src/cm_trace.cpp
                  src/fov.cpp src/video_mode.cpp src/frame_pacing.cpp
                  src/screen2d.cpp
                  src/pmove_fixed.cpp src/footsteps.cpp
@@ -42,6 +42,17 @@ if(TARGET cod1_lifted)
       "LINKER:--wrap=_ZN6recomp3gen10f_005070E0ERNS_3CtxE"
       "LINKER:--wrap=_ZN6recomp3gen10f_00507D20ERNS_3CtxE")
   endif()
+  # Dev only: records collision traces and the clip map for cm_trace_oracle
+  # (tests/cm_trace_capture.cpp).
+  option(COD1_CM_CAPTURE "record collision traces (COD1_CM_CAPTURE=file)" OFF)
+  if(COD1_CM_CAPTURE)
+    target_sources(cod1 PRIVATE tests/cm_trace_capture.cpp)
+    target_link_options(cod1 PRIVATE
+      "LINKER:--wrap=_ZN6recomp3gen10f_0041CD60ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_0041D380ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_0041D3B0ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_0041D870ERNS_3CtxE")
+  endif()
 endif()
 # The CPU skinning is bit-exact only without contraction into FMA, and is
 # per-vertex work: optimised in every build type. It reads guest memory
@@ -52,6 +63,10 @@ set(_skinning_options -O2 -ffp-contract=off -fnon-call-exceptions
     ${RECOMP_FAULT_FRAME_FLAGS})
 set_source_files_properties(src/skinning.cpp PROPERTIES COMPILE_OPTIONS
   "${_skinning_options}")
+# The collision traces likewise (x87 results in host doubles, src/x87_value.h),
+# reading the clip map through overlays of guest memory.
+set_source_files_properties(src/cm_trace.cpp PROPERTIES COMPILE_OPTIONS
+  "${_skinning_options};-fno-strict-aliasing")
 # The footstep rate in the original's order of operations, unfused.
 set_source_files_properties(src/footsteps.cpp PROPERTIES COMPILE_OPTIONS
   -ffp-contract=off)
@@ -83,6 +98,33 @@ if(EXISTS "${COD1_GAME_EXE}")
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
   add_test(NAME skinning_oracle COMMAND skinning_oracle_test)
+endif()
+
+# The native collision traces (src/cm_trace.cpp) against the original
+# functions, lifted from COD1_GAME_EXE like skinning_oracle's (listed too:
+# the leaf callback 0x41A4D0, called through a pointer, and the cases of
+# 0x429800, which fills its own jump table):
+# tests/cm_trace_test.cpp, on random clip maps, and on captured calls
+# (tests/cm_trace_capture.cpp) listed in COD1_CM_CAPTURES.
+if(EXISTS "${COD1_GAME_EXE}")
+  set(_dir "${CMAKE_CURRENT_BINARY_DIR}/cm_trace_oracle")
+  set(_gen "${_dir}/gen/gen_000.cpp" "${_dir}/gen/table.cpp")
+  add_custom_command(OUTPUT ${_gen}
+    COMMAND recomp_lift --exe "${COD1_GAME_EXE}"
+            --symbols "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
+            --manifest "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            --only 0041CD60,0041D380,0041D3B0,0041D870,0041A4D0,00429888,004298BB,004298EE,00429921,00429954,00429987,004299B7,004299E7,0051CA3C,0051D2B0,0051D2C1,0052A7C2,0052CDBF --insns-per-file 1000000 --out "${_dir}/gen"
+    DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+    COMMENT "Lifting the collision traces for cm_trace_oracle_test")
+  add_executable(cm_trace_oracle_test tests/cm_trace_test.cpp tests/cm_trace_native.cpp ${_gen})
+  target_include_directories(cm_trace_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_link_libraries(cm_trace_oracle_test PRIVATE recomp_x87 recomp_image)
+  set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
+    "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
+  set_source_files_properties(tests/cm_trace_native.cpp PROPERTIES COMPILE_OPTIONS
+    "${_skinning_options};-fno-strict-aliasing")
+  set(COD1_CM_CAPTURES "" CACHE STRING "captured traces for cm_trace_oracle (a list of files)")
+  add_test(NAME cm_trace_oracle COMMAND cm_trace_oracle_test "${COD1_GAME_EXE}" ${COD1_CM_CAPTURES})
 endif()
 
 # x86recomp's Miles-compatible digital reverb, and its Miles 6.5 sample
