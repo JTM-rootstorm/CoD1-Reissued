@@ -1,5 +1,139 @@
 # Findings
 
+## Player movement (2026-10-19, branch pmove-native)
+Pmove of gamex86.dll and of cgamex86.dll is one native C++ implementation
+(src/pmove.cpp), checked bit for bit against both lifted originals by
+ctest pmove_oracle. CoDSP.exe's point contents are native too
+(src/cm_trace.cpp, cases in cm_trace_oracle).
+- The two copies: Pmove's closure in gamex86 (CRT and game-only code
+  aside) is 106 functions, each with a cgamex86 twin; 97 are
+  byte-identical once addresses are normalised (~11.8k instructions,
+  ~2.9k x87). The rest differ by register allocation (PmoveSingle), the
+  view angle function's command argument (stack in the game, EDI in
+  cgame), the game's debug drawing under a cvar (0x20295D6C: the prone
+  check 0x20002B60, the view angles, PM_CheckDuck), game-only console
+  prints, the game's turret use 0x2001DCA0 (melee or fire on a turret),
+  the weapon debug cvar's "other module" value (2 in the game, 3 in
+  cgame, 0x2000D5E6) and the game's 0x20073F80(ps) after Pmove's loop.
+  Every .rdata constant they use is equal. src/pmove.cpp's Module lists
+  each module's globals, cvars, tables and strings.
+- Replaced (manifest `replace`): Pmove 0x20008580 / 0x30007C30;
+  everything under it is native (PmoveSingle, the move kinds, ground
+  trace and crash land, slide and step slide, stance and view height,
+  the prone check, ladder, water, lean, view angles, foliage, footsteps,
+  the weapon state machine, the q_math helpers). Called lifted: the
+  CRT's sqrt (only on its error path) and atan2 (FPATAN's 64-bit result;
+  the products after it are finished in the x87 model), the console
+  print and the error exit, the game's debug drawing, turret use and
+  0x20073F80, and the trace and point contents callbacks.
+- Folded in, as the task asked: PM_Footsteps (src/footsteps.cpp before:
+  the same arithmetic; 200000 random cases against the old file agree
+  except pm->xyspeed's sign for an SNaN velocity, where the old host
+  float code gave a negative NaN and the x87 a positive one) and
+  pmove_fixed's whole steps (the native Pmove runs only whole pmove_msec
+  steps and leaves the rest pending; cgame records each step's origin
+  for the interpolation). The ClientThink and prediction wrappers in
+  src/pmove_fixed.cpp still hide the cvar, since the rounding is theirs.
+- Found by the oracle (all in the original's x87 terms):
+  - `Fst(St(m))` of an SNaN: clang folds the float -> double -> float
+    round trip into a copy, so the SNaN stayed signalling where FLD/FSTP
+    quietens it (the lean trace's start). src/x87_value.h's Fst now sets
+    the quiet bit of any NaN it stores (the x87 holds no SNaN), on the
+    NaN path only. Quietening every load instead cost the training walk
+    about 5.5% (the trace loops load floats constantly).
+  - FSINCOS of |x| >= 2^63 leaves x and pushes nothing; the original's
+    two FSTPs store x and the empty register's indefinite and move TOP
+    one further. The native AngleVectors does the extra pop on the
+    guest's x87 state.
+  - PM_CrashLand: a NaN fall cvar takes the damage branch
+    (`!(height <= min)`).
+- Oracle (tests/pmove_test.cpp): both DLLs mapped as the game maps them
+  (the CRT's float formatting set up, for the debug prints); a world of
+  boxes (floor, steps, walls and posts, ceilings at whole units, a ramp,
+  a ladder, water, foliage, bodies and corpses, with material, slick,
+  no-step and no-fall-damage flags) swept as Q3 does; random player
+  states, commands, weapon definitions (alternates in cycles, as the
+  slot search needs) and cvars, now and then special floats; pmove_fixed
+  in a quarter of the cases, against the earlier wrapper's whole-step
+  calls of the lifted Pmove. Compared: pmove_t, playerState_t, the
+  module's pmove globals, the weapon debug state, the stack above ESP,
+  ESP, EBX, ESI, EDI, EBP, the x87 stack and control word, and every
+  trace and point contents call with its arguments. 100000 cases per
+  ctest run (~15 s); 1M over five seeds: 0 mismatches.
+- Line coverage of src/pmove.cpp under it: 98.7% (llvm-cov). Not run:
+  the prone check's failure branches (it always returns 1), Pmove's
+  own msec clamps in PmoveSingle, the walk scale for pm_type 2/3 (those
+  never walk), the game's turret use (it reads the game's entities;
+  cgame's turret path is run), MAX_CLIP_PLANES, the ladder's movement
+  direction after jumping off.
+- Mutations: 20 in src/pmove.cpp (NaN branches, the SNaN copy, the
+  FSINCOS pop, constants, step and fixed-step arithmetic, buttons, a
+  frame's ESP, a saved register, a trace mask) each fail it, but for
+  three that cannot: the yaw scale's extra float rounding (a 16-bit
+  angle is exact), the 100 ms crouch blend (StanceBlend's callers never
+  ask for the standing height) and the clip plane limit. 12 in point
+  contents fail cm_trace_oracle, but for the side planes' summation
+  order (a double rounding before a float compare) and two that differ
+  only in which NaN comes out.
+- Captures (-DCOD1_PMOVE_CAPTURE=ON, COD1_PMOVE_CAPTURE=file,
+  COD1_PMOVE_EVERY per module, COD1_PMOVE_MAX; tests/pmove_capture.cpp,
+  format in tests/pmove_capture.h): the call's pmove_t, playerState_t,
+  module globals, cvars and weapon definitions, every trace and point
+  contents result the game got, and the game's pmove_t and playerState_t
+  after the call. The test serves the traces in order and requires the
+  lifted original to make exactly those calls and reproduce the game's
+  result. The game's calls are recorded only when 0x20073F80 returns at
+  once (its interval not over) and not on a turret. Pass files with
+  COD1_PMOVE_CAPTURES.
+- Captured training walks with jumps, turns, crouch, prone and leans
+  (about 1500 units walked, cg_showmiss 1), every 50th / 35th call of
+  each module:
+  - pmove_fixed 0: 11681 calls (game 819, cgame 10862; 1870 prone,
+    2487 crouched, 834 in the air, 570 leaning), 141126 traces.
+  - pmove_fixed 1: 20000 calls (game 888, cgame 19112; 4571 prone, 7355
+    crouched, 1945 leaning), 36866 traces.
+  - 0 mismatches, and the lifted originals give the game's result for
+    every call. The route has no ladder and the weapon stays idle; the
+    random cases cover both. No prediction misses in either run.
+- Point contents: CM_PointContents 0x41A730 (ECX p, EAX model) and
+  CM_TransformedPointContents 0x41A820 (ECX p, EAX origin, EDX angles;
+  model), with CM_PointLeafnum_r 0x41A460 inline; CM_ClipHandleToModel
+  and the angle vectors are called lifted. cm_trace_oracle adds 90000
+  random point cases (in and around brushes, on node planes, in models
+  and the box model, rotated, special values; EAX compared), and
+  COD1_CM_CAPTURE records point contents calls too: the two captured
+  walks above (20000 calls each, 8625 of them point contents) pass with
+  the game's results.
+- Also: cm_trace.cpp's guest frames and saved registers no longer
+  restore ESP and the callee-saved registers while a guest longjmp
+  unwinds through them (the resume has set them already); pmove.cpp's
+  do the same. A frame tells by ESP (the longjmp's is above it), saved
+  registers by std::uncaught_exceptions().
+- Names and evidence (Ghidra plate comments, both DLLs): Pmove (its
+  callers ClientThink 0x20012430 and prediction 0x3001EF70, the 66 ms /
+  pmove_msec step loop), PmoveSingle, PM_GroundTrace ("%i:Land",
+  "%i:steep", "%i:kickoff"), PM_CrashLand ("landing vel", "falling
+  damage", "landing stun time"), PM_SlideMove ("%i:MAX_CLIP_PLANES",
+  "recollided"), PM_StepSlideMove ("%i:stepped", "%i:jump step"),
+  PM_CheckJump ("%i:jump base"), PM_CheckDuck ("All stances
+  disallowed"); CoDSP.exe: CM_PointContents and CM_TransformedPoint-
+  Contents (cgame syscalls 37 and 38, before the box traces 39-42, with
+  RtCW's arguments), CM_PointLeafnum_r. CoD's own functions (prone
+  check, stance blend, foliage, lean, weapon states) stay unnamed.
+- Training walk, before (origin/collision-traces 741c785) and after,
+  same x86recomp (main 4735305), idle machine, three runs each
+  interleaved, frames 12-88 s; "Run log", 2026-10-19 (pmove):
+  - pmove_fixed 1 (the same path in both builds: viewpos at 30, 60 and
+    88 s agree): mean frame 1.916 -> 1.866 ms (-2.6%), p95 2.2 -> 2.1,
+    p99 2.2-2.3 -> 2.2 ms.
+  - pmove_fixed 0: 2.402 -> 2.342 ms (-2.5%), p95 3.0 -> 3.0, p99
+    3.1-3.2 -> 3.0 ms. Step lengths follow the frame rate, so the path
+    along the wall differs a little from run to run.
+  - Main thread (perf, pmove_fixed 1): prediction 0x3001EF70 15.8% ->
+    15.2%; point contents 1.22% -> 0.27%. Pmove itself was ~1.3% beyond
+    its traces, which were native already; the traces (CG_Trace 12-14%)
+    dominate it.
+
 ## The pk3 directory scan (2026-10-19, branch fs-scan-hash)
 With zlib and the IDCT native, the largest remaining blocks of training's
 level load were in the file system: FS_LoadZipFile 0x4237A0 (14.7% of the
@@ -203,10 +337,10 @@ motivated it: "Run log", 2026-10-18.
   PatchCollide 0x4163C0), CM_BoxLeafnums_r 0x41A5D0 with its leaf
   callback, the console print. The trace work (0x118 bytes) stays in
   CM_Trace's guest frame, so they get the original's pointers; guest
-  frames are made only where such a call needs memory below them. Not
-  replaced: point contents (0x41A730, 0x41A820: about 1.5% of the main
-  thread) and the rest of 0x419000-0x41DFFF (area portals, leaf
-  queries, terrain generation at load).
+  frames are made only where such a call needs memory below them. Point
+  contents (0x41A730, 0x41A820) are native since 2026-10-19 ("Player
+  movement"). Not replaced: the rest of 0x419000-0x41DFFF (area
+  portals, leaf queries, terrain generation at load).
 - Calling conventions are the originals' whole-program ones, e.g.
   CM_BoxTrace(EAX results, EDX brushmask, ECX capsule; start, end, mins,
   maxs, model) and CM_Trace(EAX sphere, EDX mins, ECX maxs; results,
@@ -293,13 +427,17 @@ motivated it: "Run log", 2026-10-18.
   (main 4735305), three runs each, interleaved, idle machine; "Run log",
   2026-10-19: mean frame 2.85 -> 2.03 ms (-29%), p95 3.7 -> 2.3 ms, p99
   3.8 -> 2.35 ms; the traces from 32.8% of the main thread to 6.6%.
+  The player did not walk in these runs (the forward bind never took:
+  "Run log", 2026-10-19, native player movement), so they compare the
+  start of training standing still.
 - cg_showmiss 1 on the walk with turns and jumps, both builds: no
   "Prediction miss" or "prediction error".
 
 ## Footsteps at any step length (2026-10-13, branch pmove-sound-events)
 Fix 1 for "Sound events lost at high fps" (under "Frame rate"), in
 src/footsteps.cpp: one native implementation replaces 0x200067C0 and its
-cgame mirror 0x30005F00, with pmove_fixed 0 and 1.
+cgame mirror 0x30005F00, with pmove_fixed 0 and 1. (Since 2026-10-19
+it is PM_Footsteps in src/pmove.cpp: "Player movement".)
 - bobmove (cycle units per ms) is computed as the original does it, in
   its order of operations, with its float constants: xyspeed / (ps.speed
   x direction x move x stance scale) x K. The stance is 0x20003460 /
@@ -364,7 +502,10 @@ cgame mirror 0x30005F00, with pmove_fixed 0 and 1.
 ## pmove_fixed without rounding (2026-10-13, branch pmove-sound-events)
 Fix (b) for "Sound events lost at high fps", 2 (under "Frame rate"),
 in src/pmove_fixed.cpp. It applies only with pmove_fixed 1; pmove_fixed 0
-runs the originals unchanged.
+runs the originals unchanged. (Since 2026-10-19 the whole steps, the
+view angles of a command without one and the step-end origins are in
+the native Pmove, src/pmove.cpp; src/pmove_fixed.cpp keeps hiding the
+cvar and the interpolation: "Player movement".)
 - Server: the ClientThink 0x20012430 wrapper hides pmove_fixed (the vmCvar
   integer reads 0 during the call), so the command time is no longer
   rounded up. Pmove 0x20008580 then runs only the whole pmove_msec
@@ -1034,6 +1175,29 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-19: native player movement, measured
+- Method: the scripted training walk, isolated XDG_DATA_HOME, windowed,
+  r_swapInterval 0, com_maxfps 0, under systemd-run MemoryMax=6G,
+  COD1_HITCH frame times over 12-88 s. COD1_TEST_INPUT: clicks at 8 and
+  10 s, F7 (`vstr go`, go = "+forward") at 14 s, F10 `viewpos` at 30,
+  60 and 88 s, F8 quit at 90 s. The binds are in a cfg in the isolated
+  main/ (`+exec walk.cfg`), with COD1_BACKGROUND=1 and
+  COD1_TEST_FOCUS=1,2.
+- Two traps in the earlier walks: `+set go "+forward"` on the command
+  line is split at the '+' ("Unknown command "forward"" in every log of
+  the collision-traces runs), so the player stood at the start; and
+  without COD1_BACKGROUND=1 the desktop's mouse and keys reach the run
+  window (background runs need COD1_TEST_FOCUS to be active, or the
+  game drops the scripted keys too). Check that a walk moves (viewpos,
+  or a pmove capture's origins).
+- The walk goes about 235 units forward, then slides along a wall into
+  a corner at (4346, -4852).
+- First measurement of the native build: 10% slower, all of it in the
+  trace code, from quietening an SNaN on every float load
+  (src/x87_value.h). Moved to the NaN path of the store: "Player
+  movement".
+- Results: "Player movement", training walk.
+
 ### 2026-10-19: pk3 directory scan and tolower native, measured
 - Training's level load as in the entries below, five runs each,
   interleaved, against the jpeg-idct-float build (7a4774e; another
