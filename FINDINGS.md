@@ -1,5 +1,137 @@
 # Findings
 
+## XAnim evaluation (2026-10-19, branch xanim-native)
+CoDSP.exe's skeletal animation evaluation is native C++ (src/xanim.cpp),
+checked bit for bit against the lifted originals by ctest xanim_oracle:
+a DObj's bone poses from its anim tree, and its bone matrices from those
+poses, which the CPU skinning (src/skinning.cpp) reads.
+- Call structure (perf --call-graph dwarf on the training walk; all
+  threads, inclusive): DObjCalcAnim 0x47CD80 3.95% (XAnimCalc 0x47BD40
+  3.8%, of it the leaves 0x479C20 1.8%), DObjCalcSkel 0x4766E0 2.7%
+  (QuatToAxis 0x475D80 1.2%, the quaternion products 0.8%), the time
+  update 0x47CC90 0.9% and 0x47CCD0 0.5%. Callers: the cgame syscalls
+  (0x401A50, a case for each entry), 0x449DD0 / 0x449E00 (from
+  0x44A2F0), and 0x482940, 0x4F9F50, 0x4FA1F0, 0x4FA5D0, which call
+  DObjCalcSkel right after DObjCalcAnim.
+- Replaced (manifest `replace`): DObjCalcAnim 0x47CD80 (EAX dobj, EDX
+  bone mask) and DObjCalcSkel 0x4766E0 (EAX bone mask; dobj on the
+  stack). Native under them: the anim tree recursion XAnimCalc with its
+  blending, the leaf XAnimAddLeaf, the per-part interpolation for byte
+  and u16 key frames (0x4791C0, 0x4795B0) and at the last key (0x4799A0),
+  the key search (0x4790C0, 0x479140), the pose clear (0x479BD0), the
+  base pose for unanimated bones, QuatToAxis 0x475D80 and the two
+  quaternion products 0x476070 (q = p q) and 0x476100 (q = q p). Called
+  lifted, from the originals' call sites: the anim's part-to-bone map
+  0x478FC0 (when a DObj has none for an anim, or the tree's generation
+  byte has moved on), its release 0x45D580, and the DObj's part
+  duplicates 0x4761F0. The tree's blend buffers stay on the guest stack
+  (the original's alloca), so the lifted callees see the original's
+  memory. Not reproduced: EAX, ECX, EDX and EFLAGS on return (every call
+  site overwrites them, or returns to the syscall exits' `xor eax,eax`),
+  the x87 status word, the dead stack below ESP.
+- Data (src/xanim.cpp has the layouts): the anim tree (anims of 8 bytes:
+  child count, xanim or flags, first child; a u16 info index per anim),
+  the info pool 0xA6D010 (0x44 each: two states of 0x1C with time,
+  goal weight, weight, rate..., picked by 0xA8F648), xanims (frame
+  count, part names, a translation and a rotation track per part, a bit
+  per part for rotations about z alone), tracks (key frames, key count,
+  then byte or u16 key frame numbers; with no keys the one value
+  inline), int16 quaternions scaled by 1/32767, the DObj (tree,
+  skeleton, per-anim map cache, part duplicates, models, attachment
+  bones, at most 127 bones: DObjCreate's error) and the skeleton (posed,
+  set-elsewhere and done bits, 0x40-byte matrices, 0x20-byte poses).
+- x87 details the transcription keeps (x87_value.h, as for the traces):
+  the frame number is _ftol2 of the double numFrames * time while the
+  fraction starts from its float store; a sparse key's fraction and the
+  interpolated values stay on the x87 stack (doubles) through the weight
+  products; each child's weight is passed as its float store (an SNaN
+  quietened); the normalising blend sums q3^2 + q1^2 + q0^2 + q2^2 in
+  that order and copies the weight's bits; QuatToAxis stores the squares
+  and four of the six cross products as floats and keeps the rest on the
+  stack. FromInt and Ftol (_ftol2) moved from src/pmove.cpp into
+  x87_value.h.
+- Oracle (tests/xanim_test.cpp; configure with -DCOD1_GAME_EXE; the
+  originals lifted with --only and run on x86recomp's exact x87 model):
+  random DObjs of 1-6 models (attached to a bone of an earlier one or
+  not) and up to 127 bones, skeletons with bones posed, set elsewhere and
+  done (also all of them), part duplicates, anim trees of up to 24 anims
+  in four levels with zero, ordinary and special weights in either info
+  state, xanims of 0-1000 frames whose parts have translations or none,
+  full, z-only or no rotations, as one value, sparse keys or a key per
+  frame, at times 0, 1, just under 1 and between, cached maps current,
+  stale or missing, masks of all or some bones, and floats now and then
+  zeros, denormals, infinities, NaNs, huge or scaled down by up to 2^-40.
+  Each case runs DObjCalcAnim, DObjCalcSkel or both in turn. The three
+  lifted callees are stubs (tests/xanim_stubs.manifest) that log their
+  register and stack arguments and make deterministic maps; compared:
+  every byte the case built (DObj, skeleton, cache, models, tree, xanims,
+  string table), the globals 0xA6D000-0xA6D010 and 0xA8F000-0xA8F680,
+  the stack arguments, the stub calls, ESP, EBX, ESI, EDI, EBP and the
+  x87 stack and control word. 20000 cases per ctest run (~17 s); 1M over
+  five more seeds: 0 mismatches.
+- Line coverage of src/xanim.cpp under it (with the captures below):
+  100% of lines, 98.7% of branches (llvm-cov). Not run: a zero map or
+  part-duplicates handle (the lifted callees never return one; the
+  original would fault on it) and the blend buffer's unwinding by a
+  guest longjmp.
+- Mutations: 20 in src/xanim.cpp. 16 fail it (the float vs double frame,
+  the fraction of a sparse key, the quaternion weight's rounding, a
+  child weight not stored, the z-only rotation with no track, the
+  duplicate's skip test, an operand order with a memory SNaN in the
+  skeleton, the roots' default rotation, the forced skip of bone 127,
+  the release's EAX high half, the blend's weight test, QuatToAxis's NaN
+  branch, the base translation's operand order, the key search's guess,
+  the root normalisation's skip test, the generation byte). Four do not
+  and cannot: the in-place blend copying the weight's bits rather than
+  through the x87 (only an SNaN weight differs, and every weight passed
+  down is a float store already), time 1 tested as >= 1
+  (times stay in [0, 1]: the update loops or clamps them), and two
+  summation orders of doubles later stored as floats (the quaternion
+  length, a product's w), whose one-ulp differences do not survive the
+  float store in any case drawn.
+- Captures (-DCOD1_XANIM_CAPTURE=ON, COD1_XANIM_CAPTURE=file,
+  COD1_XANIM_EVERY per entry, COD1_XANIM_MAX; tests/xanim_capture.cpp,
+  format in tests/xanim_capture.h): everything the call reads (globals,
+  DObj, skeleton, models, the tree as the call walks it: infos of every
+  child, xanims, tracks and keys below the anims of nonzero weight, the
+  maps and part duplicates), what the three lifted callees did (served
+  back in order, their arguments checked), and the regions after the
+  game's call, which the lifted original must reproduce. Pass files with
+  COD1_XANIM_CAPTURES. The training walk (every 50th call of each entry)
+  and the walk looking around (every 37th): 9186 calls (4593 of each),
+  5793 blends, 12281 leaves (5637 interpolated, the others at their last
+  key), DObjs up to 115 bones; 0 mismatches, and the lifted originals
+  give the game's result for every call.
+- Names and evidence (Ghidra plate comments): DObjCreate 0x476E00 fills
+  the DObj and errors with "dobj for xmodel '%s' has more than %d bones"
+  (127) and "Part '%s' not found in model '%s' or any of its
+  descendants"; DObjDisplay 0x475EC0 prints its models, bones and part
+  duplicates ("No Dobj", "Part duplicates"); XAnimDisplay 0x47C420
+  prints the tree's weights and times. The evaluation functions have
+  descriptive names in that vocabulary (DObjCalcAnim, DObjCalcSkel,
+  XAnimCalc, XAnimAddLeaf, XAnimAddPartsLerp8/16, XAnimAddPartsLast,
+  XAnimFindKey8/16, XAnimClearPoses, QuatToAxis, QuatMultiplyLeft and
+  Right), from their behaviour and data, checked by the oracle. There is
+  no Quake 3 counterpart.
+- Training walk, before (main bc7cc8e) and after, same x86recomp (main
+  98f6a37), three runs each interleaved, frames 12-88 s; "Run log",
+  2026-10-19 (XAnim):
+  - Mean frame 2.314 -> 2.234 ms (-3.5%; runs 2.343, 2.259, 2.340 ->
+    2.308, 2.189, 2.205). p95 2.8-3.0 -> 2.8-3.0 ms, p99 2.9-3.1 ->
+    2.9-3.1 ms.
+  - Main thread (perf, cycles): the replaced functions 4.72% -> 1.03%
+    (XAnimCalc with the leaves inlined 0.51%, QuatToAxis 0.17%,
+    DObjCalcSkel 0.17%, the products 0.09%). The rest of 0x475000-
+    0x47D000, the time update mostly, is 1.2-1.3% in both.
+- Frame captures (F12 screenshotJPEG at 12-18.5 s, the sergeant
+  gesturing and a soldier climbing the wall, five shots per build): the
+  NPCs are posed the same in both builds; 30-140 of the 786432 pixels
+  differ by more than 24 levels per shot, from the animations' phase
+  (frame times differ) and the compass.
+- Not done: the anim tree's time update (0x47CC90 -> 0x47AC70, 0x47AA80,
+  0x47A7D0 with the notes it queues by time, 0x47A370; 0x47CCD0 ->
+  0x47BA90, 0x47B470): 1.2-1.3% of the main thread, still lifted.
+
 ## Player movement (2026-10-19, branch pmove-native)
 Pmove of gamex86.dll and of cgamex86.dll is one native C++ implementation
 (src/pmove.cpp), checked bit for bit against both lifted originals by
@@ -1175,6 +1307,29 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-19: native XAnim evaluation, measured
+- Method: the scripted training walk ("native player movement" below:
+  isolated XDG_DATA_HOME, windowed, r_swapInterval 0, com_maxfps 0,
+  MemoryMax=6G, COD1_BACKGROUND=1 and COD1_TEST_FOCUS=1,2, binds in
+  walk.cfg), frames 12-88 s from COD1_HITCH. Base: main bc7cc8e; native:
+  this branch; both on x86recomp main 98f6a37. Other sessions were
+  building and running games on the machine: each run started only with
+  no other game, compiler or oracle running and the load under 3.5; two
+  earlier sets taken under load (up to 22) were dropped. Three runs each,
+  interleaved: base 2.343, 2.259, 2.340 ms; native 2.308, 2.189, 2.205
+  ms. Results: "XAnim evaluation".
+- Main-thread shares: one run of each under `perf record -e cycles:u
+  -F 999 -D 12000` as the game's parent, `perf report --tid` of the
+  main thread (78k samples each).
+- perf at perf_event_paranoid 2: `--call-graph dwarf` needs
+  `--user-callchains`, or no event opens; attaching with -t is refused
+  (ptrace scope), so perf runs the game; recording all threads needs a
+  small -m (32 pages) for the mlock limit. Writing a capture to /tmp
+  (tmpfs) counts against the run's MemoryMax: a 6 GB capture had the game
+  killed. Captures go to the project's captures/ now.
+- Frame captures: F12 (screenshotJPEG) from the test input at 12, 13.5,
+  15, 17 and 18.5 s, a turn between the third and fourth.
+
 ### 2026-10-19: native player movement, measured
 - Method: the scripted training walk, isolated XDG_DATA_HOME, windowed,
   r_swapInterval 0, com_maxfps 0, under systemd-run MemoryMax=6G,
