@@ -59,8 +59,16 @@ struct St {
   St(F32 m) : v(std::bit_cast<float>(m.bits)) {}  // FLD m32 (SNaN quietened)
 };
 
-// FST m32: round to float.
-inline F32 Fst(St v) { return {std::bit_cast<uint32_t>(float(v.v))}; }
+// FST m32: round to float. A NaN stored is quiet: the x87 holds no SNaN,
+// and the compiler may fold a float's conversion to double and back
+// (Fst(St(m))) into a copy that would keep one.
+inline F32 Fst(St v) {
+  const float f = float(v.v);
+  uint32_t b = std::bit_cast<uint32_t>(f);
+  if (f != f) [[unlikely]]
+    b |= 0x400000u;
+  return {b};
+}
 
 namespace x87v_detail {
 
