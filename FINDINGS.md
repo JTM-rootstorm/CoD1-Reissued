@@ -108,12 +108,34 @@ plate comments (34 functions). Measurements: "Run log", 2026-10-19.
   lineage) adds a rounding bias up front and runs in single precision.
   So LoadJPG and libjpeg stay lifted, and JPEG screenshot encoding with
   them (not tried).
-- It matters for load time: in the native build's training load,
-  LoadJPG is 13.7% of the main thread, jpeg_idct_float 12.5% inclusive
-  (its float-to-integer calls most of it). A native jpeg_idct_float that
-  keeps the x87 arithmetic and the CRT conversion exactly (as
-  src/x87_value.h does for the traces), checked against the lifted one
-  on every pk3 JPEG, would recover most of that.
+- It matters for load time: with zlib on the host, LoadJPG was 13.7% of
+  the main thread in training's load, jpeg_idct_float 12.5% inclusive
+  (most of it the _ftol2 calls). So jpeg_idct_float alone is native now
+  (2026-10-19, branch jpeg-idct-float): src/jpeg_idct.cpp, manifest
+  `replace` 0x519140, the rest of libjpeg lifted.
+  - The x87 code was read by executing it symbolically (every value as
+    an expression, every m32 store marked): pass 1 down the columns
+    (DC-only shortcut, then the even and odd parts) into the float
+    workspace, pass 2 unrolled over the eight rows, which all round at
+    the same points. The compiler keeps some of jidctflt.c's float
+    variables on the stack unrounded (pass 1's tmp0, tmp12 and z10;
+    pass 2's tmp10, tmp11, tmp13, tmp2, z13, z10, tmp6 and the odd
+    tmp11), so the native code is written from the binary, not the
+    source, in src/x87_value.h's terms. _ftol2 (0x52E218) is a
+    truncation to 64 bits; the sample is (low 32 bits + 4) >> 3 &
+    0x3FF into sample_range_limit + 128.
+  - ctest jpeg_idct_oracle (lifted on the exact x87 model, CW 0x027F):
+    200000 random blocks (DC only, sparse, dense, extreme coefficients;
+    jpeg-6 multipliers from random tables, or random floats; a random
+    range-limit table) and all 912624 blocks of the 211 pk3 JPEGs, their
+    coefficients read with the host's libjpeg (jpeg_read_coefficients,
+    lossless) and multipliers as jpeg-6's jddctmgr makes them: 0
+    mismatches, 8.5 s. Mutations caught: one rounding dropped (46642
+    blocks), one added (40467), a constant swapped, the descale bias,
+    rounding instead of truncation. The test links the host's libjpeg
+    (find_package(JPEG)).
+  - The "Click to Start the Mission" screen (the diary) is byte-identical
+    in a frame capture from both builds.
 
 ## Collision traces (2026-10-18, branch collision-traces)
 CoDSP.exe's trace code is native C++ (src/cm_trace.cpp), checked bit for
@@ -967,6 +989,15 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-19: jpeg_idct_float native, measured
+- Training's level load, as in the zlib entry below, five runs each,
+  interleaved. Another session's single-threaded test was running; the
+  zlib-only build measured ~0.07 s slower than in that entry. Zlib-only
+  build (host-zlib-jpeg 0dae7aa) 1.914 s (1.888-1.943) -> 1.676 s
+  (1.648-1.739), -12.4%. CL_InitCGame 0.84 -> 0.65 s. Console output
+  identical apart from times.
+- Since main 741c785 (zlib and the IDCT): about 2.18 -> 1.67 s.
+
 ### 2026-10-19: pk3 reads and savegames on host zlib, measured
 - Level load: training from `+map training`, "------ Server
   Initialization ------" to the last loading frame (over 20 ms) before
