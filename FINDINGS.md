@@ -103,10 +103,16 @@ motivated it: "Run log", 2026-10-18.
   and structure against cm_trace.c / cm_test.c and by data layout.
   CoD's own terrain functions, the transformed body and the bounds test
   stay unnamed with comments.
-- Not yet measured (no GPU runs on 2026-10-18): the training walk before
-  and after, a captured training session, and a cg_showmiss 1 run with
-  the position tests native (one with the traces native showed no
-  "Prediction miss").
+- Captured training sessions (the walk with turns and jumps, every
+  10th and every 200th call, 20000 each, almost all CM_TransformedBox-
+  Trace from cgame's entity traces): 0 mismatches, and the lifted
+  originals give the game's result for every call from the record.
+- Training walk, before (origin/main dc5a30a) and after, same x86recomp
+  (main 4735305), three runs each, interleaved, idle machine; "Run log",
+  2026-10-19: mean frame 2.85 -> 2.03 ms (-29%), p95 3.7 -> 2.3 ms, p99
+  3.8 -> 2.35 ms; the traces from 32.8% of the main thread to 6.6%.
+- cg_showmiss 1 on the walk with turns and jumps, both builds: no
+  "Prediction miss" or "prediction error".
 
 ## Footsteps at any step length (2026-10-13, branch pmove-sound-events)
 Fix 1 for "Sound events lost at high fps" (under "Frame rate"), in
@@ -846,6 +852,23 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-19: native collision traces, measured
+- The scripted training walk ("Run log" 2026-10-18), uncapped, windowed,
+  isolated XDG_DATA_HOME, systemd-run MemoryMax=6G; frames 12-88 s from
+  the COD1_HITCH log. Base: origin/main dc5a30a; native: 8b3f006; both
+  on x86recomp main 4735305. Three runs each, interleaved, idle machine,
+  repeatable to 0.01 ms:
+  - Mean frame: 2.85 -> 2.03 ms (-29%).
+  - p95: 3.7 -> 2.3 ms. p99: 3.8 -> 2.35 ms. Max: 4.4-13.0 -> 3.3 ms.
+  - Frames in the window: 26700 -> 37450.
+  - The same walk with turns and jumps (cg_showmiss 1, one run each):
+    2.25 -> 1.33 ms; no prediction misses on either.
+- Main thread, perf --call-graph dwarf: the collision traces 32.8% ->
+  6.6% (CM_TransformedBoxTrace 3.9%, CM_BoxTrace 2.4%, CM_Trace from the
+  server 0.3%); cgame's 0x3001EF70 35.2% -> 18.0%. GL draw
+  (DrawElements, 24.9%) leads now; next in the CM range is point
+  contents (0x41A730, 2.9%, still lifted).
+
 ### 2026-10-18: collision traces still lead the main thread
 - Profiled before replacing them (x86recomp main 4735305, x87 on host
   doubles; CoD1 main dc5a30a): the scripted training walk, uncapped,
