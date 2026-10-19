@@ -3,8 +3,9 @@
 ## XAnim evaluation (2026-10-19, branch xanim-native)
 CoDSP.exe's skeletal animation evaluation is native C++ (src/xanim.cpp),
 checked bit for bit against the lifted originals by ctest xanim_oracle:
-a DObj's bone poses from its anim tree, and its bone matrices from those
-poses, which the CPU skinning (src/skinning.cpp) reads.
+a DObj's bone poses from its anim tree, its bone matrices from those
+poses, which the CPU skinning (src/skinning.cpp) reads, and cgame's
+update of the tree's times and weights with the notes it passes.
 - Call structure (perf --call-graph dwarf on the training walk; all
   threads, inclusive): DObjCalcAnim 0x47CD80 3.95% (XAnimCalc 0x47BD40
   3.8%, of it the leaves 0x479C20 1.8%), DObjCalcSkel 0x4766E0 2.7%
@@ -29,6 +30,29 @@ poses, which the CPU skinning (src/skinning.cpp) reads.
   memory. Not reproduced: EAX, ECX, EDX and EFLAGS on return (every call
   site overwrites them, or returns to the syscall exits' `xor eax,eax`),
   the x87 status word, the dead stack below ESP.
+- The update (manifest `replace`): XAnimUpdate 0x47CC90 (ECX DObj, dt on
+  the stack; a cgame syscall, whose next case hands cgame the notes
+  queue) and everything under it natively: XAnimUpdateNode 0x47AC70
+  (state 0's weight blended to its goal over its goal time; a leaf's
+  time advanced by its xanim's frequency * rate * dt, wrapping with
+  cycles counted if it loops, else stopping at 1; a parent with flags &
+  3 advancing its children together at their mean frequency,
+  XAnimSyncFrequency 0x47A370, through XAnimUpdateSyncedChild 0x47AA80;
+  another parent passing dt * rate down), the notes (XAnimQueueNotes
+  0x47A7D0, XAnimQueueNote 0x47A750, XAnimNoteFrac 0x47A5E0,
+  XAnimFirstNote 0x47A580: a leaf's notes passed in the step, or the
+  end note at a cycle's end, into the queue at 0xA8F040 in order of
+  where they fall in the step), and the freeing of anims whose weights
+  in both states are 0 (XAnimSettle 0x47A480, XAnimFreeInfo 0x47A310,
+  the info pool's free list; the info's name released lifted, 0x45D530).
+  Kept: after a wrap, XAnimQueueNotes walks the notes from the first
+  again with a stride of 16 bytes (every other note) while comparing the
+  time 0x14 ahead; the step stored for the notes is its float, the time
+  advanced from its double; ties of frac queue after the earlier note.
+  The originals rewrite their own argument slots (dt, the notes flag),
+  which is below ESP once XAnimUpdate returns. Not replaced: the game's
+  update 0x47CCD0 (0x47BA90, 0x47B470, 0x47B6F0 with the script
+  notifies), 0.1% of the main thread.
 - Data (src/xanim.cpp has the layouts): the anim tree (anims of 8 bytes:
   child count, xanim or flags, first child; a u16 info index per anim),
   the info pool 0xA6D010 (0x44 each: two states of 0x1C with time,
@@ -61,19 +85,29 @@ poses, which the CPU skinning (src/skinning.cpp) reads.
   frame, at times 0, 1, just under 1 and between, cached maps current,
   stale or missing, masks of all or some bones, and floats now and then
   zeros, denormals, infinities, NaNs, huge or scaled down by up to 2^-40.
-  Each case runs DObjCalcAnim, DObjCalcSkel or both in turn. The three
-  lifted callees are stubs (tests/xanim_stubs.manifest) that log their
-  register and stack arguments and make deterministic maps; compared:
+  For the update: synchronised parents or not, looping xanims or not,
+  weights blending to their goals, notes, the info pool's free list, dt
+  0-0.2 s, and worlds of exact values (steps ending on whole numbers, dt
+  + 0.001 equal to a goal time, a weight blended to just under 1e-6);
+  times, rates and frequencies stay finite and small (a huge step never
+  ends in the original either). Each case runs DObjCalcAnim, DObjCalcSkel
+  or both in turn, or the update alone or before them. The four lifted
+  callees are stubs (tests/xanim_stubs.manifest) that log their register
+  and stack arguments and make deterministic maps; compared:
   every byte the case built (DObj, skeleton, cache, models, tree, xanims,
-  string table), the globals 0xA6D000-0xA6D010 and 0xA8F000-0xA8F680,
-  the stack arguments, the stub calls, ESP, EBX, ESI, EDI, EBP and the
-  x87 stack and control word. 20000 cases per ctest run (~17 s); 1M over
-  five more seeds: 0 mismatches.
-- Line coverage of src/xanim.cpp under it (with the captures below):
-  100% of lines, 98.7% of branches (llvm-cov). Not run: a zero map or
-  part-duplicates handle (the lifted callees never return one; the
-  original would fault on it) and the blend buffer's unwinding by a
-  guest longjmp.
+  string table; for an update the info pool), the globals 0xA6D000-
+  0xA6D010 and 0xA8F000-0xA8F680 (with the notes queue), the stack
+  arguments, the stub calls, ESP, EBX, ESI, EDI, EBP and the x87 stack
+  and control word. 20000 cases per ctest run (~17 s, 7923 updates);
+  1M over five more seeds (about 400000 updates): 0 mismatches.
+- Line coverage of src/xanim.cpp under it: 98.8% of lines, 97.5% of
+  branches (llvm-cov). Not run: a zero map or part-duplicates handle
+  (the lifted callees never return one; the original would fault on
+  it), the blend buffer's unwinding by a guest longjmp, and in the update
+  what cannot happen: a note found before the old time (XAnimFirstNote
+  finds none earlier), a note revisited after a wrap that the new time
+  has not reached, a goal weight still nonzero once XAnimSettle has set
+  the weight to it.
 - Mutations: 20 in src/xanim.cpp. 16 fail it (the float vs double frame,
   the fraction of a sparse key, the quaternion weight's rounding, a
   child weight not stored, the z-only rotation with no track, the
@@ -88,20 +122,35 @@ poses, which the CPU skinning (src/skinning.cpp) reads.
   (times stay in [0, 1]: the update loops or clamps them), and two
   summation orders of doubles later stored as floats (the quaternion
   length, a product's w), whose one-ulp differences do not survive the
-  float store in any case drawn.
+  float store in any case drawn. In the update, 18 more: 16 fail it (the
+  snap's > against >=, the 1e-6 test on the double, the blend's order,
+  wrapping at > 1, the time from the rounded step, notes kept at a zero
+  goal, the queue's order of ties, the stride after a wrap, the cycle of
+  a wrapped note, the first note at or after, the name release, a zero
+  frequency counted, settling every child, the end note's string, the
+  clamp at 1 (the native note walk then runs on), the pool's count). Two
+  cannot: notes queued before the weight blend (neither reads the
+  other's fields), and the synchronised parent's globals not set again
+  for its children (XAnimQueueNotes has just copied the same values
+  from them into the state).
 - Captures (-DCOD1_XANIM_CAPTURE=ON, COD1_XANIM_CAPTURE=file,
   COD1_XANIM_EVERY per entry, COD1_XANIM_MAX; tests/xanim_capture.cpp,
   format in tests/xanim_capture.h): everything the call reads (globals,
   DObj, skeleton, models, the tree as the call walks it: infos of every
   child, xanims, tracks and keys below the anims of nonzero weight, the
-  maps and part duplicates), what the three lifted callees did (served
-  back in order, their arguments checked), and the regions after the
-  game's call, which the lifted original must reproduce. Pass files with
-  COD1_XANIM_CAPTURES. The training walk (every 50th call of each entry)
-  and the walk looking around (every 37th): 9186 calls (4593 of each),
-  5793 blends, 12281 leaves (5637 interpolated, the others at their last
-  key), DObjs up to 115 bones; 0 mismatches, and the lifted originals
-  give the game's result for every call.
+  maps and part duplicates; for an update the whole tree with its infos,
+  the free list's head and the xanims' notes), what the lifted callees
+  did (served back in order, their arguments checked), and the regions
+  after the game's call, which the lifted original must reproduce. Pass
+  files with COD1_XANIM_CAPTURES. With the calculation only: the
+  training walk (every 50th call of each entry) and the walk looking
+  around (every 37th), 9186 calls (4593 of each), 5793 blends, 12281
+  leaves (5637 interpolated), DObjs up to 115 bones. With the update too
+  (the same walks, at most 7500 calls each): 9738 updates and 5262
+  calculations; the trees have hundreds of anims (about 200 KB a
+  record), and in training the client's anims queue no notes, so the
+  notes are the random cases' alone. 0 mismatches, and the lifted
+  originals give the game's result for every call.
 - Names and evidence (Ghidra plate comments): DObjCreate 0x476E00 fills
   the DObj and errors with "dobj for xmodel '%s' has more than %d bones"
   (127) and "Part '%s' not found in model '%s' or any of its
@@ -111,8 +160,10 @@ poses, which the CPU skinning (src/skinning.cpp) reads.
   descriptive names in that vocabulary (DObjCalcAnim, DObjCalcSkel,
   XAnimCalc, XAnimAddLeaf, XAnimAddPartsLerp8/16, XAnimAddPartsLast,
   XAnimFindKey8/16, XAnimClearPoses, QuatToAxis, QuatMultiplyLeft and
-  Right), from their behaviour and data, checked by the oracle. There is
-  no Quake 3 counterpart.
+  Right; XAnimUpdate, XAnimUpdateNode, XAnimUpdateSyncedChild,
+  XAnimSyncFrequency, XAnimSettle, XAnimFreeInfo, XAnimQueueNotes,
+  XAnimQueueNote, XAnimNoteFrac, XAnimFirstNote), from their behaviour
+  and data, checked by the oracle. There is no Quake 3 counterpart.
 - Training walk, before (main bc7cc8e) and after, same x86recomp (main
   98f6a37), three runs each interleaved, frames 12-88 s; "Run log",
   2026-10-19 (XAnim):
@@ -128,9 +179,13 @@ poses, which the CPU skinning (src/skinning.cpp) reads.
   NPCs are posed the same in both builds; 30-140 of the 786432 pixels
   differ by more than 24 levels per shot, from the animations' phase
   (frame times differ) and the compass.
-- Not done: the anim tree's time update (0x47CC90 -> 0x47AC70, 0x47AA80,
-  0x47A7D0 with the notes it queues by time, 0x47A370; 0x47CCD0 ->
-  0x47BA90, 0x47B470): 1.2-1.3% of the main thread, still lifted.
+- The update, before (71c1dda) and after, both on x86recomp main
+  ad1b16b, three runs each interleaved: mean frame 2.138, 2.133, 2.218
+  -> 2.181, 2.157, 2.208 ms, the same within the walk's noise (the
+  update was 0.9% of the main thread, ~0.02 ms). Main thread (perf):
+  the update 0.85% -> 0.28% (its tree walk 0.20%).
+- Not done: the game's update 0x47CCD0 (above), 0.1% of the main
+  thread.
 
 ## Player movement (2026-10-19, branch pmove-native)
 Pmove of gamex86.dll and of cgamex86.dll is one native C++ implementation
@@ -1329,6 +1384,11 @@ does with them:
   killed. Captures go to the project's captures/ now.
 - Frame captures: F12 (screenshotJPEG) from the test input at 12, 13.5,
   15, 17 and 18.5 s, a turn between the third and fourth.
+- The update (0x47CC90), later: the same walk, before 71c1dda and after,
+  both rebuilt on x86recomp main ad1b16b (Ctx's layout changed there:
+  objects built before and after it must not be mixed), each run under
+  `flock` on a lock shared with the renderer session's runs. Main-thread
+  shares as above. Captures with update records are about 1.5 GB each.
 
 ### 2026-10-19: native player movement, measured
 - Method: the scripted training walk, isolated XDG_DATA_HOME, windowed,
