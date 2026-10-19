@@ -38,6 +38,11 @@ replace 0041D870
 replace 0041A730
 replace 0041A820
 
+# XAnim evaluation: a DObj's bone poses from its anim tree and its bone
+# matrices (src/xanim.cpp).
+replace 0047CD80
+replace 004766E0
+
 # pk3 reads on the host's zlib: unzOpenCurrentFile, unzReadCurrentFile and
 # unzCloseCurrentFile (src/unzip.cpp).
 replace 0049E6D0

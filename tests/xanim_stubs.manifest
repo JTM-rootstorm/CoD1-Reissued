@@ -1,0 +1,5 @@
+# Added to manifest/CoDSP.manifest for xanim_oracle_test: the lifted
+# functions the XAnim evaluation calls, stubbed in tests/xanim_test.cpp.
+replace 00478FC0
+replace 0045D580
+replace 004761F0

@@ -32,7 +32,7 @@ if(TARGET cod1_lifted)
                  src/fov.cpp src/video_mode.cpp src/frame_pacing.cpp
                  src/screen2d.cpp
                  src/pmove_fixed.cpp src/pmove.cpp src/unzip.cpp
-                 src/zlib.cpp src/jpeg_idct.cpp src/crt.cpp
+                 src/zlib.cpp src/jpeg_idct.cpp src/crt.cpp src/xanim.cpp
                  $<TARGET_OBJECTS:cod1_lifted>)
   target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32 recomp_d3d7
                         recomp_opengl ZLIB::ZLIB)
@@ -75,6 +75,18 @@ if(TARGET cod1_lifted)
       "LINKER:--wrap=_ZN6recomp3gen10f_3001EC30ERNS_3CtxE"
       "LINKER:--wrap=_ZN6recomp3gen10f_3001ECC0ERNS_3CtxE")
   endif()
+  # Dev only: records XAnim evaluation calls for xanim_oracle
+  # (tests/xanim_capture.cpp).
+  option(COD1_XANIM_CAPTURE "record XAnim evaluation calls (COD1_XANIM_CAPTURE=file)" OFF)
+  if(COD1_XANIM_CAPTURE)
+    target_sources(cod1 PRIVATE tests/xanim_capture.cpp)
+    target_link_options(cod1 PRIVATE
+      "LINKER:--wrap=_ZN6recomp3gen10f_0047CD80ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_004766E0ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_00478FC0ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_0045D580ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_004761F0ERNS_3CtxE")
+  endif()
 endif()
 # The CPU skinning is bit-exact only without contraction into FMA, and is
 # per-vertex work: optimised in every build type. It reads guest memory
@@ -91,6 +103,10 @@ set_source_files_properties(src/cm_trace.cpp PROPERTIES COMPILE_OPTIONS
   "${_skinning_options};-fno-strict-aliasing")
 # The float IDCT likewise (x87 results in host doubles).
 set_source_files_properties(src/jpeg_idct.cpp PROPERTIES COMPILE_OPTIONS
+  "${_skinning_options};-fno-strict-aliasing")
+# The XAnim evaluation likewise (x87 results in host doubles, guest memory
+# overlays).
+set_source_files_properties(src/xanim.cpp PROPERTIES COMPILE_OPTIONS
   "${_skinning_options};-fno-strict-aliasing")
 # The pk3 reads overlay unzip's structures on guest memory.
 set_source_files_properties(src/unzip.cpp PROPERTIES COMPILE_OPTIONS
@@ -261,6 +277,36 @@ if(EXISTS "${COD1_GAME_EXE}")
     "${_skinning_options};-fno-strict-aliasing")
   file(GLOB _pk3s "${COD1_GAME_DIR}/Main/*.pk3")
   add_test(NAME jpeg_idct_oracle COMMAND jpeg_idct_oracle_test "${COD1_GAME_EXE}" ${_pk3s})
+endif()
+
+# The native XAnim evaluation (src/xanim.cpp) against the original
+# functions, lifted like skinning_oracle's, with the lifted functions they
+# call stubbed (tests/xanim_stubs.manifest): tests/xanim_test.cpp, on random
+# DObjs and anim trees, and on captured calls (tests/xanim_capture.cpp)
+# listed in COD1_XANIM_CAPTURES.
+if(EXISTS "${COD1_GAME_EXE}")
+  set(_dir "${CMAKE_CURRENT_BINARY_DIR}/xanim_oracle")
+  set(_gen "${_dir}/gen/gen_000.cpp" "${_dir}/gen/table.cpp")
+  set(_manifest "${_dir}/xanim_test.manifest")
+  add_custom_command(OUTPUT ${_gen}
+    COMMAND ${CMAKE_COMMAND} -E cat "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/xanim_stubs.manifest" > "${_manifest}"
+    COMMAND recomp_lift --exe "${COD1_GAME_EXE}"
+            --symbols "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
+            --manifest "${_manifest}"
+            --only 0047CD80,004766E0,0051CA3C,0051D2B0,0051D2C1,0052CDBF --insns-per-file 1000000 --out "${_dir}/gen"
+    DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/xanim_stubs.manifest"
+    COMMENT "Lifting the XAnim evaluation for xanim_oracle_test")
+  add_executable(xanim_oracle_test tests/xanim_test.cpp tests/xanim_native.cpp ${_gen})
+  target_include_directories(xanim_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_link_libraries(xanim_oracle_test PRIVATE recomp_x87 recomp_image)
+  set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
+    "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
+  set_source_files_properties(tests/xanim_native.cpp PROPERTIES COMPILE_OPTIONS
+    "${_skinning_options};-fno-strict-aliasing")
+  set(COD1_XANIM_CAPTURES "" CACHE STRING "captured XAnim calls for xanim_oracle (a list of files)")
+  add_test(NAME xanim_oracle COMMAND xanim_oracle_test "${COD1_GAME_EXE}" ${COD1_XANIM_CAPTURES})
 endif()
 
 # The native player movement (src/pmove.cpp) against the original Pmove of
