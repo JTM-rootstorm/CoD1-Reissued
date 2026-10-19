@@ -1,5 +1,120 @@
 # Findings
 
+## zlib on the host (2026-10-19, branch host-zlib-jpeg)
+CoDSP.exe links zlib 1.1.4 (inflate and deflate), unzip 0.15 and IJG
+libjpeg 6 statically. The zlib calls the engine makes now run on the
+host's zlib (find_package(ZLIB): the system's on Linux, the SDK's on
+macOS), checked against the lifted originals by ctest unzip_oracle and
+zlib_oracle. libjpeg stays lifted (below). Names and evidence: Ghidra
+plate comments (34 functions). Measurements: "Run log", 2026-10-19.
+- Identification: " deflate 1.1.4 Copyright 1995-2002 Jean-loup Gailly "
+  (0x537088), " inflate 1.1.4 Copyright 1995-2002 Mark Adler "
+  (0x5372FC), " unzip 0.15 Copyright 1998 Gilles Vollant " (0x536624);
+  ZLIB_VERSION "1.1.4" (0x54EEFC) and sizeof(z_stream) 0x38 passed to
+  inflateInit2_/deflateInit2_; crc_table 0x5373B0; deflate's
+  configuration_table 0x537338 (deflate_stored 0x498E00, deflate_fast
+  0x498FC0, deflate_slow 0x4992C0). libjpeg: the message table 0x535B68
+  holds JMSG_VERSION "6  2-Aug-95" and "Copyright (C) 1995, Thomas G.
+  Lane": IJG release 6, as in Quake 3 (jpeg_create_decompress without
+  version arguments).
+- Who calls zlib:
+  - pk3 reads: the file system through unzip (unzOpenCurrentFile
+    0x49E6D0, unzReadCurrentFile 0x49E7F0, unzCloseCurrentFile
+    0x49EAA0), which inflates raw deflate (-MAX_WBITS) with
+    Z_SYNC_FLUSH. The engine reads one field of unzip's read state
+    itself: total_out (FS_Seek, unztell inlined).
+  - Savegames: the EXE's handler for the game module's syscalls (not
+    a function in Ghidra, so both calls were missed) calls compress2
+    0x497D00 at level 1 (call at 0x44B2D3; gamex86's G_SaveGame, syscall
+    0xA0, "Compressed %lu bytes into %lu bytes", sizes the buffer as
+    sourceLen + 0.1% + 13, zlib's documented bound) and uncompress
+    0x49D8A0 (0x44B2EC; G_LoadGame). compress 0x497DA0 (level -1) and
+    deflateInit_ have no callers. A .svg is a 247-byte header and the
+    zlib stream.
+- Replaced (manifest `replace`):
+  - unzOpenCurrentFile, unzReadCurrentFile, unzCloseCurrentFile
+    (src/unzip.cpp). unzip's state stays in guest memory (unz_s, the
+    0x6C-byte read info and its 16 KB read buffer from the game's
+    malloc, refilled with the game's CRT fseek/fread); only the inflate
+    state is a host z_stream per open file, inflating from the read
+    buffer straight into the caller's buffer, with the host's crc32.
+    Exact for everything read back: return values, output, total_out,
+    crc32, the remaining sizes, unz_s. Not reproduced: where zlib 1.1.4
+    is between calls (it decodes ahead into its 32 KB window and so
+    consumes input earlier: next_in, avail_in, total_in, and when the
+    read buffer is refilled, pos_in_zipfile, rest_read_compressed), its
+    msg strings, and its allocations from the game's heap (zcalloc
+    0x49EBB0 -> 0x42A480). The lifted inflate is now reached only from
+    uncompress's fallback.
+  - compress2 and uncompress (src/zlib.cpp), with 1.1.4's contract (one
+    deflate or inflate with Z_FINISH, Z_BUF_ERROR when it does not
+    finish, *destLen written only on success), not the host's
+    compress2/uncompress (1.3's uncompress turns a truncated stream into
+    Z_DATA_ERROR and writes *destLen on errors). Where the host's result
+    is not 1.1.4's, the original runs: compress2 at levels 0, 2 and 5
+    (1.1.4 puts (level-1)>>1 in the header's FLEVEL, other bits than the
+    host at 2 and 5; level 0 also writes other stored blocks), and every
+    uncompress that fails (1.1.4 leaves other partial output, and
+    accepted a changed-byte stream the host rejects). uncompress
+    therefore inflates into a host buffer first.
+- Oracles (configure with -DCOD1_GAME_EXE and -DCOD1_GAME_DIR=<the
+  install>; the originals lifted with --only, their CRT calls stubbed via
+  tests/crt_stubs.manifest):
+  - unzip_oracle: every entry of the 22 pk3s (30160: 14894 deflated;
+    the 15266 stored ones are all directories) and a zip the test makes
+    (64 stored entries with data, the same deflated by the host at every
+    level), walked with the lifted unzOpen/unzGoToNextFile, each read
+    whole and once more, in random chunks of 1 B to 100 KB, and (up to
+    256 KB) half then reopened. 471678 calls, 2.4 GB: 0 mismatches,
+    36 s. Mutations caught: total_out, the stream-end return, crc32 of
+    stored data, pos_local_extrafield, the zero-length read. The read
+    buffer's refill size is not observable, by design.
+  - zlib_oracle: 400 generated buffers (empty to 1.1 MB) at every level,
+    at level 1 also with destinations short by one byte and by half, and
+    the contents of every pk3 entry up to 256 KB (28768) at level 1;
+    uncompress of each result into exact, larger and short destinations
+    and of corrupt copies (truncated, a byte changed, the Adler-32
+    changed). 217584 calls (117503 return errors): 0 mismatches, 98 s.
+    Without the fallbacks (generated inputs and pak8): levels 0, 2 and 5
+    differed in 400 of 400 cases each; failed uncompresses differed in
+    their partial output in 1033 of 18298 (corrupt and truncated
+    streams; short destinations and bad checksums matched), and one
+    changed-byte stream succeeded in 1.1.4 only.
+  - A real autosave (training.svg, 130391 bytes) recompressed by the
+    host's zlib 1.3.2 at level 1: byte-identical (30180 bytes).
+- ctest 25/25. The game boots to training with textures intact, writes
+  the autosave with the native compress2 and loads it with the native
+  uncompress ("Uncompressed 30046 bytes into 130419 bytes"). Loading it
+  then stops at "buffer overflow while restoring sound state: probably
+  due to an old or corrupt savegame" on the base build too (main
+  741c785): not a zlib problem.
+
+### JPEG decoding stays lifted
+- LoadJPG 0x4E23B0 (Quake 3's): ri.FS_ReadFile, libjpeg 6 with Quake
+  3's memory source (jpeg_stdio_src 0x50B9A0) and RGB_PIXELSIZE 4
+  (output_components 4; LoadJPG sets alpha 255), a "LoadJPG"-tagged
+  allocation; libjpeg errors are ri.Error(ERR_FATAL). Only the float
+  IDCT is compiled in: default_decompress_parms sets dct_method
+  JDCT_FLOAT, and jddctmgr's start_pass takes jpeg_idct_float 0x519140
+  for it and raises JERR_NOT_COMPILED for any other (progressive files
+  are JERR_NOT_COMPILED too). jpeg_idct_float is x87 code (CW 0x027F)
+  and converts with the CRT's float-to-integer helper 0x52E218.
+- libjpeg-turbo 3.1.4.1 against the lifted LoadJPG on all 211 pk3 JPEGs
+  (all three-component; a scratch harness, not committed): images
+  identical: JDCT_FLOAT 5 of 211, 13.4% of all pixels differ, at most by
+  3 (12.1% with its SIMD off, JSIMD_FORCENONE=1); JDCT_ISLOW 5, 12.9%,
+  max 3; JDCT_IFAST 2, 62.3%, max 29. jpeg-6's float IDCT computes in x87
+  precision and truncates before descaling; libjpeg-turbo's (6b/7
+  lineage) adds a rounding bias up front and runs in single precision.
+  So LoadJPG and libjpeg stay lifted, and JPEG screenshot encoding with
+  them (not tried).
+- It matters for load time: in the native build's training load,
+  LoadJPG is 13.7% of the main thread, jpeg_idct_float 12.5% inclusive
+  (its float-to-integer calls most of it). A native jpeg_idct_float that
+  keeps the x87 arithmetic and the CRT conversion exactly (as
+  src/x87_value.h does for the traces), checked against the lifted one
+  on every pk3 JPEG, would recover most of that.
+
 ## Collision traces (2026-10-18, branch collision-traces)
 CoDSP.exe's trace code is native C++ (src/cm_trace.cpp), checked bit for
 bit against the lifted originals by ctest cm_trace_oracle. Profile that
@@ -852,6 +967,31 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-19: pk3 reads and savegames on host zlib, measured
+- Level load: training from `+map training`, "------ Server
+  Initialization ------" to the last loading frame (over 20 ms) before
+  "Click to Start the Mission", from timestamped console lines;
+  uncapped, windowed, isolated XDG_DATA_HOME, systemd-run MemoryMax=6G,
+  five runs each, interleaved. Base main 741c785, native this branch,
+  both on x86recomp main 4735305:
+  - Load: 2.181 s (2.178-2.184) -> 1.842 s (1.836-1.845), -15.5%.
+  - CL_InitCGame: 1.02 -> 0.81 s. Launch to "Server Initialization":
+    1.26-1.33 -> 1.20-1.24 s.
+  - Console output otherwise identical.
+- Hitches: the mission start's first frame 13.7-14.0 ms on both, the
+  autosave frame 5.2 ms on both. A 76 s walk in training (forward held
+  with turns): mean frame 1.94 ms on both, max 8.3 / 7.7 ms, no frame
+  over 16 ms on either: no in-level loading hitches.
+- Main thread over the native load (perf --call-graph dwarf, 999 Hz),
+  inclusive: unzReadCurrentFile 22.5% (host inflate 20.5%, crc32 1.7%);
+  FS_LoadZipFile 0x4237A0 14.7% (the pk3 directory scan that
+  FS_Startup repeats at each map load, about 0.29 s: unzip's central
+  directory read field by field through the CRT's fread, 10.5%);
+  LoadJPG 13.7% (jpeg_idct_float 12.5%); the file-name hash 0x421980
+  8.4%, through the CRT's locale-aware tolower 0x51B3DD (10.2% with
+  other callers), which asks __getptd for the thread's locale each
+  time.
+
 ### 2026-10-19: native collision traces, measured
 - The scripted training walk ("Run log" 2026-10-18), uncapped, windowed,
   isolated XDG_DATA_HOME, systemd-run MemoryMax=6G; frames 12-88 s from
