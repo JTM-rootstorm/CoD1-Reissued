@@ -1,5 +1,50 @@
 # Findings
 
+## The pk3 directory scan (2026-10-19, branch fs-scan-hash)
+With zlib and the IDCT native, the largest remaining blocks of training's
+level load were in the file system: FS_LoadZipFile 0x4237A0 (14.7% of the
+main thread; FS_Startup rescans all 22 pk3s, 30160 entries, at every map
+load) and the file-name hash FS_HashFileName 0x421980 (8.4%). Both came
+down to the CRT: unzip reads every field of a central directory entry
+with an fread of its own (17 for the fixed 46 bytes, each with the FILE
+lock and __getptd), and the hash lowers every character with the CRT's
+tolower, which asks __getptd (TlsGetValue) for the thread's locale each
+time (tolower 10.2% in all). Two replacements (manifest `replace`):
+- unzlocal_GetCurrentFileInfoInternal 0x49DE20 (src/unzip.cpp): the same
+  fseek, then one fread of the fixed part where the original makes 17,
+  then the name, extra field and comment as the original reads them. The
+  FILE is left as the original leaves it (the same bytes in order through
+  the same buffer). The original's quirks are kept: shorts sign-extended
+  (LittleShort returns a short), sizes compared unsigned, nothing copied
+  out on an error. It hands over to the original, which redoes the fseek,
+  when that fseek fails (the original then reads on without the
+  signature), when the fixed part is short (it keeps stale values), and
+  when LittleShort/LittleLong are not the no-swap functions.
+- tolower 0x51B3DD (src/crt.cpp): 'A'-'Z' lowered, everything else as is,
+  which is what the original does in the C locale. setlocale is linked;
+  it is the only code that replaces __ptlocinfo 0x563404 (nothing writes
+  to the initial locale in place). While __ptlocinfo is still
+  __initiallocinfo 0x5633B0 with no LC_CTYPE handle, no thread can have
+  another locale, so the result is the original's; otherwise the
+  original runs.
+- Oracles: unzip_oracle compares the directory read for every entry of
+  every pk3 and of the generated zip (now with extra fields, comments and
+  random 16-bit attributes), as the walk and FS_LoadZipFile call it and
+  with random buffer sizes, and the hand-over cases (no signature, a
+  short read, past the end, a failing fseek, a file that ends inside an
+  entry): the result, every buffer byte, where the FILE is left and the
+  registers: 90951 directory reads (562654 calls in all), 0 mismatches.
+  crt_oracle runs tolower over every int from -70000 to 70000 and 1000000
+  random ones, in the C locale and another: 2280002 calls, 0
+  mismatches. Mutations caught: the sign extension, the month, the NUL
+  after a short name, the extra-field length and seek, the signature,
+  the short-read hand-over, the 'A'-'Z' range. ctest 27/27.
+- Result (Run log 2026-10-19): training's load 1.619 -> 1.277 s, and
+  from launch to the map's start 1.19 -> 0.96 s. What is left of the
+  load is mostly inflate itself (host zlib, 31% of the main thread);
+  the directory scan is 5.8% (each entry's fseek still refills the
+  CRT's buffer, as in the original), tolower 0.2%.
+
 ## zlib on the host (2026-10-19, branch host-zlib-jpeg)
 CoDSP.exe links zlib 1.1.4 (inflate and deflate), unzip 0.15 and IJG
 libjpeg 6 statically. The zlib calls the engine makes now run on the
@@ -989,6 +1034,20 @@ does with them:
 - Rooms and wet levels: see the digital reverb run-log entry.
 
 ## Run log
+### 2026-10-19: pk3 directory scan and tolower native, measured
+- Training's level load as in the entries below, five runs each,
+  interleaved, against the jpeg-idct-float build (7a4774e; another
+  session's single-threaded test was running at times): 1.619 s
+  (1.614-1.623) -> 1.277 s (1.275-1.279), -21%. Launch to "Server
+  Initialization": 1.18-1.20 -> 0.95-0.98 s. CL_InitCGame 0.62 ->
+  0.57 s. Console output identical apart from times.
+- Since main 741c785 (zlib, the IDCT, the directory scan and tolower):
+  training's load 2.18 -> 1.28 s.
+- Main thread over the load (perf --call-graph dwarf): unzReadCurrentFile
+  34.3% (inflate 30.9%, crc32 3.1%), FS_LoadZipFile 5.8% (the directory
+  read 5.2%), LoadJPG 2.1% (jpeg_idct_float 1.0%), FS_HashFileName
+  1.2%, tolower 0.2%.
+
 ### 2026-10-19: jpeg_idct_float native, measured
 - Training's level load, as in the zlib entry below, five runs each,
   interleaved. Another session's single-threaded test was running; the
