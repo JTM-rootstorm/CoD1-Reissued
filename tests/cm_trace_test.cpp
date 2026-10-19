@@ -1,15 +1,16 @@
-// The native collision traces (src/cm_trace.cpp) against the original
-// functions, lifted from the EXE at build time with `recomp_lift --only`
-// (CMakeLists.txt) and run on x86recomp's exact x87 model (SoftFloat, not
-// its host-double runs). CoDSP.exe is mapped as the game maps it, for its
-// constants and globals. Each case runs CM_BoxTrace, CM_TransformedBoxTrace,
-// CM_Trace or 0x41D3B0 through the lifted original and the native code from
-// the same guest memory, and both must leave the same bytes in the whole
-// clip map (checkcounts, the temporary box model), the clip map's globals,
-// the results and the arguments, and the same ESP, EBX, ESI, EDI, EBP and
-// x87 stack (top, empty registers, control word). Not compared: EAX, ECX,
-// EDX, EFLAGS, the x87 status word and the stack below the return address
-// (src/cm_trace.cpp).
+// The native collision traces and point contents (src/cm_trace.cpp)
+// against the original functions, lifted from the EXE at build time with
+// `recomp_lift --only` (CMakeLists.txt) and run on x86recomp's exact x87
+// model (SoftFloat, not its host-double runs). CoDSP.exe is mapped as the
+// game maps it, for its constants and globals. Each case runs CM_BoxTrace,
+// CM_TransformedBoxTrace, CM_Trace, 0x41D3B0 or point contents (0x41A730,
+// 0x41A820) through the lifted original and the native code from the same
+// guest memory, and both must leave the same bytes in the whole clip map
+// (checkcounts, the temporary box model), the clip map's globals, the
+// results and the arguments, and the same ESP, EBX, ESI, EDI, EBP and x87
+// stack (top, empty registers, control word), and point contents the same
+// EAX. Not compared: EAX of a trace, ECX, EDX, EFLAGS, the x87 status word
+// and the stack below the return address (src/cm_trace.cpp).
 //
 //   cm_trace_test EXE [CAPTURE...]
 //
@@ -18,7 +19,8 @@
 // are terrain (height fields with shared vertices and edges) or patch
 // collides (random facets), inline models and the temporary box model;
 // traces with points, boxes, capsules and spheres, rotations, positions
-// (no move), every entry and its register arguments, and coordinates that
+// (no move), points in and around brushes in the world and in models,
+// every entry and its register arguments, and coordinates that
 // are now and then zeros, denormals, infinities, NaNs or huge. Captures
 // (tests/cm_trace_capture.h) add the game's own calls, on its clip map.
 
@@ -46,16 +48,22 @@ void f_0041CD60_lifted(Ctx& c);
 void f_0041D380_lifted(Ctx& c);
 void f_0041D3B0_lifted(Ctx& c);
 void f_0041D870_lifted(Ctx& c);
+void f_0041A730_lifted(Ctx& c);
+void f_0041A820_lifted(Ctx& c);
 // The native code (tests/cm_trace_native.cpp renames its entries)...
 void n_0041CD60(Ctx& c);
 void n_0041D380(Ctx& c);
 void n_0041D3B0(Ctx& c);
 void n_0041D870(Ctx& c);
+void n_0041A730(Ctx& c);
+void n_0041A820(Ctx& c);
 // ...and the lifted originals call each other, not it.
 void f_0041CD60(Ctx& c) { f_0041CD60_lifted(c); }
 void f_0041D380(Ctx& c) { f_0041D380_lifted(c); }
 void f_0041D3B0(Ctx& c) { f_0041D3B0_lifted(c); }
 void f_0041D870(Ctx& c) { f_0041D870_lifted(c); }
+void f_0041A730(Ctx& c) { f_0041A730_lifted(c); }
+void f_0041A820(Ctx& c) { f_0041A820_lifted(c); }
 // unzCloseCurrentFile, native in the game (src/unzip.cpp): here only the
 // lifted error paths reach it.
 void f_0049EAA0_lifted(Ctx& c);
@@ -176,7 +184,8 @@ struct Window {
 };
 
 struct Stats {
-  int cases = 0, failures = 0, by_fn[4] = {}, hits = 0, startsolid = 0, nan = 0;
+  int cases = 0, failures = 0, by_fn[6] = {}, hits = 0, startsolid = 0, nan = 0;
+  int contents = 0;  // point contents calls with some
   int game = 0, game_differs = 0;  // captured calls with the game's result
 };
 
@@ -196,10 +205,16 @@ void Load(const std::vector<Window>& w, const std::vector<uint8_t>& in) {
 }
 
 int FnIndex(uint32_t fn) {
-  return fn == kTrace ? 0 : fn == kBoxTrace ? 1 : fn == kTransformed ? 2 : 3;
+  return fn == kTrace                      ? 0
+         : fn == kBoxTrace                 ? 1
+         : fn == kTransformed              ? 2
+         : fn == kTransformedBoxTrace      ? 3
+         : fn == kPointContents            ? 4
+                                           : 5;
 }
 const char* FnName(uint32_t fn) {
-  static const char* names[] = {"CM_Trace", "CM_BoxTrace", "0x41D3B0", "CM_TransformedBoxTrace"};
+  static const char* names[] = {"CM_Trace", "CM_BoxTrace", "0x41D3B0", "CM_TransformedBoxTrace",
+                                "0x41A730", "0x41A820"};
   return names[FnIndex(fn)];
 }
 
@@ -226,8 +241,9 @@ Ctx NewCtx(std::mt19937& g, const Call& k, uint32_t esp) {
 }
 
 // Runs one call through the lifted original and the native code from the
-// same memory and compares. w: everything the call may write.
-void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const char* what) {
+// same memory and compares. w: everything the call may write. Returns the
+// original's EAX.
+uint32_t Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const char* what) {
   const uint32_t esp = kStack + kStackSize - 0x100;
   for (int i = 0; i < kArgs; i++) Wr(esp + 4 + i * 4, k.args[i]);
   Wr(esp, 0xDEAD0000);
@@ -239,9 +255,11 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
 
   using Fn = void (*)(Ctx&);
   static const Fn lifted[] = {recomp::gen::f_0041CD60_lifted, recomp::gen::f_0041D380_lifted,
-                              recomp::gen::f_0041D3B0_lifted, recomp::gen::f_0041D870_lifted};
+                              recomp::gen::f_0041D3B0_lifted, recomp::gen::f_0041D870_lifted,
+                              recomp::gen::f_0041A730_lifted, recomp::gen::f_0041A820_lifted};
   static const Fn native[] = {recomp::gen::n_0041CD60, recomp::gen::n_0041D380,
-                              recomp::gen::n_0041D3B0, recomp::gen::n_0041D870};
+                              recomp::gen::n_0041D3B0, recomp::gen::n_0041D870,
+                              recomp::gen::n_0041A730, recomp::gen::n_0041A820};
   Ctx cl = c0;
   lifted[FnIndex(k.fn)](cl);
   const std::vector<uint8_t> after = Save(w);
@@ -252,18 +270,23 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
 
   s.cases++;
   s.by_fn[FnIndex(k.fn)]++;
-  const float frac = RdF(k.results);
-  s.hits += frac < 1.0f;
-  s.startsolid += g_mem.read<uint8_t>(k.results + 0x2F) != 0;
-  s.nan += frac != frac;
+  const bool contents = FnIndex(k.fn) >= 4;
+  if (contents) {
+    s.contents += cl.eax != 0;
+  } else {
+    const float frac = RdF(k.results);
+    s.hits += frac < 1.0f;
+    s.startsolid += g_mem.read<uint8_t>(k.results + 0x2F) != 0;
+    s.nan += frac != frac;
+  }
   bool ok = cn.esp == cl.esp && cn.ebp == cl.ebp && cn.ebx == cl.ebx && cn.esi == cl.esi &&
             cn.edi == cl.edi && cn.fpu.top == cl.fpu.top && cn.fpu.empty == cl.fpu.empty &&
-            cn.fpu.cw == cl.fpu.cw;
+            cn.fpu.cw == cl.fpu.cw && (!contents || cn.eax == cl.eax);
   if (!ok && s.failures < 20)
     std::printf("%s %s: registers differ (esp %08X/%08X ebx %08X/%08X esi %08X/%08X edi "
-                "%08X/%08X ebp %08X/%08X top %d/%d)\n",
+                "%08X/%08X ebp %08X/%08X top %d/%d eax %08X/%08X)\n",
                 what, FnName(k.fn), cl.esp, cn.esp, cl.ebx, cn.ebx, cl.esi, cn.esi, cl.edi,
-                cn.edi, cl.ebp, cn.ebp, cl.fpu.top, cn.fpu.top);
+                cn.edi, cl.ebp, cn.ebp, cl.fpu.top, cn.fpu.top, cl.eax, cn.eax);
   size_t at = 0;
   for (const Window& x : w) {
     for (uint32_t i = 0; i < x.size; i++)
@@ -285,6 +308,7 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   if (!ok) s.failures++;
   // Keep the original's result, the next case's starting state.
   Load(w, after);
+  return cl.eax;
 }
 
 // ---- random clip maps --------------------------------------------------------
@@ -354,7 +378,7 @@ void WrV(uint32_t va, V3 v) {
 struct Map {
   float world;          // half size
   bool integral;        // brush bounds, plane distances and terrain on whole units
-  uint32_t numBrushes = 0, numPatches = 0, numShaders = 0, numModels = 0;
+  uint32_t numBrushes = 0, numPatches = 0, numShaders = 0, numModels = 0, numNodes = 0;
   uint32_t leafBrushes = 0, leafSurfaces = 0;  // array VAs
   std::vector<uint32_t> planes;                // all VAs, for side planes
 };
@@ -647,6 +671,7 @@ void NewMap(std::mt19937& g, Map& m, uint32_t special) {
   };
   build(build, 0, numLeafs);
   Wr(kNodes, nodes);
+  m.numNodes = numNodes;
 
   const uint32_t cvar = a.Alloc(0x40);
   Wr(cvar + 0x20, g() % 8 == 0);
@@ -885,6 +910,47 @@ void RandomCase(std::mt19937& g, const Map& m, uint32_t special, Stats& s) {
   Run(k, {{kArena, a.top - kArena}}, g, s, "random");
 }
 
+// Point contents at a point near the model's brushes (or anywhere), in the
+// world or a model's frame.
+void PointCase(std::mt19937& g, const Map& m, uint32_t special, Stats& s, V3 p, int32_t model,
+               const char* what) {
+  Arena a;
+  a.top = ArenaTop();
+  Call k{};
+  k.fn = g() % 2 ? kPointContents : kTransformedPointContents;
+  const bool integral = g() % 3 == 0;
+  if (integral) p = {std::round(p.x), std::round(p.y), std::round(p.z)};
+  if (model == 0 && m.numNodes && g() % 4 == 0) {
+    // On a node's axial plane.
+    const uint32_t plane = Rd(Rd(kNodes) + (g() % m.numNodes) * 8);
+    const uint8_t type = g_mem.read<uint8_t>(plane + 0x10);
+    if (type < 3) (&p.x)[type] = RdF(plane + 0xC);
+  }
+  k.ecx = NewVec(a, g, p, special);
+  if (k.fn == kPointContents) {
+    k.eax = uint32_t(model);
+  } else {
+    V3 o = g() % 2 ? V3{0, 0, 0} : RandomPoint(g, m.world);
+    if (integral) o = {std::round(o.x), std::round(o.y), std::round(o.z)};
+    k.eax = NewVec(a, g, o, special);
+    const uint32_t which = g() % 4;
+    V3 an{0, 0, 0};
+    if (which == 1) an = {0, Uniform(g, -360, 360), 0};
+    if (which >= 2) an = {Uniform(g, -360, 360), Uniform(g, -360, 360), Uniform(g, -360, 360)};
+    k.edx = NewVec(a, g, an, special);
+    k.args[0] = uint32_t(model);
+  }
+  Run(k, {{kArena, a.top - kArena}}, g, s, what);
+}
+
+void RandomPointCase(std::mt19937& g, const Map& m, uint32_t special, Stats& s) {
+  const uint32_t mp = g() % 16;
+  int32_t model = mp < 9 ? 0 : mp < 11 ? 0x1FE : mp < 12 ? 0x1FF : 0;
+  if (mp >= 12 && m.numModels > 1) model = int32_t(1 + g() % (m.numModels - 1));
+  const V3 p = g() % 5 < 4 ? Near(g, m, model) : RandomPoint(g, m.world);
+  PointCase(g, m, special, s, p, model, "point");
+}
+
 // ---- captures ------------------------------------------------------------------
 
 bool ReadRegions(FILE* f, std::vector<Window>* out) {
@@ -924,10 +990,11 @@ bool RunCaptures(const char* path, std::mt19937& g, Stats& s) {
       k.eax = head[1];
       k.ecx = head[2];
       k.edx = head[3];
+      const bool contents = k.fn == kPointContents || k.fn == kTransformedPointContents;
       k.results = k.fn == kBoxTrace || k.fn == kTransformedBoxTrace ? k.eax : k.args[0];
       std::vector<Window> w = map;
       if (!ReadRegions(f, &w)) return false;
-      Run(k, w, g, s, path);
+      const uint32_t eax = Run(k, w, g, s, path);
       calls++;
       uint8_t game[0x30];
       if (std::fread(&tag, 4, 1, f) != 1 || tag != kResult || std::fread(game, 1, 0x30, f) != 0x30)
@@ -935,7 +1002,7 @@ bool RunCaptures(const char* path, std::mt19937& g, Stats& s) {
       // The lifted original, on the recorded clip map, gives the game's
       // result: the record holds all the call reads.
       s.game++;
-      if (std::memcmp(game, g_mem.ptr(k.results), 0x30)) {
+      if (contents ? std::memcmp(game, &eax, 4) : std::memcmp(game, g_mem.ptr(k.results), 0x30)) {
         if (s.game_differs++ < 10)
           std::printf("%s: call %d: the lifted result differs from the game's\n", path, calls);
       }
@@ -981,14 +1048,15 @@ int main(int argc, char** argv) {
     NewMap(g, m, special);
     for (int i = 0; i < 1000; i++)
       if (i % 8 || !GrazeCase(g, m, s)) RandomCase(g, m, special, s);
+    for (int i = 0; i < 300; i++) RandomPointCase(g, m, special, s);
   }
   const int random = s.cases;
   for (int i = 2; i < argc; i++)
     if (!RunCaptures(argv[i], g, s)) return 1;
   std::printf("%d random + %d captured calls (CM_Trace %d, CM_BoxTrace %d, 0x41D3B0 %d, "
-              "CM_TransformedBoxTrace %d; %d hits, %d start solid, %d NaN fractions): "
-              "%d mismatched\n",
-              random, s.cases - random, s.by_fn[0], s.by_fn[1], s.by_fn[2], s.by_fn[3], s.hits,
-              s.startsolid, s.nan, s.failures);
+              "CM_TransformedBoxTrace %d, 0x41A730 %d, 0x41A820 %d; %d hits, %d start solid, "
+              "%d NaN fractions, %d points in some contents): %d mismatched\n",
+              random, s.cases - random, s.by_fn[0], s.by_fn[1], s.by_fn[2], s.by_fn[3],
+              s.by_fn[4], s.by_fn[5], s.hits, s.startsolid, s.nan, s.contents, s.failures);
   return s.failures || s.game_differs ? 1 : 0;
 }

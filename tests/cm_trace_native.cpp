@@ -4,4 +4,6 @@
 #define f_0041D380 n_0041D380
 #define f_0041D3B0 n_0041D3B0
 #define f_0041D870 n_0041D870
+#define f_0041A730 n_0041A730
+#define f_0041A820 n_0041A820
 #include "../src/cm_trace.cpp"

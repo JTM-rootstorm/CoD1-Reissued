@@ -29,11 +29,14 @@ resume 0051CAB1
 replace 00406DA0
 
 # Collision traces: CM_Trace, CM_BoxTrace, the body of
-# CM_TransformedBoxTrace and CM_TransformedBoxTrace (src/cm_trace.cpp).
+# CM_TransformedBoxTrace and CM_TransformedBoxTrace, and point contents
+# (src/cm_trace.cpp).
 replace 0041CD60
 replace 0041D380
 replace 0041D3B0
 replace 0041D870
+replace 0041A730
+replace 0041A820
 
 # pk3 reads on the host's zlib: unzOpenCurrentFile, unzReadCurrentFile and
 # unzCloseCurrentFile (src/unzip.cpp).

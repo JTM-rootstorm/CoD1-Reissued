@@ -1,5 +1,5 @@
 // Dev build only (-DCOD1_CM_CAPTURE=ON): records collision traces for
-// tests/cm_trace_test.cpp. Linked with --wrap for the four entry points
+// tests/cm_trace_test.cpp. Linked with --wrap for the six entry points
 // (src/cm_trace.cpp), so every call from lifted code reaches the wrappers
 // below, which append records (tests/cm_trace_capture.h) to the file named
 // by COD1_CM_CAPTURE and call the native function. The clip map is
@@ -154,7 +154,7 @@ void WriteMap(FILE* out) {
 }
 
 FILE* g_out = nullptr;
-uint32_t g_results = 0;  // of the call being recorded
+uint32_t g_results = 0;  // of the call being recorded (1: point contents)
 
 void Record(Ctx& c, uint32_t fn) {
   static FILE* out = [] {
@@ -173,7 +173,9 @@ void Record(Ctx& c, uint32_t fn) {
   g_results = 0;
   if (!out || calls++ % every || records >= max) return;
   g_out = out;
-  g_results = fn == kBoxTrace || fn == kTransformedBoxTrace ? c.eax : Rd(c.esp + 4);
+  g_results = fn == kPointContents || fn == kTransformedPointContents ? 1
+              : fn == kBoxTrace || fn == kTransformedBoxTrace          ? c.eax
+                                                                       : Rd(c.esp + 4);
   if (Rd(kNodes) != nodes) {
     nodes = Rd(kNodes);
     WriteMap(out);
@@ -204,11 +206,17 @@ void Record(Ctx& c, uint32_t fn) {
     vec(args[1]);
     vec(args[2]);
     vec(args[5]);
-  } else {
+  } else if (fn == kTransformedBoxTrace) {
     r.Add(c.eax, 0x30);
     vec(c.edx);
     for (int i = 0; i < 4; i++) vec(args[i]);
     vec(args[6]);
+  } else {
+    vec(c.ecx);
+    if (fn == kTransformedPointContents) {
+      vec(c.eax);
+      vec(c.edx);
+    }
   }
   const uint32_t head[5] = {kCall, fn, c.eax, c.ecx, c.edx};
   std::fwrite(head, 4, 5, out);
@@ -217,11 +225,16 @@ void Record(Ctx& c, uint32_t fn) {
 }
 
 // The game's result of the recorded call.
-void Result() {
+void Result(const Ctx& c) {
   if (!g_results) return;
   const uint32_t tag = kResult;
   std::fwrite(&tag, 4, 1, g_out);
-  std::fwrite(g_guest_base + g_results, 1, 0x30, g_out);
+  if (g_results == 1) {
+    const uint32_t contents[12] = {c.eax};
+    std::fwrite(contents, 4, 12, g_out);
+  } else {
+    std::fwrite(g_guest_base + g_results, 1, 0x30, g_out);
+  }
   std::fflush(g_out);
   g_results = 0;
 }
@@ -233,25 +246,37 @@ void __real_f_0041CD60(Ctx& c) asm("__real__ZN6recomp3gen10f_0041CD60ERNS_3CtxE"
 void __real_f_0041D380(Ctx& c) asm("__real__ZN6recomp3gen10f_0041D380ERNS_3CtxE");
 void __real_f_0041D3B0(Ctx& c) asm("__real__ZN6recomp3gen10f_0041D3B0ERNS_3CtxE");
 void __real_f_0041D870(Ctx& c) asm("__real__ZN6recomp3gen10f_0041D870ERNS_3CtxE");
+void __real_f_0041A730(Ctx& c) asm("__real__ZN6recomp3gen10f_0041A730ERNS_3CtxE");
+void __real_f_0041A820(Ctx& c) asm("__real__ZN6recomp3gen10f_0041A820ERNS_3CtxE");
 }  // namespace recomp::gen
 
 extern "C" void __wrap__ZN6recomp3gen10f_0041CD60ERNS_3CtxE(Ctx& c) {
   Record(c, kTrace);
   recomp::gen::__real_f_0041CD60(c);
-  Result();
+  Result(c);
 }
 extern "C" void __wrap__ZN6recomp3gen10f_0041D380ERNS_3CtxE(Ctx& c) {
   Record(c, kBoxTrace);
   recomp::gen::__real_f_0041D380(c);
-  Result();
+  Result(c);
 }
 extern "C" void __wrap__ZN6recomp3gen10f_0041D3B0ERNS_3CtxE(Ctx& c) {
   Record(c, kTransformed);
   recomp::gen::__real_f_0041D3B0(c);
-  Result();
+  Result(c);
 }
 extern "C" void __wrap__ZN6recomp3gen10f_0041D870ERNS_3CtxE(Ctx& c) {
   Record(c, kTransformedBoxTrace);
   recomp::gen::__real_f_0041D870(c);
-  Result();
+  Result(c);
+}
+extern "C" void __wrap__ZN6recomp3gen10f_0041A730ERNS_3CtxE(Ctx& c) {
+  Record(c, kPointContents);
+  recomp::gen::__real_f_0041A730(c);
+  Result(c);
+}
+extern "C" void __wrap__ZN6recomp3gen10f_0041A820ERNS_3CtxE(Ctx& c) {
+  Record(c, kTransformedPointContents);
+  recomp::gen::__real_f_0041A820(c);
+  Result(c);
 }

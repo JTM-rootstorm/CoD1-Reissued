@@ -46,8 +46,8 @@ if(TARGET cod1_lifted)
       "LINKER:--wrap=_ZN6recomp3gen10f_005070E0ERNS_3CtxE"
       "LINKER:--wrap=_ZN6recomp3gen10f_00507D20ERNS_3CtxE")
   endif()
-  # Dev only: records collision traces and the clip map for cm_trace_oracle
-  # (tests/cm_trace_capture.cpp).
+  # Dev only: records collision traces, point contents and the clip map for
+  # cm_trace_oracle (tests/cm_trace_capture.cpp).
   option(COD1_CM_CAPTURE "record collision traces (COD1_CM_CAPTURE=file)" OFF)
   if(COD1_CM_CAPTURE)
     target_sources(cod1 PRIVATE tests/cm_trace_capture.cpp)
@@ -55,7 +55,9 @@ if(TARGET cod1_lifted)
       "LINKER:--wrap=_ZN6recomp3gen10f_0041CD60ERNS_3CtxE"
       "LINKER:--wrap=_ZN6recomp3gen10f_0041D380ERNS_3CtxE"
       "LINKER:--wrap=_ZN6recomp3gen10f_0041D3B0ERNS_3CtxE"
-      "LINKER:--wrap=_ZN6recomp3gen10f_0041D870ERNS_3CtxE")
+      "LINKER:--wrap=_ZN6recomp3gen10f_0041D870ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_0041A730ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_0041A820ERNS_3CtxE")
   endif()
 endif()
 # The CPU skinning is bit-exact only without contraction into FMA, and is
@@ -123,7 +125,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     COMMAND recomp_lift --exe "${COD1_GAME_EXE}"
             --symbols "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
             --manifest "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
-            --only 0041CD60,0041D380,0041D3B0,0041D870,0041A4D0,00429888,004298BB,004298EE,00429921,00429954,00429987,004299B7,004299E7,0051CA3C,0051D2B0,0051D2C1,0052A7C2,0052CDBF --insns-per-file 1000000 --out "${_dir}/gen"
+            --only 0041CD60,0041D380,0041D3B0,0041D870,0041A730,0041A820,0041A4D0,00429888,004298BB,004298EE,00429921,00429954,00429987,004299B7,004299E7,0051CA3C,0051D2B0,0051D2C1,0052A7C2,0052CDBF --insns-per-file 1000000 --out "${_dir}/gen"
     DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
     COMMENT "Lifting the collision traces for cm_trace_oracle_test")
   add_executable(cm_trace_oracle_test tests/cm_trace_test.cpp tests/cm_trace_native.cpp ${_gen})

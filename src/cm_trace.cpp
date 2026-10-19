@@ -1,6 +1,7 @@
 // Collision model traces: CM_BoxTrace (0x41D380), CM_TransformedBoxTrace
 // (0x41D870) and the transformed body 0x41D3B0, CM_Trace (0x41CD60) and
-// the trace code under them, read from the clip map in guest memory.
+// the trace code under them, and point contents (0x41A730, 0x41A820), read
+// from the clip map in guest memory.
 // Replacements of lifted functions named with `replace` in
 // manifest/CoDSP.manifest; FINDINGS.md "Collision traces". Names and
 // evidence are in the Ghidra plate comments.
@@ -26,6 +27,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <exception>
 
 #include "runtime/lifted.h"
 #include "x87_value.h"
@@ -224,12 +226,16 @@ St Normalize(Ctx& c, const F32* in, F32* out, uint32_t ret) {
   return PopSt0(c);
 }
 
-// The original's locals, at the same place below the caller's ESP.
+// The original's locals, at the same place below the caller's ESP. A guest
+// longjmp (the error exit) unwinding through it has set ESP already, to its
+// setjmp's frame above this one.
 struct GuestFrame {
   Ctx& c;
   uint32_t esp;
   GuestFrame(Ctx& c, uint32_t size) : c(c), esp(c.esp) { c.esp -= size; }
-  ~GuestFrame() { c.esp = esp; }
+  ~GuestFrame() {
+    if (c.esp <= esp) c.esp = esp;
+  }
   template <typename T>
   T& at(uint32_t off) {
     return At<T>(c.esp + off);
@@ -1471,13 +1477,105 @@ void TransformedTrace(Ctx& c, uint32_t minsVa, uint32_t maxsVa, uint32_t anglesV
   At<Trace>(results) = trace;
 }
 
+// ---- point contents -----------------------------------------------------
+
+// 0x41A730 (ECX p, EAX model): the contents of the brushes of the model's
+// leaf, or of the world's leaf at p (model 0), that hold p. Guest ESP as
+// at the call (the return address on top).
+int32_t PointContents(Ctx& c, const F32* p, int32_t model) {
+  const Leaf* leaf;
+  if (model) {
+    // Its two locals and EDI are pushed when it calls CM_ClipHandleToModel.
+    c.esp -= 0xC;
+    c.eax = uint32_t(model);
+    Call(c, f_00412AD0, 0x41A73F);
+    c.esp += 0xC;
+    leaf = &At<Leaf>(c.eax + 0x18);
+  } else {
+    // 0x41A460 from node 0 (ECX node, EDI p): the leaf at p.
+    int32_t num = 0;
+    do {
+      const Node& node = At<Node>(Global(kNodes) + uint32_t(num) * 8);
+      const Plane& plane = At<Plane>(node.plane);
+      const St d = plane.type < 3 ? St(p[plane.type])
+                                  : (St(plane.normal[2]) * p[2] + St(plane.normal[1]) * p[1]) +
+                                        St(plane.normal[0]) * p[0];
+      num = d - plane.dist < 0.0f ? node.children[1] : node.children[0];
+    } while (num >= 0);
+    leaf = &At<Leaf>(Global(kLeafs) + uint32_t(-1 - num) * 0x10);
+  }
+  int32_t contents = 0;
+  const int32_t* leafBrushes = &At<int32_t>(Global(kLeafBrushes)) + leaf->firstLeafBrush;
+  for (int k = 0; k < leaf->numLeafBrushes; k++) {
+    const Brush& b = At<Brush>(Global(kBrushes) + uint32_t(leafBrushes[k]) * 0x34);
+    bool inside = true;
+    for (int i = 0; i < 3 && inside; i++)
+      inside = !(St(p[i]) < b.bounds[0][i]) && !(St(p[i]) > b.bounds[1][i]);
+    const BrushSide* side = &At<BrushSide>(b.sides);
+    for (int32_t n = b.numsides; inside && n; n--, side++) {
+      const Plane& plane = At<Plane>(side->plane);
+      const St d = (St(plane.normal[2]) * p[2] + St(plane.normal[1]) * p[1]) +
+                   St(plane.normal[0]) * p[0];
+      inside = !(d > plane.dist);
+    }
+    if (inside) contents |= b.contents;
+  }
+  return contents;
+}
+
+// 0x41A820 (ECX p, EAX origin, EDX angles; model on the stack): point
+// contents in the model's frame. Its locals (0x34 bytes below the return
+// address, EBP saved at the bottom) hold p there and the angle vectors.
+int32_t TransformedPointContents(Ctx& c, const F32* p, const F32* origin, uint32_t anglesVa,
+                                 int32_t model) {
+  GuestFrame f(c, 0x34);
+  F32* local = &f.at<F32>(0x4);
+  F32* forward = &f.at<F32>(0x10);
+  F32* right = &f.at<F32>(0x1C);
+  F32* up = &f.at<F32>(0x28);
+  f.at<uint32_t>(0) = c.ebp;
+  for (int i = 0; i < 3; i++) local[i] = Fst(St(p[i]) - origin[i]);
+  const F32* angles = &At<F32>(anglesVa);
+  // Rotated unless every angle is 0 (a NaN angle rotates).
+  if (model != kBoxModelHandle &&
+      !(St(angles[0]) == 0.0f && St(angles[1]) == 0.0f && St(angles[2]) == 0.0f)) {
+    const uint32_t ebx = c.ebx, esi = c.esi, edi = c.edi;
+    c.esp -= 0xC;
+    Wr<uint32_t>(g_guest_base, c.esp + 8, ebx);
+    Wr<uint32_t>(g_guest_base, c.esp + 4, esi);
+    Wr<uint32_t>(g_guest_base, c.esp, edi);
+    c.edx = anglesVa;
+    c.esi = Va(forward);
+    c.edi = Va(right);
+    c.ebx = Va(up);
+    Call(c, f_004271E0, 0x41A893);
+    c.esp += 0xC;
+    c.ebx = ebx;
+    c.esi = esi;
+    c.edi = edi;
+    const F32 x = local[0], y = local[1];
+    local[0] = Fst((St(forward[2]) * local[2] + St(forward[1]) * y) + St(forward[0]) * x);
+    local[1] = Fst(-((St(right[0]) * St(x) + St(right[2]) * local[2]) + St(right[1]) * y));
+    local[2] = Fst((St(up[1]) * St(y) + St(up[0]) * St(x)) + St(up[2]) * local[2]);
+  }
+  c.esp -= 4;  // its call of 0x41A730
+  const int32_t contents = PointContents(c, local, model);
+  c.esp += 4;
+  return contents;
+}
+
 // The callee-saved registers, restored on return: lifted callees called
-// with the original's register arguments may leave them changed.
+// with the original's register arguments may leave them changed. A guest
+// longjmp unwinding through here has set them already.
 struct SavedRegs {
   Ctx& c;
   uint32_t ebx, ebp, esi, edi;
-  explicit SavedRegs(Ctx& c) : c(c), ebx(c.ebx), ebp(c.ebp), esi(c.esi), edi(c.edi) {}
+  int unwinding;
+  explicit SavedRegs(Ctx& c)
+      : c(c), ebx(c.ebx), ebp(c.ebp), esi(c.esi), edi(c.edi),
+        unwinding(std::uncaught_exceptions()) {}
   ~SavedRegs() {
+    if (std::uncaught_exceptions() != unwinding) return;
     c.ebx = ebx;
     c.ebp = ebp;
     c.esi = esi;
@@ -1488,6 +1586,21 @@ struct SavedRegs {
 uint32_t Arg(const Ctx& c, int n) { return Rd<uint32_t>(g_guest_base, c.esp + 4 * n); }
 
 }  // namespace
+
+// 0x41A730 (see PointContents).
+void f_0041A730(Ctx& c) {
+  SavedRegs saved(c);
+  c.eax = uint32_t(PointContents(c, &At<F32>(c.ecx), int32_t(c.eax)));
+  c.esp += 4;
+}
+
+// 0x41A820 (see TransformedPointContents).
+void f_0041A820(Ctx& c) {
+  SavedRegs saved(c);
+  c.eax = uint32_t(TransformedPointContents(c, &At<F32>(c.ecx), &At<F32>(c.eax), c.edx,
+                                            int32_t(Arg(c, 1))));
+  c.esp += 4;
+}
 
 // CM_Trace (see CmTrace).
 void f_0041CD60(Ctx& c) {
