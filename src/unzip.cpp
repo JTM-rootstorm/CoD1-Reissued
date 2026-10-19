@@ -1,9 +1,11 @@
 // Reading files out of pk3s (zip) on the host's zlib: unzOpenCurrentFile
 // (0x49E6D0), unzReadCurrentFile (0x49E7F0) and unzCloseCurrentFile
 // (0x49EAA0) of the EXE's unzip 0.15 (Quake 3's), whose inflate and crc32
-// are zlib 1.1.4 linked in statically. Replacements of lifted functions
-// named with `replace` in manifest/CoDSP.manifest; FINDINGS.md "zlib on
-// the host". Names and evidence are in the Ghidra plate comments.
+// are zlib 1.1.4 linked in statically; and reading the central directory,
+// unzlocal_GetCurrentFileInfoInternal (0x49DE20). Replacements of lifted
+// functions named with `replace` in manifest/CoDSP.manifest; FINDINGS.md
+// "zlib on the host" and "The pk3 directory scan". Names and evidence are
+// in the Ghidra plate comments.
 //
 // The unzip state stays the original's, in guest memory: unz_s and the
 // file_in_zip_read_info_s these allocate with the game's malloc, the 16 KB
@@ -39,6 +41,7 @@ void f_0051C3A6(Ctx& c);  // fseek(file, offset, origin)
 void f_0051BFD5(Ctx& c);  // fread(buf, size, count, file)
 void f_0049E4D0(Ctx& c);  // unzlocal_CheckCurrentFileCoherencyHeader(ESI s; piSizeVar,
                           // poffset_local_extrafield, psize_local_extrafield)
+void f_0049DE20_lifted(Ctx& c);
 
 namespace {
 
@@ -71,6 +74,10 @@ struct ReadInfo {
 };
 static_assert(sizeof(UnzS) == 0x80 && sizeof(ReadInfo) == 0x6C);
 
+// Swap_Init's LittleShort and LittleLong, and the functions that do not
+// swap, which it installs on this host.
+constexpr uint32_t kLittleShort = 0x8CC718, kLittleLong = 0x8C49A0, kShortNoSwap = 0x4403D0,
+                   kLongNoSwap = 0x440410;
 constexpr int32_t kParamError = -102, kEndOfList = -100, kBadZipFile = -103,
                   kInternalError = -104, kCrcError = -105;
 // zlib 1.1.4's default allocators, which its inflateInit2_ stores in the
@@ -265,7 +272,118 @@ int32_t ReadCurrentFile(Ctx& c, uint32_t s, uint32_t buf, uint32_t len) {
   return int32_t(read);
 }
 
+// The central directory entry at pos_in_central_dir, as the original reads
+// it, but with one fread of its 46-byte fixed part where the original
+// reads each field with an fread of its own (and LittleShort/LittleLong):
+// the same bytes from the same FILE, which ends in the same state. Returns
+// false, having changed nothing the original would not redo, when the
+// original must run: the fseek fails (it then reads on from wherever the
+// FILE is, without the signature), the fixed part is short (it keeps stale
+// values), or the swap functions are not the no-swap ones.
+bool GetCurrentFileInfo(Ctx& c, uint32_t s, int32_t* result) {
+  auto arg = [&](int n) { return Rd<uint32_t>(g_guest_base, c.esp + 4 + 4 * n); };
+  const uint32_t info = arg(0), info_internal = arg(1), name = arg(2), name_size = arg(3),
+                 extra = arg(4), extra_size = arg(5), comment = arg(6), comment_size = arg(7);
+  if (At<uint32_t>(kLittleShort) != kShortNoSwap || At<uint32_t>(kLittleLong) != kLongNoSwap)
+    return false;
+  const UnzS& z = At<UnzS>(s);
+  const uint32_t file = z.file;
+  const uint32_t esp = c.esp;
+  c.esp -= 0x58;  // the original's frame; the fixed part goes in it
+  const uint32_t fixed = c.esp + 0x18;
+  const bool read = CallCdecl(c, f_0051C3A6, 0x49DE52, file,
+                              z.pos_in_central_dir + z.byte_before_the_zipfile, 0) == 0 &&
+                    CallCdecl(c, f_0051BFD5, 0x49DE74, fixed, 46, 1, file) == 1;
+  if (!read) {
+    c.esp = esp;
+    return false;
+  }
+  const uint8_t* h = g_guest_base + fixed;
+  // Shorts sign-extended (LittleShort returns a short), longs as read.
+  auto i16 = [&](int o) { return uint32_t(int32_t(int16_t(h[o] | h[o + 1] << 8))); };
+  auto u32 = [&](int o) {
+    return uint32_t(h[o] | h[o + 1] << 8 | h[o + 2] << 16) | uint32_t(h[o + 3]) << 24;
+  };
+  int32_t err = u32(0) == 0x02014B50 ? 0 : kBadZipFile;
+  // unz_file_info: version, version_needed, flag, compression_method,
+  // dosDate, crc, compressed_size, uncompressed_size, size_filename,
+  // size_file_extra, size_file_comment, disk_num_start, internal_fa,
+  // external_fa, then tmu_date from dosDate.
+  uint32_t fi[20] = {i16(4),  i16(6),  i16(8),  i16(10), u32(12), u32(16), u32(20),
+                     u32(24), i16(28), i16(30), i16(32), i16(34), i16(36), u32(38)};
+  const uint32_t dos = fi[4], date = dos >> 16;
+  fi[14] = (dos & 0x1F) << 1;
+  fi[15] = dos >> 5 & 0x3F;
+  fi[16] = dos >> 11 & 0x1F;
+  fi[17] = date & 0x1F;
+  fi[18] = (date >> 5 & 0xF) - 1;
+  fi[19] = (date >> 9 & 0x7F) + 1980;
+  const uint32_t offset = u32(42);
+
+  // The variable part, sizes compared unsigned as the original does.
+  uint32_t seek = fi[8], extra_left = fi[9];
+  const uint32_t comment_len = fi[10];
+  if (err == 0 && name) {
+    uint32_t n = name_size;
+    if (seek < name_size) {
+      At<uint8_t>(name + seek) = 0;
+      n = seek;
+    }
+    if (seek && name_size && CallCdecl(c, f_0051BFD5, 0x49E127, name, n, 1, file) != 1) err = -1;
+    seek -= n;
+  }
+  if (err == 0 && extra) {
+    const uint32_t n = extra_left < extra_size ? extra_left : extra_size;
+    if (seek) {
+      if (CallCdecl(c, f_0051C3A6, 0x49E169, file, seek, 1) == 0)
+        seek = 0;
+      else
+        err = -1;
+    }
+    if (extra_left && extra_size && CallCdecl(c, f_0051BFD5, 0x49E19B, extra, n, 1, file) != 1)
+      err = -1;
+    extra_left -= n;
+  }
+  seek += extra_left;
+  if (err == 0 && comment) {
+    uint32_t n = comment_size;
+    if (comment_len < comment_size) {
+      At<uint8_t>(comment + comment_len) = 0;
+      n = comment_len;
+    }
+    if (seek && CallCdecl(c, f_0051C3A6, 0x49E1EA, file, seek, 1) != 0) err = -1;
+    if (comment_len && comment_size &&
+        CallCdecl(c, f_0051BFD5, 0x49E21B, comment, n, 1, file) != 1) {
+      c.esp = esp;
+      *result = -1;
+      return true;
+    }
+  }
+  if (err == 0) {
+    if (info) std::memcpy(g_guest_base + info, fi, sizeof fi);
+    if (info_internal) At<uint32_t>(info_internal) = offset;
+  }
+  c.esp = esp;
+  *result = err;
+  return true;
+}
+
 }  // namespace
+
+// unzlocal_GetCurrentFileInfoInternal(EAX s; pfile_info,
+// pfile_info_internal, szFileName, fileNameBufferSize, extraField,
+// extraFieldBufferSize, szComment, commentBufferSize) -> EAX.
+void f_0049DE20(Ctx& c) {
+  const uint32_t s = c.eax;
+  int32_t err = kParamError;
+  if (s && !GetCurrentFileInfo(c, s, &err)) {
+    c.eax = s;
+    f_0049DE20_lifted(c);
+    return;
+  }
+  c.eax = uint32_t(err);
+  c.esp += 4;
+}
 
 // unzOpenCurrentFile(EAX s) -> EAX.
 void f_0049E6D0(Ctx& c) {

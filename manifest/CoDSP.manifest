@@ -41,6 +41,12 @@ replace 0049E6D0
 replace 0049E7F0
 replace 0049EAA0
 
+# The pk3 directory scan: the central directory read with one fread per
+# entry (src/unzip.cpp), and the CRT's tolower, which the file-name hash
+# calls for every character (src/crt.cpp).
+replace 0049DE20
+replace 0051B3DD
+
 # The game module's savegame (de)compression on the host's zlib: compress2
 # and uncompress (src/zlib.cpp).
 replace 00497D00

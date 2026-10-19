@@ -43,6 +43,10 @@ void f_00507D20_lifted(Ctx& c);
 // lifted error paths reach it.
 void f_0049EAA0_lifted(Ctx& c);
 void f_0049EAA0(Ctx& c) { f_0049EAA0_lifted(c); }
+// tolower, native in the game (src/crt.cpp): here only lifted code
+// reaches it.
+void f_0051B3DD_lifted(Ctx& c);
+void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 }  // namespace gen
 
 // Nothing the cases reach calls out: RB_CheckOverflow never overflows.

@@ -47,6 +47,10 @@ void n_0049D8A0(Ctx& c);
 // ...and the lifted code calls the originals, not it.
 void f_00497D00(Ctx& c) { f_00497D00_lifted(c); }
 void f_0049D8A0(Ctx& c) { f_0049D8A0_lifted(c); }
+// tolower, native in the game (src/crt.cpp): here only lifted code
+// reaches it.
+void f_0051B3DD_lifted(Ctx& c);
+void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 }  // namespace gen
 
 PeImage* g_exe = nullptr;

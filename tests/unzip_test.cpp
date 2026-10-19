@@ -23,10 +23,18 @@
 // rest_read_compressed); see src/unzip.cpp. A zip made here adds stored
 // entries (the pk3s store only directories) and the host's own deflate
 // output.
+//
+// unzlocal_GetCurrentFileInfoInternal, the central directory read, is
+// compared for every entry too: as the walk and FS_LoadZipFile call it and
+// with random buffer sizes, and per zip at positions that make the native
+// code hand over to the original (no signature, a short read, past the
+// end, a failing fseek). Result, buffers (with their unwritten bytes),
+// where the FILE is left and the registers must agree.
 
 #include <zlib.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -54,6 +62,13 @@ void n_0049EAA0(Ctx& c);
 void f_0049E6D0(Ctx& c) { f_0049E6D0_lifted(c); }
 void f_0049E7F0(Ctx& c) { f_0049E7F0_lifted(c); }
 void f_0049EAA0(Ctx& c) { f_0049EAA0_lifted(c); }
+void f_0049DE20_lifted(Ctx& c);
+void n_0049DE20(Ctx& c);
+void f_0049DE20(Ctx& c) { f_0049DE20_lifted(c); }
+// tolower, native in the game (src/crt.cpp): here only lifted code
+// reaches it.
+void f_0051B3DD_lifted(Ctx& c);
+void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 void f_0049DB90(Ctx& c);  // unzOpen(EAX path) -> EAX unz_s
 void f_0049E2A0(Ctx& c);  // unzGoToFirstFile(ESI s)
 void f_0049E2E0(Ctx& c);  // unzGoToNextFile(ESI s)
@@ -298,7 +313,7 @@ std::vector<State> RunSide(const Side& side, const std::vector<Step>& steps, uin
 }
 
 struct Stats {
-  long entries = 0, deflated = 0, stored = 0, calls = 0, failures = 0;
+  long entries = 0, deflated = 0, stored = 0, calls = 0, info_calls = 0, failures = 0;
   long long bytes = 0;
 };
 
@@ -363,6 +378,82 @@ void TestEntry(uint32_t s, const std::string& what, Stats& st) {
             s, what + " (reopen)", st);
 }
 
+// ---- unzlocal_GetCurrentFileInfoInternal ----------------------------------
+
+// Its output buffers: file info, internal info, name, extra field, comment.
+constexpr uint32_t kInfoArea = kBuffer + kBufferSize - 0x1000, kInfo = kInfoArea,
+                   kInternal = kInfoArea + 0x100, kName = kInfoArea + 0x200,
+                   kExtra = kInfoArea + 0x800, kComment = kInfoArea + 0xC00;
+
+// One call from the same FILE position and memory through both: the
+// result, every byte of the buffers (unwritten ones keep their pattern),
+// where the FILE is left, and the registers must agree.
+void CompareFileInfo(uint32_t s, const std::array<uint32_t, 8>& args, const std::string& what,
+                     Stats& st) {
+  std::FILE* f = File(Rd(s));
+  const long pos = std::ftell(f);
+  struct Side {
+    uint32_t ret, esp, ebx, esi, edi, ebp;
+    long pos;
+    std::vector<uint8_t> out;
+  } side[2];
+  for (int n = 0; n < 2; n++) {
+    std::fseek(f, pos, SEEK_SET);
+    std::memset(g_mem.ptr(kInfoArea), 0xA5, 0x1000);
+    std::mt19937 g(uint32_t(st.calls));
+    Ctx c = NewCtx(g);
+    c.esp -= 4 * 8;
+    for (int i = 0; i < 8; i++) Wr(c.esp + 4 * i, args[i]);
+    Call(c, n ? recomp::gen::n_0049DE20 : recomp::gen::f_0049DE20_lifted, s);
+    c.esp += 4 * 8;
+    side[n] = {c.eax, c.esp, c.ebx, c.esi, c.edi, c.ebp, std::ftell(f),
+               std::vector<uint8_t>(g_mem.ptr(kInfoArea), g_mem.ptr(kInfoArea) + 0x1000)};
+  }
+  st.calls++;
+  st.info_calls++;
+  const Side &a = side[0], &b = side[1];
+  if (a.ret == b.ret && a.esp == b.esp && a.ebx == b.ebx && a.esi == b.esi && a.edi == b.edi &&
+      a.ebp == b.ebp && a.pos == b.pos && a.out == b.out)
+    return;
+  if (st.failures++ < 20)
+    std::printf("%s: file info differs: ret %d/%d, FILE at %ld/%ld%s\n", what.c_str(),
+                int32_t(a.ret), int32_t(b.ret), a.pos, b.pos,
+                a.out != b.out ? ", buffers differ" : "");
+}
+
+void TestFileInfo(uint32_t s, const std::string& what, std::mt19937& g, Stats& st) {
+  const uint32_t name_len = Rd(s + 0x48);
+  // As unzGoToFirstFile/NextFile and unzSetOffset call it; as
+  // FS_LoadZipFile does (the name into 256 bytes); random buffer sizes for
+  // the name, extra field and comment.
+  CompareFileInfo(s, {kInfo, kInternal, 0, 0, 0, 0, 0, 0}, what, st);
+  CompareFileInfo(s, {kInfo, 0, kName, 0x100, 0, 0, 0, 0}, what, st);
+  const uint32_t r[] = {uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()),
+                        uint32_t(g())};
+  CompareFileInfo(s,
+                  {r[0] % 4 ? kInfo : 0, r[1] % 2 ? kInternal : 0, kName, r[2] % (name_len + 3),
+                   kExtra, r[3] % 40, kComment, r[4] % 40},
+                  what + " (sizes)", st);
+}
+
+// Directory positions the walk never gives: inside an entry (no
+// signature), close to the end of the file (a short read), past it, and
+// before its start (the fseek fails).
+void TestFileInfoFallbacks(uint32_t s, const std::string& path, Stats& st) {
+  std::FILE* f = File(Rd(s));
+  std::fseek(f, 0, SEEK_END);
+  const uint32_t size = uint32_t(std::ftell(f));
+  const uint32_t saved = Rd(s + 0x14);
+  const uint32_t positions[] = {saved + 1, size - Rd(s + 0xC) - 20, size - Rd(s + 0xC),
+                                size + 100, 0x80000000u};
+  for (uint32_t p : positions) {
+    Wr(s + 0x14, p);
+    CompareFileInfo(s, {kInfo, kInternal, kName, 0x100, kExtra, 16, kComment, 16},
+                    path + " (position " + std::to_string(int32_t(p)) + ")", st);
+  }
+  Wr(s + 0x14, saved);
+}
+
 bool TestZip(const std::string& path, Stats& st) {
   std::mt19937 g(1);
   Ctx c = NewCtx(g);
@@ -376,9 +467,12 @@ bool TestZip(const std::string& path, Stats& st) {
   c.esi = s;
   for (int32_t err = int32_t(Call(c, recomp::gen::f_0049E2A0, 0)); err == 0;
        err = int32_t(Call(c, recomp::gen::f_0049E2E0, 0))) {
-    TestEntry(s, path + " #" + std::to_string(Rd(s + 0x10)), st);
+    const std::string what = path + " #" + std::to_string(Rd(s + 0x10));
+    TestFileInfo(s, what, g, st);
+    TestEntry(s, what, st);
     c.esi = s;
   }
+  TestFileInfoFallbacks(s, path, st);
   std::printf("%s: %ld entries\n", path.c_str(), st.entries - before);
   g_top = kArena;
   g_zlib_top = kZlibArena;
@@ -434,15 +528,26 @@ std::string MakeZip(const char* dir) {
       Put16(zip, 0);
       zip.insert(zip.end(), name.begin(), name.end());
       zip.insert(zip.end(), body.begin(), body.end());
+      // The central entry with what unzip does not check made up: the
+      // version made by, a date, the attributes (16-bit ones that
+      // LittleShort sign-extends), an extra field and a comment.
+      std::vector<uint8_t> extra(g() % 40), comment(g() % 40);
+      for (uint8_t& b : extra) b = uint8_t(g());
+      for (uint8_t& b : comment) b = uint8_t('a' + g() % 26);
       Put32(central, 0x02014B50);
-      for (uint32_t x : {20u, 20u, 0u, uint32_t(method), 0u, 0u}) Put16(central, x);
+      for (uint32_t x : {uint32_t(g()), 20u, 0u, uint32_t(method)}) Put16(central, x & 0xFFFF);
+      Put32(central, uint32_t(g()));
       Put32(central, crc);
       Put32(central, uint32_t(body.size()));
       Put32(central, uint32_t(data.size()));
-      for (uint32_t x : {uint32_t(name.size()), 0u, 0u, 0u, 0u}) Put16(central, x);
-      Put32(central, 0);
+      for (uint32_t x : {uint32_t(name.size()), uint32_t(extra.size()), uint32_t(comment.size()),
+                         0u, uint32_t(g())})
+        Put16(central, x & 0xFFFF);
+      Put32(central, uint32_t(g()));
       Put32(central, offset);
       central.insert(central.end(), name.begin(), name.end());
+      central.insert(central.end(), extra.begin(), extra.end());
+      central.insert(central.end(), comment.begin(), comment.end());
     }
   }
   const uint32_t at = uint32_t(zip.size());
@@ -458,6 +563,29 @@ std::string MakeZip(const char* dir) {
   std::fwrite(zip.data(), 1, zip.size(), f);
   std::fclose(f);
   return path;
+}
+
+// A file that ends inside a central directory entry: its signature, then
+// 20 of the 46 bytes. The original reads on with the fields it gets and
+// stale values for the rest; the native code hands over to it.
+void TestTruncatedEntry(const char* dir, Stats& st) {
+  const std::string path = std::string(dir) + "/unzip_test_cut.zip";
+  std::FILE* f = std::fopen(path.c_str(), "wb");
+  if (!f) return;
+  std::vector<uint8_t> v(100, 0x5A);
+  Put32(v, 0x02014B50);
+  for (int i = 0; i < 20; i++) v.push_back(uint8_t(i * 37));
+  std::fwrite(v.data(), 1, v.size(), f);
+  std::fclose(f);
+  g_files.push_back(std::fopen(path.c_str(), "rb"));
+  const uint32_t s = kInfoArea - 0x100;
+  std::memset(g_mem.ptr(s), 0, 0x80);
+  Wr(s, uint32_t(g_files.size()));
+  Wr(s + 0x14, 100);
+  CompareFileInfo(s, {kInfo, kInternal, 0, 0, 0, 0, 0, 0}, path + " (cut)", st);
+  CompareFileInfo(s, {kInfo, kInternal, kName, 0x100, kExtra, 16, kComment, 16},
+                  path + " (cut)", st);
+  std::remove(path.c_str());
 }
 
 }  // namespace
@@ -490,10 +618,12 @@ int main(int argc, char** argv) {
   const char* tmp = std::getenv("TMPDIR");
   const std::string own = MakeZip(tmp ? tmp : "/tmp");
   if (own.empty() || !TestZip(own, st)) return 1;
+  TestTruncatedEntry(tmp ? tmp : "/tmp", st);
   std::remove(own.c_str());
   for (int i = 2; i < argc; i++)
     if (!TestZip(argv[i], st)) return 1;
-  std::printf("%ld entries (%ld deflated, %ld stored, %lld bytes), %ld calls: %ld mismatched\n",
-              st.entries, st.deflated, st.stored, st.bytes, st.calls, st.failures);
+  std::printf("%ld entries (%ld deflated, %ld stored, %lld bytes), %ld calls (%ld of the "
+              "directory read): %ld mismatched\n",
+              st.entries, st.deflated, st.stored, st.bytes, st.calls, st.info_calls, st.failures);
   return st.failures ? 1 : 0;
 }

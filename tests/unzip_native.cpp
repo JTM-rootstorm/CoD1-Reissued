@@ -3,4 +3,5 @@
 #define f_0049E6D0 n_0049E6D0
 #define f_0049E7F0 n_0049E7F0
 #define f_0049EAA0 n_0049EAA0
+#define f_0049DE20 n_0049DE20
 #include "../src/unzip.cpp"

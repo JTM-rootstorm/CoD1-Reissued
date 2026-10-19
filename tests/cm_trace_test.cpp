@@ -60,6 +60,10 @@ void f_0041D870(Ctx& c) { f_0041D870_lifted(c); }
 // lifted error paths reach it.
 void f_0049EAA0_lifted(Ctx& c);
 void f_0049EAA0(Ctx& c) { f_0049EAA0_lifted(c); }
+// tolower, native in the game (src/crt.cpp): here only lifted code
+// reaches it.
+void f_0051B3DD_lifted(Ctx& c);
+void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 }  // namespace gen
 
 PeImage* g_exe = nullptr;

@@ -29,7 +29,7 @@ if(TARGET cod1_lifted)
                  src/fov.cpp src/video_mode.cpp src/frame_pacing.cpp
                  src/screen2d.cpp
                  src/pmove_fixed.cpp src/footsteps.cpp src/unzip.cpp
-                 src/zlib.cpp src/jpeg_idct.cpp
+                 src/zlib.cpp src/jpeg_idct.cpp src/crt.cpp
                  $<TARGET_OBJECTS:cod1_lifted>)
   target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32 recomp_d3d7
                         recomp_opengl ZLIB::ZLIB)
@@ -194,6 +194,26 @@ if(EXISTS "${COD1_GAME_EXE}")
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
   file(GLOB _pk3s "${COD1_GAME_DIR}/Main/*.pk3")
   add_test(NAME zlib_oracle COMMAND zlib_oracle_test "${COD1_GAME_EXE}" ${_pk3s})
+endif()
+
+# The native CRT functions (src/crt.cpp) against the originals, lifted the
+# same way: tests/crt_test.cpp.
+if(EXISTS "${COD1_GAME_EXE}")
+  set(_dir "${CMAKE_CURRENT_BINARY_DIR}/crt_oracle")
+  set(_gen "${_dir}/gen/gen_000.cpp" "${_dir}/gen/table.cpp")
+  add_custom_command(OUTPUT ${_gen}
+    COMMAND recomp_lift --exe "${COD1_GAME_EXE}"
+            --symbols "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
+            --manifest "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            --only 0051B3DD,0051D2C1 --insns-per-file 1000000 --out "${_dir}/gen"
+    DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+    COMMENT "Lifting tolower for crt_oracle_test")
+  add_executable(crt_oracle_test tests/crt_test.cpp tests/crt_native.cpp ${_gen})
+  target_include_directories(crt_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_link_libraries(crt_oracle_test PRIVATE recomp_x87 recomp_image)
+  set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
+    "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
+  add_test(NAME crt_oracle COMMAND crt_oracle_test "${COD1_GAME_EXE}")
 endif()
 
 # The native float IDCT (src/jpeg_idct.cpp) against the original
