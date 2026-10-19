@@ -18,6 +18,9 @@ set(DXVK_NATIVE_DIR "" CACHE PATH "dxvk-native install prefix (opt-in d3d9 backe
 enable_testing()
 add_subdirectory("${X86RECOMP_DIR}" x86recomp)
 
+# Host libraries in place of the EXE's statically linked copies.
+find_package(ZLIB REQUIRED)
+
 # The game: runtime + HLE + lifted code (generated/, produced by
 # recomp_lift; see CLAUDE.md for the command).
 recomp_add_lifted(cod1_lifted "${CMAKE_CURRENT_SOURCE_DIR}/generated")
@@ -25,10 +28,11 @@ if(TARGET cod1_lifted)
   add_executable(cod1 src/main.cpp src/cinematic.cpp src/skinning.cpp src/cm_trace.cpp
                  src/fov.cpp src/video_mode.cpp src/frame_pacing.cpp
                  src/screen2d.cpp
-                 src/pmove_fixed.cpp src/footsteps.cpp
+                 src/pmove_fixed.cpp src/footsteps.cpp src/unzip.cpp
+                 src/zlib.cpp
                  $<TARGET_OBJECTS:cod1_lifted>)
   target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32 recomp_d3d7
-                        recomp_opengl)
+                        recomp_opengl ZLIB::ZLIB)
   set_target_properties(cod1 PROPERTIES ENABLE_EXPORTS ON)  # symbol names in fault backtraces
   if(DXVK_NATIVE_DIR)
     set_target_properties(cod1 PROPERTIES BUILD_RPATH "${DXVK_NATIVE_DIR}/lib64")
@@ -67,6 +71,9 @@ set_source_files_properties(src/skinning.cpp PROPERTIES COMPILE_OPTIONS
 # reading the clip map through overlays of guest memory.
 set_source_files_properties(src/cm_trace.cpp PROPERTIES COMPILE_OPTIONS
   "${_skinning_options};-fno-strict-aliasing")
+# The pk3 reads overlay unzip's structures on guest memory.
+set_source_files_properties(src/unzip.cpp PROPERTIES COMPILE_OPTIONS
+  "-fnon-call-exceptions;${RECOMP_FAULT_FRAME_FLAGS};-fno-strict-aliasing")
 # The footstep rate in the original's order of operations, unfused.
 set_source_files_properties(src/footsteps.cpp PROPERTIES COMPILE_OPTIONS
   -ffp-contract=off)
@@ -125,6 +132,65 @@ if(EXISTS "${COD1_GAME_EXE}")
     "${_skinning_options};-fno-strict-aliasing")
   set(COD1_CM_CAPTURES "" CACHE STRING "captured traces for cm_trace_oracle (a list of files)")
   add_test(NAME cm_trace_oracle COMMAND cm_trace_oracle_test "${COD1_GAME_EXE}" ${COD1_CM_CAPTURES})
+endif()
+
+# The native pk3 reads (src/unzip.cpp) against the original unzip and
+# inflate, lifted from COD1_GAME_EXE like skinning_oracle's (with unzOpen,
+# unzGoToFirstFile/NextFile and the swap functions they call through
+# pointers, and inflate's allocators; the CRT calls under them are stubs,
+# tests/crt_stubs.manifest): tests/unzip_test.cpp, over a zip it makes and
+# every pk3 in COD1_GAME_DIR/Main.
+set(COD1_GAME_DIR "" CACHE PATH "the game's install, for the pk3 oracles")
+if(EXISTS "${COD1_GAME_EXE}")
+  set(_dir "${CMAKE_CURRENT_BINARY_DIR}/unzip_oracle")
+  set(_gen "${_dir}/gen/gen_000.cpp" "${_dir}/gen/table.cpp")
+  set(_manifest "${_dir}/unzip_test.manifest")
+  add_custom_command(OUTPUT ${_gen}
+    COMMAND ${CMAKE_COMMAND} -E cat "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/crt_stubs.manifest" > "${_manifest}"
+    COMMAND recomp_lift --exe "${COD1_GAME_EXE}"
+            --symbols "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
+            --manifest "${_manifest}"
+            --only 0049DB90,0049DA10,0049DE20,0049E2A0,0049E2E0,0049E4D0,0049E6D0,0049E7F0,0049EAA0,004403D0,00440410,00497DC0,004996A0,00499710,004997A0,0049A2E0,0049A3A0,0049A3E0,0049AAF0,0049AE90,0049AED0,0049AF20,0049B030,0049B5A0,0049BA90,0049BB30,0049BCE0,0049EBB0,0049EBD0,0051CA3C,0051D2B0,0051D2C1,0052CDBF --insns-per-file 1000000 --out "${_dir}/gen"
+    DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/crt_stubs.manifest"
+    COMMENT "Lifting unzip and inflate for unzip_oracle_test")
+  add_executable(unzip_oracle_test tests/unzip_test.cpp tests/unzip_native.cpp ${_gen})
+  target_include_directories(unzip_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_link_libraries(unzip_oracle_test PRIVATE recomp_x87 recomp_image ZLIB::ZLIB)
+  set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
+    "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
+  set_source_files_properties(tests/unzip_native.cpp PROPERTIES COMPILE_OPTIONS
+    "-fno-strict-aliasing")
+  file(GLOB _pk3s "${COD1_GAME_DIR}/Main/*.pk3")
+  add_test(NAME unzip_oracle COMMAND unzip_oracle_test "${COD1_GAME_EXE}" ${_pk3s})
+endif()
+
+# compress2 and uncompress (src/zlib.cpp) against the original zlib, lifted
+# the same way (with deflate_stored/fast/slow, adler32 and the allocators,
+# called through pointers): tests/zlib_test.cpp, on generated buffers and
+# the contents of the pk3 entries in COD1_GAME_DIR/Main.
+if(EXISTS "${COD1_GAME_EXE}")
+  set(_dir "${CMAKE_CURRENT_BINARY_DIR}/zlib_oracle")
+  set(_gen "${_dir}/gen/gen_000.cpp" "${_dir}/gen/table.cpp")
+  set(_manifest "${_dir}/zlib_test.manifest")
+  add_custom_command(OUTPUT ${_gen}
+    COMMAND ${CMAKE_COMMAND} -E cat "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/crt_stubs.manifest" > "${_manifest}"
+    COMMAND recomp_lift --exe "${COD1_GAME_EXE}"
+            --symbols "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
+            --manifest "${_manifest}"
+            --only 00497D00,0049D8A0,00498E00,00498FC0,004992C0,00497BD0,0049EBB0,0049EBD0,0051CA3C,0051D2B0,0051D2C1,0052CDBF --insns-per-file 1000000 --out "${_dir}/gen"
+    DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/crt_stubs.manifest"
+    COMMENT "Lifting zlib for zlib_oracle_test")
+  add_executable(zlib_oracle_test tests/zlib_test.cpp tests/zlib_native.cpp ${_gen})
+  target_include_directories(zlib_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_link_libraries(zlib_oracle_test PRIVATE recomp_x87 recomp_image ZLIB::ZLIB)
+  set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
+    "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
+  file(GLOB _pk3s "${COD1_GAME_DIR}/Main/*.pk3")
+  add_test(NAME zlib_oracle COMMAND zlib_oracle_test "${COD1_GAME_EXE}" ${_pk3s})
 endif()
 
 # x86recomp's Miles-compatible digital reverb, and its Miles 6.5 sample

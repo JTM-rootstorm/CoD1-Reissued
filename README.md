@@ -51,8 +51,9 @@ replacements, and the docs.
   them.
 - Linux x86-64 with a Vulkan driver.
 - Clang and LLVM (22 used; the static `libLLVMDemangle.a` and headers),
-  CMake 3.25 or newer, Ninja, Python 3, SDL3 and ffmpeg development
-  packages, and glslang (`glslangValidator`, for the shaders).
+  CMake 3.25 or newer, Ninja, Python 3, SDL3, ffmpeg and zlib
+  development packages (zlib comes with the macOS SDK), and glslang
+  (`glslangValidator`, for the shaders).
 - Ghidra (12.1 used), headless, to find the game's functions.
 - A checkout of [x86recomp](https://github.com/JTM-rootstorm/x86recomp).
 
@@ -169,11 +170,13 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
 
 ## Tests
 
-Configure with `-DCOD1_GAME_EXE="$REPO/unpacked/CoDSP.exe"`, then
-`ctest --test-dir out/build/release`. Besides x86recomp's own tests, this
-runs every x87, integer and SSE instruction form found in the EXE both
-lifted and natively on your CPU, from random states, and requires
-bit-identical results.
+Configure with `-DCOD1_GAME_EXE="$REPO/unpacked/CoDSP.exe"` and
+`-DCOD1_GAME_DIR="$GAME"`, then `ctest --test-dir out/build/release`.
+Besides x86recomp's own tests, this runs every x87, integer and SSE
+instruction form found in the EXE both lifted and natively on your CPU,
+from random states, and requires bit-identical results; and each native
+replacement against the original it replaces, lifted (the pk3 reads and
+savegame compression over the install's pk3 files).
 
 ## Legal
 

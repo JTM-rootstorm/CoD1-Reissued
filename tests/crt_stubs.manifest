@@ -1,0 +1,11 @@
+# Added to manifest/CoDSP.manifest for unzip_oracle_test and
+# zlib_oracle_test: the CRT calls of unzip and zlib and the allocator under
+# zcalloc, stubbed in tests/unzip_test.cpp and tests/zlib_test.cpp.
+replace 0051BBA7 malloc
+replace 0051B768 free
+replace 0042A480
+replace 0051BDFD fopen
+replace 0051C43B fclose
+replace 0051C3A6 fseek
+replace 0051C2D6 ftell
+replace 0051BFD5 fread

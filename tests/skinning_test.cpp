@@ -39,6 +39,10 @@ void f_005070E0(Ctx& c);
 void f_005070E0_lifted(Ctx& c);
 void f_00507D20(Ctx& c);
 void f_00507D20_lifted(Ctx& c);
+// unzCloseCurrentFile, native in the game (src/unzip.cpp): here only the
+// lifted error paths reach it.
+void f_0049EAA0_lifted(Ctx& c);
+void f_0049EAA0(Ctx& c) { f_0049EAA0_lifted(c); }
 }  // namespace gen
 
 // Nothing the cases reach calls out: RB_CheckOverflow never overflows.

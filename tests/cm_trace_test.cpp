@@ -56,6 +56,10 @@ void f_0041CD60(Ctx& c) { f_0041CD60_lifted(c); }
 void f_0041D380(Ctx& c) { f_0041D380_lifted(c); }
 void f_0041D3B0(Ctx& c) { f_0041D3B0_lifted(c); }
 void f_0041D870(Ctx& c) { f_0041D870_lifted(c); }
+// unzCloseCurrentFile, native in the game (src/unzip.cpp): here only the
+// lifted error paths reach it.
+void f_0049EAA0_lifted(Ctx& c);
+void f_0049EAA0(Ctx& c) { f_0049EAA0_lifted(c); }
 }  // namespace gen
 
 PeImage* g_exe = nullptr;

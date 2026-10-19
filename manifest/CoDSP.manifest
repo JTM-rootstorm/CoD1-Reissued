@@ -35,6 +35,17 @@ replace 0041D380
 replace 0041D3B0
 replace 0041D870
 
+# pk3 reads on the host's zlib: unzOpenCurrentFile, unzReadCurrentFile and
+# unzCloseCurrentFile (src/unzip.cpp).
+replace 0049E6D0
+replace 0049E7F0
+replace 0049EAA0
+
+# The game module's savegame (de)compression on the host's zlib: compress2
+# and uncompress (src/zlib.cpp).
+replace 00497D00
+replace 0049D8A0
+
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0
 replace 00507D20
