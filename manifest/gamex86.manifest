@@ -7,7 +7,8 @@ resume 2008126B
 
 # pmove_fixed without rounding command times up (src/pmove_fixed.cpp).
 replace 20012430
-replace 20008580
 
-# Footsteps and the bob cycle at any pmove step length (src/footsteps.cpp).
+# Player movement natively (src/pmove.cpp): Pmove, and PM_Footsteps for the
+# lifted PmoveSingle of the oracle test.
+replace 20008580
 replace 200067C0

@@ -28,7 +28,7 @@ if(TARGET cod1_lifted)
   add_executable(cod1 src/main.cpp src/cinematic.cpp src/skinning.cpp src/cm_trace.cpp
                  src/fov.cpp src/video_mode.cpp src/frame_pacing.cpp
                  src/screen2d.cpp
-                 src/pmove_fixed.cpp src/footsteps.cpp src/unzip.cpp
+                 src/pmove_fixed.cpp src/pmove.cpp src/unzip.cpp
                  src/zlib.cpp src/jpeg_idct.cpp src/crt.cpp
                  $<TARGET_OBJECTS:cod1_lifted>)
   target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32 recomp_d3d7
@@ -59,6 +59,19 @@ if(TARGET cod1_lifted)
       "LINKER:--wrap=_ZN6recomp3gen10f_0041A730ERNS_3CtxE"
       "LINKER:--wrap=_ZN6recomp3gen10f_0041A820ERNS_3CtxE")
   endif()
+  # Dev only: records Pmove calls with their traces for pmove_oracle
+  # (tests/pmove_capture.cpp).
+  option(COD1_PMOVE_CAPTURE "record Pmove calls (COD1_PMOVE_CAPTURE=file)" OFF)
+  if(COD1_PMOVE_CAPTURE)
+    target_sources(cod1 PRIVATE tests/pmove_capture.cpp)
+    target_link_options(cod1 PRIVATE
+      "LINKER:--wrap=_ZN6recomp3gen10f_20008580ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_30007C30ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_20042B00ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_20042C70ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_3001EC30ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_3001ECC0ERNS_3CtxE")
+  endif()
 endif()
 # The CPU skinning is bit-exact only without contraction into FMA, and is
 # per-vertex work: optimised in every build type. It reads guest memory
@@ -79,9 +92,10 @@ set_source_files_properties(src/jpeg_idct.cpp PROPERTIES COMPILE_OPTIONS
 # The pk3 reads overlay unzip's structures on guest memory.
 set_source_files_properties(src/unzip.cpp PROPERTIES COMPILE_OPTIONS
   "-fnon-call-exceptions;${RECOMP_FAULT_FRAME_FLAGS};-fno-strict-aliasing")
-# The footstep rate in the original's order of operations, unfused.
-set_source_files_properties(src/footsteps.cpp PROPERTIES COMPILE_OPTIONS
-  -ffp-contract=off)
+# Player movement as the traces (x87 results in host doubles, guest memory
+# overlays), with the originals' wrapping integer arithmetic.
+set_source_files_properties(src/pmove.cpp PROPERTIES COMPILE_OPTIONS
+  "${_skinning_options};-fno-strict-aliasing;-fwrapv")
 
 # Oracle tests over every instruction form in the EXE. Configure with
 #   -DCOD1_GAME_EXE=unpacked/CoDSP.exe
@@ -244,6 +258,43 @@ if(EXISTS "${COD1_GAME_EXE}")
     "${_skinning_options};-fno-strict-aliasing")
   file(GLOB _pk3s "${COD1_GAME_DIR}/Main/*.pk3")
   add_test(NAME jpeg_idct_oracle COMMAND jpeg_idct_oracle_test "${COD1_GAME_EXE}" ${_pk3s})
+endif()
+
+# The native player movement (src/pmove.cpp) against the original Pmove of
+# both game DLLs, next to COD1_MSS32_DLL in the game directory, lifted with
+# their manifests (PM_Footsteps stays native: src/pmove.cpp) like
+# skinning_oracle's, with the view angle functions for the earlier
+# pmove_fixed steps, the CRT's initialisation of its float formatting (for
+# the debug prints, with the functions it installs) and the cases of its
+# atan2 for special operands (its descriptor's table, read by
+# __trandisp2): tests/pmove_test.cpp, on random states, and on captured
+# calls (tests/pmove_capture.cpp) listed in COD1_PMOVE_CAPTURES.
+if(EXISTS "${COD1_GAME_EXE}" AND COD1_MSS32_DLL)
+  get_filename_component(_game_dir "${COD1_MSS32_DLL}" DIRECTORY)
+  set(_dir "${CMAKE_CURRENT_BINARY_DIR}/pmove_oracle")
+  set(_gen "${_dir}/gen/gen_gamex86_000.cpp" "${_dir}/gen/gen_cgamex86_000.cpp"
+      "${_dir}/gen/table.cpp")
+  set(_sym "${CMAKE_CURRENT_SOURCE_DIR}/symbols")
+  set(_man "${CMAKE_CURRENT_SOURCE_DIR}/manifest")
+  add_custom_command(OUTPUT ${_gen}
+    COMMAND recomp_lift --exe "${COD1_GAME_EXE}" --symbols "${_sym}/CoDSP"
+            --manifest "${_man}/CoDSP.manifest"
+            --module "${_game_dir}/gamex86.dll" --symbols "${_sym}/gamex86"
+            --manifest "${_man}/gamex86.manifest"
+            --module "${_game_dir}/cgamex86.dll" --symbols "${_sym}/cgamex86"
+            --manifest "${_man}/cgamex86.manifest"
+            --only 20008580,30007C30,20006FD0,30006710,20078B38,300407BC,2007F59A,2007F214,2007F279,2007F1D8,2007F25F,300471D5,30046E4F,30046EB4,30046E13,30046E9A,2008561D,2008561F,20085647,20085686,20085A8C,20085AE5,20085B08,3004E75D,3004E75F,3004E787,3004E7C6,3004EBCC,3004EC25,3004EC48 --insns-per-file 1000000 --out "${_dir}/gen"
+    DEPENDS recomp_lift "${COD1_GAME_EXE}" "${_man}/gamex86.manifest" "${_man}/cgamex86.manifest"
+    COMMENT "Lifting Pmove for pmove_oracle_test")
+  add_executable(pmove_oracle_test tests/pmove_test.cpp tests/pmove_native.cpp ${_gen})
+  target_include_directories(pmove_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_link_libraries(pmove_oracle_test PRIVATE recomp_x87 recomp_image)
+  set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
+    "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
+  set_source_files_properties(tests/pmove_native.cpp PROPERTIES COMPILE_OPTIONS
+    "${_skinning_options};-fno-strict-aliasing;-fwrapv")
+  set(COD1_PMOVE_CAPTURES "" CACHE STRING "captured Pmove calls for pmove_oracle (a list of files)")
+  add_test(NAME pmove_oracle COMMAND pmove_oracle_test "${_game_dir}" ${COD1_PMOVE_CAPTURES})
 endif()
 
 # x86recomp's Miles-compatible digital reverb, and its Miles 6.5 sample
