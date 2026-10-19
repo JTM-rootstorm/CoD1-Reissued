@@ -3,18 +3,21 @@
 // (CMakeLists.txt) and run on x86recomp's exact x87 model (SoftFloat, not
 // its host-double runs). CoDSP.exe is mapped as the game maps it, for its
 // constants and globals. Each case runs 0x47CD80 (the DObj's poses from its
-// anim tree), 0x4766E0 (its bone matrices) or the one then the other, as the
-// game does, through the lifted originals and the native code from the same
-// guest memory, and both must leave the same bytes in everything the case
-// built (the DObj, its skeleton, cached maps, models, the anim tree and its
-// xanims, the string table), the globals and the stack arguments, the same
-// ESP, EBX, ESI, EDI, EBP and x87 stack (top, empty registers, control
-// word), and make the same calls of the three lifted functions the
-// originals call: the part-to-bone map (0x478FC0), its release (0x45D580)
-// and the part duplicates (0x4761F0), which are stubs here
-// (tests/xanim_stubs.manifest) that log their register and stack arguments
-// and make deterministic maps. Not compared: EAX, ECX, EDX, EFLAGS, the x87
-// status word and the stack below the return address (src/xanim.cpp).
+// anim tree), 0x4766E0 (its bone matrices), the one then the other, or
+// 0x47CC90 (the tree's update) alone or before them, as the game does,
+// through the lifted originals and the native code from the same guest
+// memory, and both must leave the same bytes in everything the case built
+// (the DObj, its skeleton, cached maps, models, the anim tree and its
+// xanims, the string table; for an update the whole info pool), the
+// globals (with the notes queue) and the stack arguments, the same ESP,
+// EBX, ESI, EDI, EBP and x87 stack (top, empty registers, control word),
+// and make the same calls of the four lifted functions the originals call:
+// the part-to-bone map (0x478FC0), its release (0x45D580), the part
+// duplicates (0x4761F0) and an info's name release (0x45D530), which are
+// stubs here (tests/xanim_stubs.manifest) that log their register and
+// stack arguments and make deterministic maps. Not compared: EAX, ECX, EDX,
+// EFLAGS, the x87 status word and the stack below the return address
+// (src/xanim.cpp).
 //
 //   xanim_test EXE [--cases N] [--seed S] [CAPTURE...]
 //
@@ -27,8 +30,14 @@
 // sparse keys (byte or u16 key frames) or as a key per frame, at times from
 // 0 to 1, cached maps current, stale or missing, and masks of all or some
 // bones; floats now and then zeros, denormals, infinities, NaNs or huge.
-// Captures (tests/xanim_capture.h) add the game's own calls, on its data,
-// with what the three lifted functions did in game served back in order.
+// For the update: synchronised parents or not, looping xanims or not,
+// weights blending to their goals, notes, the info pool's free list, dt
+// from 0 to 0.2 s, and worlds of exact values (steps ending on whole
+// numbers, dt + 0.001 equal to a goal time); its times, rates and
+// frequencies stay finite and small, as a huge step never ends in the
+// original either. Captures (tests/xanim_capture.h) add the game's own
+// calls, on its data, with what the lifted functions did in game served
+// back in order.
 
 #include <algorithm>
 #include <cmath>
@@ -37,6 +46,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <initializer_list>
 #include <random>
 #include <string>
 #include <vector>
@@ -53,12 +63,15 @@ uint8_t* g_guest_base = nullptr;
 namespace gen {
 void f_0047CD80_lifted(Ctx& c);
 void f_004766E0_lifted(Ctx& c);
+void f_0047CC90_lifted(Ctx& c);
 // The native code (tests/xanim_native.cpp renames its entries)...
 void n_0047CD80(Ctx& c);
 void n_004766E0(Ctx& c);
+void n_0047CC90(Ctx& c);
 // ...and the lifted originals call each other, not it.
 void f_0047CD80(Ctx& c) { f_0047CD80_lifted(c); }
 void f_004766E0(Ctx& c) { f_004766E0_lifted(c); }
+void f_0047CC90(Ctx& c) { f_0047CC90_lifted(c); }
 // unzCloseCurrentFile and tolower, native in the game (src/unzip.cpp,
 // src/crt.cpp): here only the stubbed functions' lifted bodies reach them.
 void f_0049EAA0_lifted(Ctx& c);
@@ -69,6 +82,7 @@ void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 void f_00478FC0(Ctx& c);
 void f_0045D580(Ctx& c);
 void f_004761F0(Ctx& c);
+void f_0045D530(Ctx& c);
 }  // namespace gen
 
 // Nothing the cases reach calls out.
@@ -139,8 +153,9 @@ struct Window {
 };
 
 struct Stats {
-  int cases = 0, failures = 0, by_fn[3] = {};
-  int made = 0, freed = 0, dups = 0;  // stub calls (made by the originals)
+  int cases = 0, failures = 0, by_fn[4] = {};  // anim, skel, update, several in turn
+  int made = 0, freed = 0, dups = 0, names = 0;  // stub calls (made by the originals)
+  int notes = 0;  // queued by the updates
   int game = 0, game_differs = 0;     // captured calls with the game's result
   // What the captured 0x47CD80 calls evaluate: anims of nonzero weight
   // blended, leaves (interpolated or not), the most bones.
@@ -253,10 +268,19 @@ void Duplicates(Ctx& c) {
   Return(c, g());
 }
 
+// Releases a string-table entry (an info's name): logged.
+void FreeName(Ctx& c) {
+  const Event e{kFreeName, 0, 0, Arg(c, 0), 0};
+  g_stubs.log.push_back(e);
+  if (Serve(c, e)) return;
+  Return(c, 0);
+}
+
 }  // namespace
 
 namespace recomp::gen {
 void f_00478FC0(Ctx& c) { MakeMap(c); }
+void f_0045D530(Ctx& c) { FreeName(c); }
 void f_0045D580(Ctx& c) { FreeMap(c); }
 void f_004761F0(Ctx& c) { Duplicates(c); }
 }  // namespace recomp::gen
@@ -278,10 +302,12 @@ void Load(const std::vector<Window>& w, const std::vector<uint8_t>& in) {
   }
 }
 
-const char* FnName(uint32_t fn) { return fn == kCalcAnim ? "0x47CD80" : "0x4766E0"; }
+const char* FnName(uint32_t fn) {
+  return fn == kCalcAnim ? "0x47CD80" : fn == kCalcSkel ? "0x4766E0" : "0x47CC90";
+}
 
 struct Call {
-  uint32_t fn, eax, edx, arg;
+  uint32_t fn, eax, ecx, edx, arg;
 };
 
 Ctx NewCtx(std::mt19937& g, uint32_t esp) {
@@ -313,6 +339,7 @@ bool Run(const std::vector<Call>& calls, std::vector<Window> w, std::mt19937& g,
   for (size_t i = 0; i < calls.size(); i++) {
     c0.push_back(NewCtx(g, esp));
     c0.back().eax = calls[i].eax;
+    c0.back().ecx = calls[i].ecx;
     c0.back().edx = calls[i].edx;
   }
   const std::vector<uint8_t> before = Save(w);
@@ -330,10 +357,15 @@ bool Run(const std::vector<Call>& calls, std::vector<Window> w, std::mt19937& g,
       Ctx c = c0[i];
       Wr(esp, 0xDEAD0000);
       Wr(esp + 4, calls[i].arg);
-      const bool anim = calls[i].fn == kCalcAnim;
-      const Fn fn = native ? (anim ? recomp::gen::n_0047CD80 : recomp::gen::n_004766E0)
-                           : (anim ? recomp::gen::f_0047CD80_lifted : recomp::gen::f_004766E0_lifted);
+      const uint32_t f = calls[i].fn;
+      const Fn fn = native ? (f == kCalcAnim   ? recomp::gen::n_0047CD80
+                              : f == kCalcSkel ? recomp::gen::n_004766E0
+                                               : recomp::gen::n_0047CC90)
+                           : (f == kCalcAnim   ? recomp::gen::f_0047CD80_lifted
+                              : f == kCalcSkel ? recomp::gen::f_004766E0_lifted
+                                               : recomp::gen::f_0047CC90_lifted);
       fn(c);
+      if (f == kUpdate && !native) s.notes += Rd(kNumNotes);
       out.push_back(c);
     }
   };
@@ -347,12 +379,13 @@ bool Run(const std::vector<Call>& calls, std::vector<Window> w, std::mt19937& g,
   const std::vector<uint8_t> got = Save(w);
 
   s.cases++;
-  for (const Call& k : calls) s.by_fn[k.fn == kCalcAnim ? 0 : 1]++;
-  if (calls.size() > 1) s.by_fn[2]++;
+  for (const Call& k : calls) s.by_fn[k.fn == kCalcAnim ? 0 : k.fn == kCalcSkel ? 1 : 2]++;
+  if (calls.size() > 1) s.by_fn[3]++;
   for (const Event& e : log) {
     s.made += e.fn == kMakeMap;
     s.freed += e.fn == kFreeMap;
     s.dups += e.fn == kDuplicates;
+    s.names += e.fn == kFreeName;
   }
   bool ok = true;
   auto fail = [&](const char* fmt, auto... args) {
@@ -422,6 +455,27 @@ float Float(std::mt19937& g, float lo, float hi, uint32_t special) {
   }
   return lo + (hi - lo) * float(g() >> 8) / float(1 << 24);
 }
+// A float in [lo, hi) or (1 in special) a finite one of few bits, a NaN or
+// a zero: for times, rates and frequencies, whose steps the original
+// loops over (a huge or infinite one never ends, in game too).
+float Bounded(std::mt19937& g, float lo, float hi, uint32_t special) {
+  if (special && g() % special == 0) {
+    static const uint32_t bits[] = {0x00000000, 0x80000000, 0x00000001, 0x807FFFFF, 0x7FC00000,
+                                    0xFFC00000, 0x7F800001, 0x3F800000, 0x3F7FFFFF, 0x3F000000};
+    return std::bit_cast<float>(bits[g() % std::size(bits)]);
+  }
+  return Float(g, lo, hi, 0);
+}
+// One of a few values that make the update's sums and tests exact: steps
+// ending on 1, a dt + 0.001 equal to a goal time, a weight blended to just
+// under 1e-6 by a tiny dt.
+float Exact(std::mt19937& g, std::initializer_list<uint32_t> bits) {
+  return std::bit_cast<float>(bits.begin()[g() % bits.size()]);
+}
+constexpr uint32_t kMilliBits = 0x3A83126F, kTwoMilliBits = 0x3B03126F, kTinyBits = 0x358637BE;
+// A world whose update's times, rates, frequencies and dt are all exact (so
+// steps land on whole numbers).
+bool g_grid = false;
 // The same, now and then scaled down by up to 2^-40 (sums of products of
 // such values round differently in another order).
 float Wide(std::mt19937& g, float lo, float hi, uint32_t special) {
@@ -523,14 +577,38 @@ uint32_t XAnim(std::mt19937& g, World& w, uint32_t numParts, uint32_t special) {
     Wr(tracks + p * 8 + 4, z && g() % 5 == 0 ? 0 : Track(g, w, numFrames, z ? 4 : 8, false, special));
     Wr(tracks + p * 8, g() % 3 == 0 ? 0 : Track(g, w, numFrames, 12, true, special));
   }
+  // For the update: loops or not, its frequency, its notes (u16 name, u16,
+  // float time; in order, the last at 1, then a zero name; past that, notes
+  // at 2 stop the original's walk of every other note).
+  Wr8(data + 2, uint8_t(g() % 2));
+  WrF(data + 8, g() % 10 == 0 ? 0.0f
+                : g_grid || g() % 5 == 0 ? Exact(g, {0x40800000, 0x41000000, 0x41800000, 0x3F000000})
+                               : Bounded(g, 0, 40, special ? 32 : 0));
+  const uint32_t numNotes = 1 + g() % 4;
+  std::vector<float> times;
+  for (uint32_t i = 1; i < numNotes; i++) times.push_back(g() % 6 == 0 ? 0.0f : Float(g, 0, 1, 0));
+  std::sort(times.begin(), times.end());
+  if (times.size() > 1 && g() % 8 == 0) times[1] = times[0];
+  times.push_back(1.0f);
+  const uint32_t notes = w.a.Alloc((numNotes + 5) * 8);
+  Wr(data + 0x14, notes);
+  for (uint32_t i = 0; i < numNotes + 5; i++) {
+    const bool real = i < numNotes;
+    Wr16(notes + i * 8, real ? uint16_t(1 + g() % 0xFFFF) : 0);
+    Wr16(notes + i * 8 + 2, uint16_t(g()));
+    WrF(notes + i * 8 + 4, real ? times[i] : i == numNotes ? Float(g, 0, 1, 0) : 2.0f);
+  }
   return anim;
 }
 
 // A string-table entry made by the case (a map or part duplicates).
 uint32_t Entry(uint32_t bytes) { return NewEntry(bytes); }
 
-World NewWorld(std::mt19937& g, uint32_t special) {
+// update: a case for the update (no weights that are negative or huge, which
+// can make the mean frequency of a synchronised parent huge).
+World NewWorld(std::mt19937& g, uint32_t special, bool update) {
   World w;
+  g_grid = update && g() % 4 == 0;
   g_stubs.next = 1;
   Wr(kStrings, kStringTable);
 
@@ -615,14 +693,40 @@ World NewWorld(std::mt19937& g, uint32_t special) {
     Wr(e + 4, g());
     Wr16(e, uint16_t(children[i]));
     Wr16(e + 6, uint16_t(firstChild[i]));
+    if (children[i] && g() % 3 == 0) Wr8(e + 4, 0);  // not synchronised
     const uint32_t info = i > 0 && g() % 10 == 0 ? 0 : pool[i];
     Wr16(tree + 8 + i * 2, uint16_t(info));
     if (info) {
       w.infos.push_back(info);
       const uint32_t va = kInfo + info * 0x44;
       for (uint32_t j = 0; j < 0x11; j++) Wr(va + j * 4, g());
+      // The update's: names, and for both states times, cycles, weights
+      // with their goals, rates.
+      Wr16(va + 4, g() % 5 < 3 ? 0 : uint16_t(g()));
+      Wr16(va + 6, g() % 5 < 2 ? 0 : uint16_t(1 + g() % 0xFFFF));
+      for (uint32_t k = 0; k < 2; k++) {
+        const uint32_t st = va + 0xC + k * 0x1C;
+        auto time = [&] {
+          const uint32_t t = g() % 10;
+          return t == 0 ? 0.0f : t == 1 ? 1.0f : t == 2 ? std::bit_cast<float>(0x3F7FFFFFu)
+                                                        : Bounded(g, 0, 1, special ? 16 : 0);
+        };
+        const bool exact = g_grid || g() % 5 == 0;
+        WrF(st, exact ? Exact(g, {0, 0x3E800000, 0x3F000000, 0x3F400000, 0x3F800000}) : time());
+        WrF(st + 4, time());
+        WrF(st + 0xC, exact ? Exact(g, {kMilliBits, kTwoMilliBits, 0x3F800000})
+                      : g() % 5 < 2 ? 0.0f : Bounded(g, 0, 0.5f, special ? 16 : 0));
+        WrF(st + 0x10, g() % 3 == 0 ? 0.0f : Bounded(g, 0, 1, special ? 16 : 0));
+        WrF(st + 0x14, exact && g() % 2 ? Exact(g, {kTinyBits}) : g() % 2 ? 0.0f
+                                                                 : Bounded(g, 0, 1, special ? 16 : 0));
+        WrF(st + 0x18, exact ? Exact(g, {0x3F000000, 0x3F800000, 0x40000000})
+                       : g() % 10 == 0 ? 0.0f : Bounded(g, 0, 2, special ? 32 : 0));
+      }
       const uint32_t r = g() % 10;
-      const float weight = r < 3 ? 0.0f : r < 9 ? Wide(g, 0, 1, special) : Float(g, -1, 4, 2);
+      const float weight = r < 3   ? 0.0f
+                           : update ? Bounded(g, 0, 1, special ? 16 : 0)
+                           : r < 9  ? Wide(g, 0, 1, special)
+                                    : Float(g, -1, 4, 2);
       const uint32_t t = g() % 10;
       const float time = t == 0 ? 0.0f : t == 1 ? 1.0f : t == 2 ? std::bit_cast<float>(0x3F7FFFFFu)
                                                              : Float(g, 0, 1, 0);
@@ -680,6 +784,11 @@ World NewWorld(std::mt19937& g, uint32_t special) {
     Wr16(w.dobj + 0x14, uint16_t(h));
   }
 
+  // The update's free list (its head in info 0), infos in use, the end note.
+  Wr16(kInfo + 0xA, uint16_t(g() % 2000));
+  Wr(0xA6D000, g() % 4000);
+  Wr16(kEndNote, uint16_t(g()));
+
   // The mask: all bones, or some.
   w.mask = w.a.Alloc(16);
   for (uint32_t i = 0; i < 4; i++) Wr(w.mask + i * 4, g() % 2 ? 0xFFFFFFFFu : g() | g());
@@ -687,13 +796,28 @@ World NewWorld(std::mt19937& g, uint32_t special) {
 }
 
 void RandomCase(std::mt19937& g, uint32_t special, Stats& s) {
-  World w = NewWorld(g, special);
+  const bool update = g() % 10 < 4;
+  World w = NewWorld(g, special, update);
   std::vector<Call> calls;
-  const uint32_t r = g() % 10;
-  if (r < 7) calls.push_back({kCalcAnim, w.dobj, w.mask, uint32_t(g())});
-  if (r >= 4) calls.push_back({kCalcSkel, w.mask, uint32_t(g()), w.dobj});
   std::vector<Window> win{{kArena, w.a.top - kArena}};
-  for (uint32_t info : w.infos) win.push_back({kInfo + info * 0x44, 0x44});
+  if (update) {
+    // The update, alone or before the evaluation as cgame does it, by
+    // 0-0.2 s.
+    const float dt = g() % 10 == 0 ? 0.0f
+                     : g_grid || g() % 4 == 0 ? Exact(g, {0x3D800000, 0x3E000000, kMilliBits, 0x30800000})
+                                    : Bounded(g, 0, 0.2f, special ? 16 : 0);
+    calls.push_back({kUpdate, uint32_t(g()), w.dobj, uint32_t(g()), std::bit_cast<uint32_t>(dt)});
+    if (g() % 10 < 4) {
+      calls.push_back({kCalcAnim, w.dobj, uint32_t(g()), w.mask, uint32_t(g())});
+      calls.push_back({kCalcSkel, w.mask, uint32_t(g()), uint32_t(g()), w.dobj});
+    }
+    win.push_back({kInfo, 2000 * 0x44});  // the infos, info 0 and the free list's head
+  } else {
+    const uint32_t r = g() % 10;
+    if (r < 7) calls.push_back({kCalcAnim, w.dobj, uint32_t(g()), w.mask, uint32_t(g())});
+    if (r >= 4) calls.push_back({kCalcSkel, w.mask, uint32_t(g()), uint32_t(g()), w.dobj});
+    for (uint32_t info : w.infos) win.push_back({kInfo + info * 0x44, 0x44});
+  }
   Run(calls, win, g, s, "random");
 }
 
@@ -764,9 +888,9 @@ bool RunCaptures(const char* path, std::mt19937& g, Stats& s) {
       std::printf("%s: bad record after %d calls\n", path, calls);
       return false;
     }
-    uint32_t head[5];
-    if (std::fread(head, 4, 5, f) != 5) return false;
-    std::deque<Served> served(head[4]);
+    uint32_t head[6];
+    if (std::fread(head, 4, 6, f) != 6) return false;
+    std::deque<Served> served(head[5]);
     for (Served& e : served) {
       uint32_t ev[6];
       if (std::fread(ev, 4, 6, f) != 6) return false;
@@ -779,7 +903,7 @@ bool RunCaptures(const char* path, std::mt19937& g, Stats& s) {
     }
     std::vector<Window> w;
     if (!ReadRegions(f, &w)) return false;
-    const Call k{head[0], head[1], head[2], head[3]};
+    const Call k{head[0], head[1], head[2], head[3], head[4]};
     if (k.fn == kCalcAnim) Describe(k.eax, s);
     // The string table's entries the events write are compared too.
     std::vector<Window> all = w;
@@ -847,9 +971,10 @@ int main(int argc, char** argv) {
   const int random = s.cases;
   for (int i = first_capture; i < argc; i++)
     if (!RunCaptures(argv[i], g, s)) return 1;
-  std::printf("%d random + %d captured cases (0x47CD80 %d, 0x4766E0 %d, both %d; maps made %d, "
-              "released %d, part duplicates %d): %d mismatched\n",
-              random, s.cases - random, s.by_fn[0], s.by_fn[1], s.by_fn[2], s.made, s.freed,
-              s.dups, s.failures);
+  std::printf("%d random + %d captured cases (0x47CD80 %d, 0x4766E0 %d, 0x47CC90 %d, several %d; "
+              "maps made %d, released %d, part duplicates %d, names released %d, notes "
+              "queued %d): %d mismatched\n",
+              random, s.cases - random, s.by_fn[0], s.by_fn[1], s.by_fn[2], s.by_fn[3], s.made,
+              s.freed, s.dups, s.names, s.notes, s.failures);
   return s.failures || s.game_differs ? 1 : 0;
 }

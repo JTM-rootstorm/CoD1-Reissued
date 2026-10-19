@@ -156,6 +156,43 @@ void AddTree(Regions& m, uint32_t dobj) {
   }
 }
 
+// What an update reads: the tree's anims, all their infos with info 0 and
+// the free list's head, and the leaves' xanims with their notes (past the
+// end too: the original reads every other note after a wrap until one is
+// late enough).
+void AddUpdate(Regions& m, uint32_t dobj) {
+  m.Add(kEndNote, 4);
+  m.Add(kInfo, 0x44);
+  m.Add(kInfo + Rd16(kInfo + 0xA) * 0x44u, 0x44);
+  const uint32_t tree = Rd(dobj);
+  if (!tree) return;
+  const uint32_t anims = Rd(tree), count = Rd(anims + 4);
+  m.Add(tree, 8 + count * 2);
+  m.Add(anims, 8 + count * 8);
+  for (uint32_t i = 0; i < count; i++) {
+    if (const uint16_t info = Rd16(tree + 8 + i * 2)) m.Add(kInfo + info * 0x44u, 0x44);
+    const uint32_t e = anims + 8 + i * 8;
+    if (Rd16(e)) continue;
+    const uint32_t anim = Rd(e + 4), data = Rd(anim + 4), notes = Rd(data + 0x14);
+    m.Add(anim, 8);
+    m.Add(data, 0x20);
+    uint32_t n = 0;
+    while (Rd16(notes + n)) n += 8;
+    m.Add(notes, n + 0x100);
+  }
+}
+
+// What 0x47CD80 and 0x4766E0 read.
+void AddCalc(Regions& r, const Ctx& c, uint32_t fn, uint32_t arg) {
+  const uint32_t dobj = fn == kCalcAnim ? c.eax : arg;
+  r.Add(fn == kCalcAnim ? c.edx : c.eax, 16);
+  r.Add(dobj, 0x58);
+  r.Add(Rd(dobj + 4), 0x30 + Rd8(dobj + 0x17) * 0x60u);
+  AddModels(r, dobj);
+  if (const uint16_t h = Rd16(dobj + 0x14)) AddDuplicates(r, Entry(h));
+  if (fn == kCalcAnim) AddTree(r, dobj);
+}
+
 // The call being recorded: its record so far, and its events.
 struct Recording {
   bool on = false;
@@ -171,8 +208,8 @@ FILE* Out() {
   return out;
 }
 
-// Starts recording the call (fn, EAX, EDX, stack argument) if it is one in
-// COD1_XANIM_EVERY: returns the regions it reads.
+// Starts recording the call (fn, EAX, ECX, EDX, stack argument) if it is one
+// in COD1_XANIM_EVERY: returns the regions it reads.
 bool Start(const Ctx& c, uint32_t fn, Regions& r) {
   static const uint32_t every = [] {
     const char* e = std::getenv("COD1_XANIM_EVERY");
@@ -182,25 +219,25 @@ bool Start(const Ctx& c, uint32_t fn, Regions& r) {
     const char* e = std::getenv("COD1_XANIM_MAX");
     return e ? uint32_t(std::atoi(e)) : 5000u;
   }();
-  static uint32_t calls[2] = {}, records = 0;  // per function
-  if (!Out() || g_rec.on || calls[fn == kCalcSkel]++ % every || records >= max) return false;
+  static uint32_t calls[3] = {}, records = 0;  // per function
+  const int k = fn == kCalcAnim ? 0 : fn == kCalcSkel ? 1 : 2;
+  if (!Out() || g_rec.on || calls[k]++ % every || records >= max) return false;
   records++;
   const uint32_t arg = Rd(c.esp + 4);
-  const uint32_t dobj = fn == kCalcAnim ? c.eax : arg;
   r.Add(kGlobals1, kGlobals1Size);
   r.Add(kGlobals2, kGlobals2Size);
   r.Add(kStrings, 4);
-  r.Add(fn == kCalcAnim ? c.edx : c.eax, 16);
-  r.Add(dobj, 0x58);
-  r.Add(Rd(dobj + 4), 0x30 + Rd8(dobj + 0x17) * 0x60u);
-  AddModels(r, dobj);
-  if (const uint16_t h = Rd16(dobj + 0x14)) AddDuplicates(r, Entry(h));
-  if (fn == kCalcAnim) AddTree(r, dobj);
+  if (fn == kUpdate) {
+    r.Add(c.ecx, 0x58);
+    AddUpdate(r, c.ecx);
+  } else {
+    AddCalc(r, c, fn, arg);
+  }
   g_rec = {};
   g_rec.on = true;
-  const uint32_t head[5] = {kCall, fn, c.eax, c.edx, arg};
+  const uint32_t head[6] = {kCall, fn, c.eax, c.ecx, c.edx, arg};
   g_rec.head.insert(g_rec.head.end(), reinterpret_cast<const uint8_t*>(head),
-                    reinterpret_cast<const uint8_t*>(head + 5));
+                    reinterpret_cast<const uint8_t*>(head + 6));
   r.Write(g_rec.head);  // the regions before the call, after the events
   return true;
 }
@@ -209,10 +246,10 @@ void Finish(const Regions& r) {
   FILE* out = Out();
   const uint32_t tag = kCall;
   std::fwrite(&tag, 4, 1, out);
-  std::fwrite(g_rec.head.data() + 4, 1, 16, out);
+  std::fwrite(g_rec.head.data() + 4, 1, 20, out);
   std::fwrite(&g_rec.numEvents, 4, 1, out);
   std::fwrite(g_rec.events.data(), 1, g_rec.events.size(), out);
-  std::fwrite(g_rec.head.data() + 20, 1, g_rec.head.size() - 20, out);
+  std::fwrite(g_rec.head.data() + 24, 1, g_rec.head.size() - 24, out);
   std::vector<uint8_t> after;
   r.Write(after);
   const uint32_t result = kResult;
@@ -238,6 +275,8 @@ void Event(uint32_t fn, uint32_t eax, uint32_t edx, uint32_t a0, uint32_t a1, ui
 namespace recomp::gen {
 void __real_f_0047CD80(Ctx& c) asm("__real__ZN6recomp3gen10f_0047CD80ERNS_3CtxE");
 void __real_f_004766E0(Ctx& c) asm("__real__ZN6recomp3gen10f_004766E0ERNS_3CtxE");
+void __real_f_0047CC90(Ctx& c) asm("__real__ZN6recomp3gen10f_0047CC90ERNS_3CtxE");
+void __real_f_0045D530(Ctx& c) asm("__real__ZN6recomp3gen10f_0045D530ERNS_3CtxE");
 void __real_f_00478FC0(Ctx& c) asm("__real__ZN6recomp3gen10f_00478FC0ERNS_3CtxE");
 void __real_f_0045D580(Ctx& c) asm("__real__ZN6recomp3gen10f_0045D580ERNS_3CtxE");
 void __real_f_004761F0(Ctx& c) asm("__real__ZN6recomp3gen10f_004761F0ERNS_3CtxE");
@@ -254,6 +293,17 @@ extern "C" void __wrap__ZN6recomp3gen10f_004766E0ERNS_3CtxE(Ctx& c) {
   const bool rec = Start(c, kCalcSkel, r);
   recomp::gen::__real_f_004766E0(c);
   if (rec) Finish(r);
+}
+extern "C" void __wrap__ZN6recomp3gen10f_0047CC90ERNS_3CtxE(Ctx& c) {
+  Regions r;
+  const bool rec = Start(c, kUpdate, r);
+  recomp::gen::__real_f_0047CC90(c);
+  if (rec) Finish(r);
+}
+extern "C" void __wrap__ZN6recomp3gen10f_0045D530ERNS_3CtxE(Ctx& c) {
+  const uint32_t name = Rd(c.esp + 4);
+  recomp::gen::__real_f_0045D530(c);
+  if (g_rec.on) Event(kFreeName, 0, 0, name, 0, c.eax, Regions{});
 }
 extern "C" void __wrap__ZN6recomp3gen10f_00478FC0ERNS_3CtxE(Ctx& c) {
   const uint32_t anim = c.eax, a0 = Rd(c.esp + 4), a1 = Rd(c.esp + 8);
