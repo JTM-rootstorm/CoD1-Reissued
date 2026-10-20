@@ -87,7 +87,11 @@ if(TARGET cod1_lifted)
       "LINKER:--wrap=_ZN6recomp3gen10f_0045D580ERNS_3CtxE"
       "LINKER:--wrap=_ZN6recomp3gen10f_004761F0ERNS_3CtxE"
       "LINKER:--wrap=_ZN6recomp3gen10f_0047CC90ERNS_3CtxE"
-      "LINKER:--wrap=_ZN6recomp3gen10f_0045D530ERNS_3CtxE")
+      "LINKER:--wrap=_ZN6recomp3gen10f_0045D530ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_0047CCD0ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_0047B390ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_0046A7A0ERNS_3CtxE"
+      "LINKER:--wrap=_ZN6recomp3gen10f_004683B0ERNS_3CtxE")
   endif()
 endif()
 # The CPU skinning is bit-exact only without contraction into FMA, and is
@@ -296,7 +300,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     COMMAND recomp_lift --exe "${COD1_GAME_EXE}"
             --symbols "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
             --manifest "${_manifest}"
-            --only 0047CD80,004766E0,0047CC90,0051CA3C,0051D2B0,0051D2C1,0052CDBF --insns-per-file 1000000 --out "${_dir}/gen"
+            --only 0047CD80,004766E0,0047CC90,0047CCD0,0051CA3C,0051D2B0,0051D2C1,0052CDBF --insns-per-file 1000000 --out "${_dir}/gen"
     DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/xanim_stubs.manifest"
     COMMENT "Lifting the XAnim evaluation for xanim_oracle_test")

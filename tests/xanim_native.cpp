@@ -3,4 +3,5 @@
 #define f_0047CD80 n_0047CD80
 #define f_004766E0 n_004766E0
 #define f_0047CC90 n_0047CC90
+#define f_0047CCD0 n_0047CCD0
 #include "../src/xanim.cpp"

@@ -1,6 +1,6 @@
 // Dev build only (-DCOD1_XANIM_CAPTURE=ON): records XAnim evaluation calls
-// for tests/xanim_test.cpp. Linked with --wrap for the two entry points
-// (src/xanim.cpp) and the three lifted functions they call, so every call
+// for tests/xanim_test.cpp. Linked with --wrap for the four entry points
+// (src/xanim.cpp) and the lifted functions they call, so every call
 // reaches the wrappers below, which append records
 // (tests/xanim_capture.h) to the file named by COD1_XANIM_CAPTURE and call
 // the real function. One call in COD1_XANIM_EVERY (default 20) of each
@@ -156,7 +156,7 @@ void AddTree(Regions& m, uint32_t dobj) {
   }
 }
 
-// What an update reads: the tree's anims, all their infos with info 0 and
+// What an update (cgame's or the game's) reads: the tree's anims, all their infos with info 0 and
 // the free list's head, and the leaves' xanims with their notes (past the
 // end too: the original reads every other note after a wrap until one is
 // late enough).
@@ -208,8 +208,8 @@ FILE* Out() {
   return out;
 }
 
-// Starts recording the call (fn, EAX, ECX, EDX, stack argument) if it is one
-// in COD1_XANIM_EVERY: returns the regions it reads.
+// Starts recording the call (fn, EAX, ECX, EDX, two stack arguments) if it is
+// one in COD1_XANIM_EVERY: returns the regions it reads.
 bool Start(const Ctx& c, uint32_t fn, Regions& r) {
   static const uint32_t every = [] {
     const char* e = std::getenv("COD1_XANIM_EVERY");
@@ -219,15 +219,15 @@ bool Start(const Ctx& c, uint32_t fn, Regions& r) {
     const char* e = std::getenv("COD1_XANIM_MAX");
     return e ? uint32_t(std::atoi(e)) : 5000u;
   }();
-  static uint32_t calls[3] = {}, records = 0;  // per function
-  const int k = fn == kCalcAnim ? 0 : fn == kCalcSkel ? 1 : 2;
+  static uint32_t calls[4] = {}, records = 0;  // per function
+  const int k = fn == kCalcAnim ? 0 : fn == kCalcSkel ? 1 : fn == kUpdate ? 2 : 3;
   if (!Out() || g_rec.on || calls[k]++ % every || records >= max) return false;
   records++;
-  const uint32_t arg = Rd(c.esp + 4);
+  const uint32_t arg = Rd(c.esp + 4), arg2 = Rd(c.esp + 8);
   r.Add(kGlobals1, kGlobals1Size);
   r.Add(kGlobals2, kGlobals2Size);
   r.Add(kStrings, 4);
-  if (fn == kUpdate) {
+  if (fn == kUpdate || fn == kGameUpdate) {
     r.Add(c.ecx, 0x58);
     AddUpdate(r, c.ecx);
   } else {
@@ -235,9 +235,9 @@ bool Start(const Ctx& c, uint32_t fn, Regions& r) {
   }
   g_rec = {};
   g_rec.on = true;
-  const uint32_t head[6] = {kCall, fn, c.eax, c.ecx, c.edx, arg};
+  const uint32_t head[7] = {kCall, fn, c.eax, c.ecx, c.edx, arg, arg2};
   g_rec.head.insert(g_rec.head.end(), reinterpret_cast<const uint8_t*>(head),
-                    reinterpret_cast<const uint8_t*>(head + 6));
+                    reinterpret_cast<const uint8_t*>(head + 7));
   r.Write(g_rec.head);  // the regions before the call, after the events
   return true;
 }
@@ -246,10 +246,10 @@ void Finish(const Regions& r) {
   FILE* out = Out();
   const uint32_t tag = kCall;
   std::fwrite(&tag, 4, 1, out);
-  std::fwrite(g_rec.head.data() + 4, 1, 20, out);
+  std::fwrite(g_rec.head.data() + 4, 1, 24, out);
   std::fwrite(&g_rec.numEvents, 4, 1, out);
   std::fwrite(g_rec.events.data(), 1, g_rec.events.size(), out);
-  std::fwrite(g_rec.head.data() + 24, 1, g_rec.head.size() - 24, out);
+  std::fwrite(g_rec.head.data() + 28, 1, g_rec.head.size() - 28, out);
   std::vector<uint8_t> after;
   r.Write(after);
   const uint32_t result = kResult;
@@ -259,13 +259,17 @@ void Finish(const Regions& r) {
   g_rec.on = false;
 }
 
+// Calls of the lifted callees under way: an event is the call's own, not
+// one made inside another callee (by script a note runs, say).
+int g_depth = 0;
+
 // An event of the call being recorded: the callee's arguments, its EAX and
 // the regions it wrote that the call reads back.
-void Event(uint32_t fn, uint32_t eax, uint32_t edx, uint32_t a0, uint32_t a1, uint32_t ret,
-           const Regions& wrote) {
-  const uint32_t ev[6] = {fn, eax, edx, a0, a1, ret};
+void Event(uint32_t fn, uint32_t eax, uint32_t edx, uint32_t esi, uint32_t a0, uint32_t a1,
+           uint32_t a2, uint32_t ret, const Regions& wrote) {
+  const uint32_t ev[8] = {fn, eax, edx, esi, a0, a1, a2, ret};
   g_rec.events.insert(g_rec.events.end(), reinterpret_cast<const uint8_t*>(ev),
-                      reinterpret_cast<const uint8_t*>(ev + 6));
+                      reinterpret_cast<const uint8_t*>(ev + 8));
   wrote.Write(g_rec.events);
   g_rec.numEvents++;
 }
@@ -280,6 +284,10 @@ void __real_f_0045D530(Ctx& c) asm("__real__ZN6recomp3gen10f_0045D530ERNS_3CtxE"
 void __real_f_00478FC0(Ctx& c) asm("__real__ZN6recomp3gen10f_00478FC0ERNS_3CtxE");
 void __real_f_0045D580(Ctx& c) asm("__real__ZN6recomp3gen10f_0045D580ERNS_3CtxE");
 void __real_f_004761F0(Ctx& c) asm("__real__ZN6recomp3gen10f_004761F0ERNS_3CtxE");
+void __real_f_0047CCD0(Ctx& c) asm("__real__ZN6recomp3gen10f_0047CCD0ERNS_3CtxE");
+void __real_f_0047B390(Ctx& c) asm("__real__ZN6recomp3gen10f_0047B390ERNS_3CtxE");
+void __real_f_0046A7A0(Ctx& c) asm("__real__ZN6recomp3gen10f_0046A7A0ERNS_3CtxE");
+void __real_f_004683B0(Ctx& c) asm("__real__ZN6recomp3gen10f_004683B0ERNS_3CtxE");
 }  // namespace recomp::gen
 
 extern "C" void __wrap__ZN6recomp3gen10f_0047CD80ERNS_3CtxE(Ctx& c) {
@@ -302,28 +310,73 @@ extern "C" void __wrap__ZN6recomp3gen10f_0047CC90ERNS_3CtxE(Ctx& c) {
 }
 extern "C" void __wrap__ZN6recomp3gen10f_0045D530ERNS_3CtxE(Ctx& c) {
   const uint32_t name = Rd(c.esp + 4);
+  const bool top = g_rec.on && !g_depth;
+  g_depth++;
   recomp::gen::__real_f_0045D530(c);
-  if (g_rec.on) Event(kFreeName, 0, 0, name, 0, c.eax, Regions{});
+  g_depth--;
+  if (top) Event(kFreeName, 0, 0, 0, name, 0, 0, c.eax, Regions{});
 }
 extern "C" void __wrap__ZN6recomp3gen10f_00478FC0ERNS_3CtxE(Ctx& c) {
   const uint32_t anim = c.eax, a0 = Rd(c.esp + 4), a1 = Rd(c.esp + 8);
+  const bool top = g_rec.on && !g_depth;
+  g_depth++;
   recomp::gen::__real_f_00478FC0(c);
-  if (!g_rec.on) return;
+  g_depth--;
+  if (!top) return;
   Regions w;
   w.Add(Entry(uint16_t(c.eax)), 16 + NumParts(anim));
-  Event(kMakeMap, anim, 0, a0, a1, c.eax, w);
+  Event(kMakeMap, anim, 0, 0, a0, a1, 0, c.eax, w);
 }
 extern "C" void __wrap__ZN6recomp3gen10f_0045D580ERNS_3CtxE(Ctx& c) {
   const uint32_t eax = c.eax, edx = c.edx;
+  const bool top = g_rec.on && !g_depth;
+  g_depth++;
   recomp::gen::__real_f_0045D580(c);
-  if (g_rec.on) Event(kFreeMap, eax, edx, 0, 0, c.eax, Regions{});
+  g_depth--;
+  if (top) Event(kFreeMap, eax, edx, 0, 0, 0, 0, c.eax, Regions{});
 }
 extern "C" void __wrap__ZN6recomp3gen10f_004761F0ERNS_3CtxE(Ctx& c) {
   const uint32_t dobj = Rd(c.esp + 4);
+  const bool top = g_rec.on && !g_depth;
+  g_depth++;
   recomp::gen::__real_f_004761F0(c);
-  if (!g_rec.on) return;
+  g_depth--;
+  if (!top) return;
   Regions w;
   w.Add(dobj + 0x14, 2);
   if (const uint16_t h = Rd16(dobj + 0x14)) AddDuplicates(w, Entry(h));
-  Event(kDuplicates, 0, 0, dobj, 0, c.eax, w);
+  Event(kDuplicates, 0, 0, 0, dobj, 0, 0, c.eax, w);
+}
+extern "C" void __wrap__ZN6recomp3gen10f_0047CCD0ERNS_3CtxE(Ctx& c) {
+  Regions r;
+  const bool rec = Start(c, kGameUpdate, r);
+  recomp::gen::__real_f_0047CCD0(c);
+  if (rec) Finish(r);
+}
+// The game's notes to script. What script does then is not recorded: the
+// replay's result differs from the game's if it changed what the update
+// reads.
+extern "C" void __wrap__ZN6recomp3gen10f_0047B390ERNS_3CtxE(Ctx& c) {
+  const uint32_t esi = c.esi, a0 = Rd(c.esp + 4), a1 = Rd(c.esp + 8);
+  const bool top = g_rec.on && !g_depth;
+  g_depth++;
+  recomp::gen::__real_f_0047B390(c);
+  g_depth--;
+  if (top) Event(kSendNote, 0, 0, esi, a0, a1, 0, c.eax, Regions{});
+}
+extern "C" void __wrap__ZN6recomp3gen10f_0046A7A0ERNS_3CtxE(Ctx& c) {
+  const uint32_t a0 = Rd(c.esp + 4);
+  const bool top = g_rec.on && !g_depth;
+  g_depth++;
+  recomp::gen::__real_f_0046A7A0(c);
+  g_depth--;
+  if (top) Event(kPushString, 0, 0, 0, a0, 0, 0, c.eax, Regions{});
+}
+extern "C" void __wrap__ZN6recomp3gen10f_004683B0ERNS_3CtxE(Ctx& c) {
+  const uint32_t a0 = Rd(c.esp + 4), a1 = Rd(c.esp + 8), a2 = Rd(c.esp + 12);
+  const bool top = g_rec.on && !g_depth;
+  g_depth++;
+  recomp::gen::__real_f_004683B0(c);
+  g_depth--;
+  if (top) Event(kScriptCall, 0, 0, 0, a0, a1, a2, c.eax, Regions{});
 }

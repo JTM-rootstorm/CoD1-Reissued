@@ -1,7 +1,9 @@
 // XAnim evaluation: a DObj's local bone poses from its anim tree (0x47CD80),
-// its bone matrices from those poses (0x4766E0), and cgame's update of the
-// tree's times and weights with the notes it passes (0x47CC90), read in
-// place from the anim tree, the xanims and the xmodels in guest memory.
+// its bone matrices from those poses (0x4766E0), cgame's update of the
+// tree's times and weights with the notes it passes (0x47CC90) and the
+// game's update of its times, which passes its notes to script (0x47CCD0),
+// read in place from the anim tree, the xanims and the xmodels in guest
+// memory.
 // Replacements of lifted functions named with `replace` in
 // manifest/CoDSP.manifest; FINDINGS.md "XAnim evaluation". Names and
 // evidence are in the Ghidra plate comments.
@@ -14,12 +16,13 @@
 // The anim tree recursion's temporary pose buffers stay where the original
 // allocates them, on the guest stack (its alloca), so every pose is guest
 // memory; the lifted functions called from here (the part-to-bone map and
-// its release, the part duplicates, an info's name release) get the
-// original's register and stack arguments. Not reproduced: EAX, ECX, EDX
-// and EFLAGS on return (every call site overwrites them or returns to code
-// that does: the cgame and game syscall exits do `xor eax,eax`), the x87
-// status word, and the dead stack below ESP (where the update's originals
-// also rewrite their own argument slots).
+// its release, the part duplicates, an info's name release, the script
+// calls of the game's notes) get the original's register and stack
+// arguments. Not reproduced: EAX (but 0x47CCD0's result), ECX, EDX and
+// EFLAGS on return (every call site overwrites them or returns to code that
+// does: the cgame and game syscall exits do `xor eax,eax`), the x87 status
+// word, and the dead stack below ESP (where the updates' originals also
+// rewrite their own argument slots).
 
 #include <cstdint>
 
@@ -32,6 +35,9 @@ void f_00478FC0(Ctx& c);  // the part-to-bone map of EAX's anim for (models, cou
 void f_0045D580(Ctx& c);  // releases string-table entry AX (EDX bytes)
 void f_004761F0(Ctx& c);  // the DObj's part duplicates (dobj)
 void f_0045D530(Ctx& c);  // releases string-table entry (u16 entry)
+void f_0046A7A0(Ctx& c);  // pushes string-table entry (u16 entry) on the script stack
+void f_004683B0(Ctx& c);  // script call (target, name, argument count)
+void f_0047B390(Ctx& c);  // 0x4683B0 (target, name, 1) with string SI pushed
 
 namespace {
 
@@ -705,16 +711,20 @@ void CalcSkel(Ctx& c, const uint32_t* mask, uint32_t dobj) {
 
 // An anim's state: time and the time before (0 to 1), the cycle count and
 // the one before, the weight blending to its goal over goalTime, the rate.
-// The update advances state 0; state 1's weights only keep an info alive.
+// cgame's update advances state 0, and state 1's weights only keep an info
+// alive there; the game's advances state 1 from oldTime and oldCycle.
 struct AnimState {
   F32 time, oldTime;
   uint16_t cycle, oldCycle;
   F32 goalTime, goalWeight, weight, rate;
 };
-// XAnimInfo: a string-table name (+4), the notes' name (+6), the free
+// XAnimInfo: for the game's update the child whose notes a parent passes
+// (+0, 0 for none: the cycle's end) and the next note's index (+2); the
+// name the game's notes go to script with (+4, a string-table entry
+// released with the info), the name cgame's are queued with (+6), the free
 // list's links (+8, +0xA: info 0 holds its head), two states.
 struct Info {
-  uint16_t unknown0, unknown2, name, notify, next, prev;
+  uint16_t noteChild, nextNote, name, notify, next, prev;
   AnimState state[2];
 };
 static_assert(sizeof(AnimState) == 0x1C && sizeof(Info) == 0x44);
@@ -735,7 +745,7 @@ constexpr uint32_t kNotes = 0xA8F040;
 constexpr uint32_t kNoteCycle = 0xA8F644;
 constexpr uint32_t kDeltaTime = 0xA8F64C;  // the update's, in seconds
 constexpr uint32_t kNoteTime = 0xA8F654;
-constexpr uint32_t kDObjFlag = 0xA8F65C;   // DObj +0x12, read by the game's update
+constexpr uint32_t kNoteTarget = 0xA8F65C;  // DObj +0x12: the game's update passes it to script
 constexpr uint32_t kTimeStep = 0xA8F660;   // the anim's step, in its time
 constexpr uint32_t kOldCycle = 0xA8F664;
 constexpr uint32_t kOldTime = 0xA8F66C;
@@ -1044,6 +1054,278 @@ void Update(Ctx& c, uint32_t node, F32 dt, bool notes) {
   for (uint32_t k = 0; k < count; k++) Sync(c, At<uint16_t>(entry + 6) + k, notes);
 }
 
+// ---- the game's update ------------------------------------------------------------------
+
+// The game's update (0x47CCD0) works on state 1 and takes each anim's time
+// from oldTime and oldCycle by dt, never back. Its notes go to script as it
+// passes them, through lifted calls, which may run script: what the
+// originals keep in registers across those calls is kept here, the rest
+// read again where they read it.
+
+St NewTime() { return St(At<F32>(kNewTime)); }
+St OldTime() { return St(At<F32>(kOldTime)); }
+
+// The note at n to script for the info (0x47B390, from the call site
+// before ret).
+void SendNote(Ctx& c, const Info& p, uint32_t n, uint32_t ret) {
+  c.esi = At<uint16_t>(n);
+  Push(c, p.name);
+  Push(c, At<uint16_t>(kNoteTarget));
+  Call(c, f_0047B390, ret);
+  c.esp += 8;
+}
+
+// The cycle's end note to script.
+void SendEndNote(Ctx& c, const Info& p, uint32_t ret1, uint32_t ret2) {
+  Push(c, At<uint16_t>(kEndNote));
+  Call(c, f_0046A7A0, ret1);
+  Push(c, 1);
+  Push(c, p.name);
+  Push(c, At<uint16_t>(kNoteTarget));
+  Call(c, f_004683B0, ret2);
+  c.esp += 0x10;
+}
+
+// The notes the step from kOldTime to kNewTime passes, to script (0x47B6F0;
+// EBX the info): a leaf's own (from its next note, which then moves on to
+// the first at or after the new time), a parent's from its note child's or
+// its cycle's end.
+void GameNotes(Ctx& c, Info& p, uint32_t entry) {
+  if (!At<uint16_t>(kNoteTarget) || !p.name) return;
+  if (OldTime() == 1.0f) return SendEndNote(c, p, 0x47B72A, 0x47B742);
+  if (At<uint16_t>(entry)) {
+    if (!p.noteChild) {
+      if (NewTime() < At<F32>(kOldTime) || NewTime() == 1.0f) SendEndNote(c, p, 0x47B791, 0x47B7A8);
+      return;
+    }
+    entry = AnimEntry(p.noteChild);
+  }
+  const uint32_t data = AnimData(entry);
+  uint32_t n = At<uint32_t>(data + 0x14) + uint32_t(int32_t(int16_t(p.nextNote)) * 8);
+  // From n while the step passes them; the next note from the new time.
+  auto passed = [&](uint32_t ret) {
+    for (;;) {
+      SendNote(c, p, n, ret);
+      n += 8;
+      if (!At<uint16_t>(n) || !(NewTime() > At<F32>(n + 4))) break;
+    }
+  };
+  auto next = [&] {
+    const F32 t = At<F32>(kNewTime);
+    p.nextNote = FirstNote(At<uint32_t>(AnimData(entry) + 0x14), t);
+  };
+  const St ft = NewTime();
+  if (ft < At<F32>(kOldTime)) {  // wrapped
+    if (ft > At<F32>(n + 4)) {
+      passed(0x47B818);
+      return next();
+    }
+    if (OldTime() > At<F32>(n + 4)) return;
+    do SendNote(c, p, n, 0x47B876), n += 8;
+    while (At<uint16_t>(n));
+    // From the first again, while the following note is passed (the end
+    // note's time stops it).
+    n = At<uint32_t>(data + 0x14);
+    if (NewTime() > At<F32>(n + 4)) {
+      for (bool more = true; more; n += 8) {
+        SendNote(c, p, n, 0x47B8B8);
+        more = NewTime() > At<F32>(n + 0xC);
+      }
+    }
+    return next();
+  }
+  if (ft == 1.0f) {
+    if (OldTime() > At<F32>(n + 4)) return;
+    do SendNote(c, p, n, 0x47B915), n += 8;
+    while (At<uint16_t>(n));
+    return;
+  }
+  if (NewTime() <= At<F32>(n + 4) || OldTime() > At<F32>(n + 4)) return;
+  passed(0x47B966);
+  next();
+}
+
+// GameNotes for a synchronised anim and below it the anims of nonzero
+// weight and goal weight (0x47B9B0).
+void SubtreeNotes(Ctx& c, Info& p, uint32_t entry) {
+  GameNotes(c, p, entry);
+  for (uint32_t k = 0; k < At<uint16_t>(entry); k++) {
+    const uint32_t tree = Global(kTree), node = At<uint16_t>(entry + 6) + k;
+    const uint16_t i = At<uint16_t>(tree + 8 + node * 2);
+    if (!i) continue;
+    Info& q = InfoAt(i);
+    if (Zero(q.state[1].weight) || Zero(q.state[1].goalWeight)) continue;
+    SubtreeNotes(c, q, At<uint32_t>(tree) + 8 + node * 8);
+  }
+}
+
+// kNewTime and kNewCycle into the anim below node and all below it with an
+// info (0x47BA30).
+void SetTime(uint32_t node) {
+  const uint16_t i = TreeInfo(node);
+  if (!i) return;
+  AnimState& s = InfoAt(i).state[1];
+  s.time = At<F32>(kNewTime);
+  s.cycle = At<uint16_t>(kNewCycle);
+  const uint32_t entry = AnimEntry(node);
+  for (uint32_t k = 0; k < At<uint16_t>(entry); k++) SetTime(At<uint16_t>(entry + 6) + k);
+}
+
+// Time t, cycle from oldCycle, wrapped into [0, 1) counting cycles if loop,
+// else clamped at 1. False (the anim stays) if loop is false and t <= 0.
+bool Wrap(St& t, uint16_t& cycle, bool loop) {
+  if (!loop) {
+    if (t >= 1.0f) {
+      t = St(1.0f);
+      return true;
+    }
+    return !(t <= 0.0f);
+  }
+  if (t < 0.0f) {
+    do t = t + 1.0f, cycle--;
+    while (t < 0.0f);
+  }
+  if (t >= 1.0f) {
+    do t = t - 1.0f, cycle++;
+    while (t >= 1.0f);
+  }
+  return true;
+}
+
+// Whether time t at cycle is behind the anim's (the game's update never
+// moves an anim back).
+bool Behind(const AnimState& s, St t, uint16_t cycle) {
+  return St(s.time) - t > FromInt(int32_t(int16_t(cycle)) - int16_t(s.cycle));
+}
+
+// The anim tree below node advanced by dt (0x47BA90): a leaf's time and a
+// synchronised parent's with its children's (at their mean frequency) set
+// from oldTime and oldCycle, unless that is behind; another parent's
+// children advanced at its rate; with notes, those passed to script (not
+// below an anim whose goal weight is zero). Anims of zero weight stay.
+void GameAdvance(Ctx& c, uint32_t node, F32 dt, bool notes) {
+  const uint16_t i = TreeInfo(node);
+  if (!i) return;
+  Info& p = InfoAt(i);
+  AnimState& s = p.state[1];
+  if (Zero(s.weight)) return;
+  if (Zero(s.goalWeight)) notes = false;
+  const uint32_t entry = AnimEntry(node);
+  const uint32_t count = At<uint16_t>(entry);
+  if (!count) {
+    const uint32_t data = AnimData(entry);
+    St t = St(At<F32>(data + 8)) * s.rate * dt + s.oldTime;
+    uint16_t cycle = s.oldCycle;
+    if (!Wrap(t, cycle, At<uint8_t>(data + 2)) || Behind(s, t, cycle)) return;
+    const F32 time = Fst(t);
+    if (notes) {
+      At<F32>(kOldTime) = s.time;
+      At<F32>(kNewTime) = time;
+      At<uint16_t>(kOldCycle) = s.cycle;
+      GameNotes(c, p, entry);
+    }
+    s.cycle = cycle;
+    s.time = time;
+    return;
+  }
+  const uint8_t flags = At<uint8_t>(entry + 4);
+  if (!(flags & 3)) {
+    const F32 d = Fst(St(dt) * s.rate);
+    for (uint32_t k = 0; k < count; k++) GameAdvance(c, At<uint16_t>(entry + 6) + k, d, notes);
+    return;
+  }
+  St t = Frequency(node) * s.rate * dt + s.oldTime;
+  uint16_t cycle = s.oldCycle;
+  if (!Wrap(t, cycle, !(flags & 2)) || Behind(s, t, cycle)) return;
+  At<F32>(kNewTime) = Fst(t);
+  if (notes) {
+    At<F32>(kOldTime) = s.time;
+    At<uint16_t>(kOldCycle) = s.cycle;
+    SubtreeNotes(c, p, entry);
+  }
+  At<uint16_t>(kNewCycle) = cycle;
+  SetTime(node);
+}
+
+// When the next note of the anim falls in the step, as a fraction of it
+// (0x47A6C0; ECX the info, EDX the entry): a parent's from its note child,
+// or its cycle's end; 1 for none.
+St NextNote(const Info& p, uint32_t entry) {
+  if (!At<uint16_t>(kNoteTarget) || !p.name) return St(1.0f);
+  if (At<uint16_t>(entry)) {
+    if (!p.noteChild) return NoteFrac(F32{0x3F800000u});
+    entry = AnimEntry(p.noteChild);
+  }
+  const int16_t next = int16_t(p.nextNote);
+  if (next < 0) return NoteFrac(F32{0x3F800000u});
+  return NoteFrac(Fst(St(At<F32>(At<uint32_t>(AnimData(entry) + 0x14) + next * 8 + 4))));
+}
+
+// The earliest NextNote of a synchronised anim and below it the anims of
+// nonzero weight and goal weight (0x47B3D0).
+St SubtreeNote(const Info& p, uint32_t entry) {
+  F32 best = Fst(NextNote(p, entry));
+  const uint32_t count = At<uint16_t>(entry);
+  const uint32_t tree = Global(kTree), first = At<uint16_t>(entry + 6);
+  for (uint32_t k = 0; k < count; k++) {
+    const uint16_t i = At<uint16_t>(tree + 8 + (first + k) * 2);
+    if (!i) continue;
+    const Info& q = InfoAt(i);
+    if (Zero(q.state[1].weight) || Zero(q.state[1].goalWeight)) continue;
+    const St r = SubtreeNote(q, At<uint32_t>(tree) + 8 + (first + k) * 8);
+    if (r < best) best = Fst(r);
+  }
+  return St(best);
+}
+
+// When the first note below node falls in a step of dt, as a fraction of it
+// (0x47B470): GameAdvance's step, its globals set as for NoteFrac; 1 for
+// none, or an anim that would not move.
+St StepNote(uint32_t node, F32 dt) {
+  const uint16_t i = TreeInfo(node);
+  if (!i) return St(1.0f);
+  const Info& p = InfoAt(i);
+  const AnimState& s = p.state[1];
+  if (Zero(s.weight) || Zero(s.goalWeight)) return St(1.0f);
+  const uint32_t entry = AnimEntry(node);
+  const uint32_t count = At<uint16_t>(entry);
+  const uint8_t flags = At<uint8_t>(entry + 4);
+  if (count && !(flags & 3)) {
+    const St d = St(dt) * s.rate;
+    const F32 df = Fst(d);
+    if (d == 0.0f) return St(1.0f);
+    F32 best{0x3F800000u};
+    for (uint32_t k = 0; k < count; k++) {
+      const St r = StepNote(At<uint16_t>(entry + 6) + k, df);
+      if (r < best) best = Fst(r);
+    }
+    return St(best);
+  }
+  const uint32_t data = count ? 0 : AnimData(entry);
+  const St step = (count ? Frequency(node) : St(At<F32>(data + 8))) * s.rate * dt;
+  const F32 stepF = Fst(step);
+  if (step == 0.0f) return St(1.0f);
+  St t = St(stepF) + s.oldTime;
+  uint16_t cycle = s.oldCycle;
+  const bool loop = count ? !(flags & 2) : At<uint8_t>(data + 2) != 0;
+  if (t >= 1.0f) {
+    if (!loop) {
+      t = St(1.0f);
+    } else {
+      do t = t - 1.0f, cycle++;
+      while (t >= 1.0f);
+    }
+  }
+  if (Behind(s, t, cycle)) return St(1.0f);
+  At<F32>(kNewTime) = Fst(t);
+  At<F32>(kTimeStep) = stepF;
+  At<F32>(kOldTime) = s.oldTime;
+  At<uint16_t>(kOldCycle) = s.oldCycle;
+  At<F32>(kNoteTime) = s.time;
+  At<uint16_t>(kNoteCycle) = s.cycle;
+  return count ? SubtreeNote(p, entry) : NextNote(p, entry);
+}
+
 }  // namespace
 
 // 0x47CD80 (see CalcAnim): EAX dobj, EDX the bone mask (uint32[4]).
@@ -1071,10 +1353,41 @@ void f_0047CC90(Ctx& c) {
   At<int32_t>(kNumNotes) = 0;
   if (tree) {
     At<uint32_t>(kTree) = tree;
-    At<uint16_t>(kDObjFlag) = At<uint16_t>(dobj + 0x12);
+    At<uint16_t>(kNoteTarget) = At<uint16_t>(dobj + 0x12);
     At<F32>(kDeltaTime) = dt;
     Update(c, 0, dt, true);
   }
+  c.esp += 4;
+}
+
+// 0x47CCD0 (see GameAdvance): ECX the DObj; dt and the notes flag on the
+// stack. With notes, a step that passes a note goes only just past the
+// first (0.001 on, if within dt) and returns 1 (EAX); else it goes by dt
+// and returns 0.
+void f_0047CCD0(Ctx& c) {
+  const uint32_t dobj = c.ecx, esi = c.esi;
+  const F32 dt = At<F32>(c.esp + 4);
+  const uint32_t notes = At<uint32_t>(c.esp + 8);
+  const uint32_t tree = At<uint32_t>(dobj);
+  uint32_t cut = 0;
+  if (tree) {
+    At<uint32_t>(kTree) = tree;
+    At<uint16_t>(kNoteTarget) = At<uint16_t>(dobj + 0x12);
+    if (!notes) {
+      GameAdvance(c, 0, dt, false);
+    } else {
+      const St f = StepNote(0, dt);
+      const St to = f * dt + kMilli;
+      if (!(f == 1.0f) && to <= dt) {
+        GameAdvance(c, 0, Fst(to), true);
+        cut = 1;
+      } else {
+        GameAdvance(c, 0, dt, true);
+      }
+    }
+  }
+  c.eax = cut;
+  c.esi = esi;
   c.esp += 4;
 }
 
