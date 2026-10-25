@@ -1,5 +1,52 @@
 # Findings
 
+## Renderer back end (2026-10-25, branch render-backend)
+The back end is going native from the bottom up (src/render_backend.cpp),
+each layer checked against the lifted originals by ctest
+render_backend_oracle with every GL call recorded. The aim is a back end
+that is native code down to its GL calls, which can then go to gfx::Device
+directly instead of through the opengl32 HLE ("Sketch: the stage iterator
+on gfx::Device" below).
+- The qgl pointers: QGL_Init (0x4BD930) loads each opengl32 export into a
+  dll pointer and a qgl pointer (`qglX = dllX = GetProcAddress(...)`), the
+  extension loader (0x4FE9xx-0x4FF0xx) the extensions through
+  wglGetProcAddress (glActiveTextureARB 0x1534C14, glClientActiveTextureARB
+  0x1534B78, glLockArraysEXT 0x1534DDC, glDrawRangeElementsEXT 0x1534DB0,
+  ...). The native code calls through them as the original does, so the
+  HLE sees the same calls.
+- Layer 1, the GL state: GL_Bind 0x4CB3B0 ("GL_Bind: NULL image"; ESI
+  image), the cull face 0x4CB5D0 (ESI), the texture environment 0x4CB640
+  (EAX), the state bits 0x4CB710 (EAX: depth, mask, line mode, alpha test,
+  lighting, fog, polygon offset, four extension caps, the blend; then the
+  fog colour 0x4C8A20 as a tail call), the client arrays 0x4CBBE0, fog on
+  0x4C89D0, and the element draws 0x4F32C0 (EAX indexes, EDX count; by
+  r_primitives glDrawElements or immediate-mode strips 0x4F3180 through
+  glArrayElement in EDI). The cached state: bits 0x1534630, arrays
+  0x1534634, cull 0x153462C, unit 0x15345A0, client unit 0x15345A4, and per
+  unit the bound texture 0x15345A8, environment 0x15345C8 and enabled
+  target 0x15345E8 (8 units). 0x4CB460, 0x4CB4A0, 0x4CB4E0 and 0x4CB6E0
+  next to them are never called (no references in the EXE).
+- Layer 2, a stage's texture units: a bundle's image now 0x4F3330 (ESI
+  bundle, unit on the stack, returns EAX: cinematic frames through the
+  refimport table, video generators 0x4FCE80, animations at the shader
+  time 0x17F0C78 with FISTP at round to nearest), binding a bundle on unit
+  EDI 0x4F3410 (EAX bundle; GL_COMBINE parameters, NV texture shaders),
+  a unit off 0x4F3810 (EAX), texture coordinate arrays on 0x4F38B0 (ESI)
+  and off 0x4F3920 (EDI), and a stage's textures on every unit 0x4F3D80
+  (stack: stage, coordinates per unit, stride; the stage's argument slot
+  is left holding the client unit). Bundles are 200 bytes from stage+4.
+- Oracle: random cached state, cvars, images, bundles, stages, fog colours
+  with special values, and index lists whose triangles continue or break
+  strips; 200000 cases, 1.76M calls out, 0 mismatches (2 s). Mutations: 25,
+  of which 21 fail the oracle, 1 did not build, and 3 cannot change a result
+  (u + u for u * 2, a test of the old fog bit that the diff already
+  implies, and the operand order of time x speed, which only shows in a NaN's
+  payload, and every NaN rounds to the same integer).
+- Frames (the recipe in "Run log" 2026-10-19 renderer): native against
+  base as base against base: all loading and briefing frames shared, 47/740
+  in-level frames identical, the rest differing only in the time-faded 2D
+  overlays (at most 634 px, base vs base 609).
+
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),
 checked bit for bit against the lifted originals by ctest render_oracle.

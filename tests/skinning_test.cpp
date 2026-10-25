@@ -51,6 +51,34 @@ void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 // lifted code reaches it.
 void f_0042B0A0_lifted(Ctx& c);
 void f_0042B0A0(Ctx& c) { f_0042B0A0_lifted(c); }
+// The back end's GL state and texture units, native in the game
+// (src/render_backend.cpp): here only lifted code reaches them.
+void f_004C89D0_lifted(Ctx& c);
+void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
+void f_004C8A20_lifted(Ctx& c);
+void f_004C8A20(Ctx& c) { f_004C8A20_lifted(c); }
+void f_004CB3B0_lifted(Ctx& c);
+void f_004CB3B0(Ctx& c) { f_004CB3B0_lifted(c); }
+void f_004CB5D0_lifted(Ctx& c);
+void f_004CB5D0(Ctx& c) { f_004CB5D0_lifted(c); }
+void f_004CB640_lifted(Ctx& c);
+void f_004CB640(Ctx& c) { f_004CB640_lifted(c); }
+void f_004CB710_lifted(Ctx& c);
+void f_004CB710(Ctx& c) { f_004CB710_lifted(c); }
+void f_004CBBE0_lifted(Ctx& c);
+void f_004CBBE0(Ctx& c) { f_004CBBE0_lifted(c); }
+void f_004F3330_lifted(Ctx& c);
+void f_004F3330(Ctx& c) { f_004F3330_lifted(c); }
+void f_004F3410_lifted(Ctx& c);
+void f_004F3410(Ctx& c) { f_004F3410_lifted(c); }
+void f_004F3810_lifted(Ctx& c);
+void f_004F3810(Ctx& c) { f_004F3810_lifted(c); }
+void f_004F38B0_lifted(Ctx& c);
+void f_004F38B0(Ctx& c) { f_004F38B0_lifted(c); }
+void f_004F3920_lifted(Ctx& c);
+void f_004F3920(Ctx& c) { f_004F3920_lifted(c); }
+void f_004F3D80_lifted(Ctx& c);
+void f_004F3D80(Ctx& c) { f_004F3D80_lifted(c); }
 }  // namespace gen
 
 // Nothing the cases reach calls out: RB_CheckOverflow never overflows.

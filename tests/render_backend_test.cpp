@@ -305,10 +305,10 @@ void PrintCall(const char* side, size_t i, const CallRec& r) {
               r.args[1], r.args[2], r.args[3], r.data[0], r.data[1], r.data[2], r.data[3]);
 }
 
-void Run(const Call& k, std::mt19937& g, Stats& s) {
+void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
   const Entry& e = kEntries[k.entry];
   std::vector<Window> w(std::begin(kGlobals), std::end(kGlobals));
-  w.push_back({kArena, kArenaSize});
+  w.push_back({kArena, arena_used});
   const uint32_t esp = kStack + kStackSize - 0x1000;
   Wr(esp, 0xDEAD0000);
   for (size_t i = 0; i < k.args.size(); i++) Wr(esp + 4 + 4 * uint32_t(i), k.args[i]);
@@ -616,7 +616,7 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       break;
     }
   }
-  Run(k, g, s);
+  Run(k, a.top - kArena, g, s);
 }
 
 }  // namespace
