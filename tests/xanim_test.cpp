@@ -79,12 +79,15 @@ void f_0047CD80(Ctx& c) { f_0047CD80_lifted(c); }
 void f_004766E0(Ctx& c) { f_004766E0_lifted(c); }
 void f_0047CC90(Ctx& c) { f_0047CC90_lifted(c); }
 void f_0047CCD0(Ctx& c) { f_0047CCD0_lifted(c); }
-// unzCloseCurrentFile and tolower, native in the game (src/unzip.cpp,
-// src/crt.cpp): here only the stubbed functions' lifted bodies reach them.
+// unzCloseCurrentFile, tolower and the memcpy 0x42B0A0, native in the game
+// (src/unzip.cpp, src/crt.cpp, src/render.cpp): here only the stubbed
+// functions' lifted bodies reach them.
 void f_0049EAA0_lifted(Ctx& c);
 void f_0049EAA0(Ctx& c) { f_0049EAA0_lifted(c); }
 void f_0051B3DD_lifted(Ctx& c);
 void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
+void f_0042B0A0_lifted(Ctx& c);
+void f_0042B0A0(Ctx& c) { f_0042B0A0_lifted(c); }
 // The stubs (below).
 void f_00478FC0(Ctx& c);
 void f_0045D580(Ctx& c);
