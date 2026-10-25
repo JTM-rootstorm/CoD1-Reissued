@@ -1,7 +1,8 @@
-// The renderer's back end natively, from the bottom up: first the layer
-// that turns the renderer's state into GL calls (GL_Bind, the cull face,
-// the texture environment, the state bits, the client arrays, the fog
-// colour and the element draws). Replacements of lifted functions named
+// The renderer's back end natively, from the bottom up: the layer that
+// turns the renderer's state into GL calls (GL_Bind, the cull face, the
+// texture environment, the state bits, the client arrays, the fog colour
+// and the element draws), and a stage's texture units (each bundle's image,
+// texture, environment and coordinates). Replacements of lifted functions named
 // with `replace` in manifest/CoDSP.manifest; FINDINGS.md "Renderer back
 // end". Names and evidence are in the Ghidra plate comments.
 //
@@ -25,6 +26,14 @@ namespace recomp::gen {
 void f_004C89D0(Ctx& c);
 void f_004C8A20(Ctx& c);
 void f_004F3180(Ctx& c);
+void f_004F3330(Ctx& c);
+void f_004F3410(Ctx& c);
+void f_004F3810(Ctx& c);
+void f_004F38B0(Ctx& c);
+void f_004F3920(Ctx& c);
+void f_004FCE80(Ctx& c);  // updates a video generator's texture (ECX; time, unit)
+void f_004F3A70(Ctx& c);  // sets up NV register combiners (combiners)
+void f_004F3C70(Ctx& c);  // sets up a vertex program (ESI program)
 
 namespace {
 
@@ -74,7 +83,9 @@ constexpr uint32_t kglEnable = 0x1534F68, kglDisable = 0x15349E0,
                    kglDisableClientState = 0x153495C,
                    kglClientActiveTextureARB = 0x1534B78, kglBegin = 0x1535360,
                    kglEnd = 0x1534EE0, kglDrawElements = 0x153513C,
-                   kglArrayElement = 0x1535104, kglLockArraysEXT = 0x1534DDC;
+                   kglArrayElement = 0x1535104, kglLockArraysEXT = 0x1534DDC,
+                   kglActiveTextureARB = 0x1534C14, kglTexEnvfv = 0x1534A10,
+                   kglTexEnvf = 0x15349B8, kglTexCoordPointer = 0x15349A0;
 // The refimport table's ri.Printf and ri.Error (cdecl).
 constexpr uint32_t kPrintf = 0x1549600, kError = 0x1549604;
 
@@ -87,6 +98,8 @@ constexpr uint32_t kStateBits = 0x1534630, kArrayBits = 0x1534634,
                    kCullType = 0x153462C, kUnit = 0x15345A0,
                    kClientUnit = 0x15345A4, kBound = 0x15345A8,
                    kTexEnv = 0x15345C8, kTarget = 0x15345E8;
+// The number of texture units the renderer uses.
+constexpr uint32_t kNumUnits = 0x1534758;
 // tr.identityLight (float).
 constexpr uint32_t kIdentityLight = 0x1536290;
 
@@ -548,6 +561,327 @@ void f_004F32C0(Ctx& c) {
     c.esp += 4;
     c.edi = edi;
   }
+  c.esp = e + 4;
+}
+
+// ---- a stage's texture units --------------------------------------------------
+
+// A texture bundle (200 bytes in a stage from +4, one per unit): images
+// (+0), the animation's image count (+0x80) and speed (+0x84), a video
+// generator (+0x88), the texture coordinate size (+0x8C), the texture
+// environment (+0x90; GL_REPLACE when +0xC4 and r_lightmap), combiner
+// parameters (+0x94, for GL_COMBINE), an NV texture shader (+0x98), a
+// cinematic handle (+0xC0, used when +0xC5) and clamping of the animation
+// (+0xC6).
+
+// The bundle's image now (ESI bundle, unit on the stack; returns it in
+// EAX): a cinematic's frame (run and uploaded through the refimport
+// table), after the video generator updates its texture, the animation's
+// frame at the shader time (0x17F0C78; frames per second x 1024, clamped
+// at the last frame or wrapped), or the first image.
+void f_004F3330(Ctx& c) {
+  const uint32_t e = c.esp, b = c.esi;
+  c.esp = e - 4;
+  if (U8(b + 0xC5)) {
+    Push(c, U32(b + 0xC0));
+    CallPtr(c, 0x1549684, 0x4F3342);
+    Push(c, U32(b + 0xC0));
+    CallPtr(c, 0x154967C, 0x4F334F);
+    c.eax = U32(0x1535A3C + 4 * U32(b + 0xC0));
+  } else if (U32(b + 0x88)) {
+    Push(c, Arg(c, e, 1));
+    Push(c, U32(0x1536360));
+    c.ecx = U32(b + 0x88);
+    Call(c, f_004FCE80, 0x4F3382);
+    c.eax = U32(b);
+  } else if (I32(b + 0x80) <= 1) {
+    c.eax = U32(b);
+  } else {
+    const F32 t = Fst(St(Ld(0x17F0C78)) * Ld(b + 0x84) * Ld(0x55B774));
+    Put(e - 4, t);
+    const int32_t frame = Fistp(St(t));
+    Put(0x13F96D8, uint32_t(frame));
+    int32_t i = frame >> 10;
+    if (i < 0) i = 0;
+    const int32_t n = I32(b + 0x80);
+    if (U8(b + 0xC6)) {
+      c.eax = U32(b + 4 * uint32_t(i < n ? i : n - 1));
+    } else {
+      c.edx = uint32_t(i % n);
+      c.eax = U32(b + 4 * c.edx);
+    }
+  }
+  c.esp = e + 4;
+}
+
+// Binds a bundle (EAX) on unit EDI: its image now, the image's target and
+// texture, and its texture environment (selecting the unit if any of them
+// changes); then GL_COMBINE's parameters, and the NV texture shader when
+// the bundle has one or the unit had one on.
+void f_004F3410(Ctx& c) {
+  const uint32_t e = c.esp, b = c.eax, unit = c.edi, esi = c.esi;
+  uint32_t env = U32(b + 0x90);
+  if (U8(b + 0xC4) && CvarInt(0x15343B4)) env = 0x1E01;
+  c.esp = e - 0x10;
+  Push(c, unit);
+  c.esi = b;
+  Call(c, f_004F3330, 0x4F3445);
+  c.esi = esi;
+  c.esp += 4;
+  const uint32_t image = c.eax, target = U32(image + 0x54);
+  const uint32_t tgt = kTarget + 4 * unit, bound = kBound + 4 * unit, slot = kTexEnv + 4 * unit;
+  if (U32(tgt) != target || U32(image + 0x58) != U32(bound) || env != U32(slot)) {
+    if (unit != U32(kUnit)) {
+      Push(c, unit + 0x84C0);
+      CallPtr(c, kglActiveTextureARB, 0x4F3484);
+      Put(kUnit, unit);
+    }
+    const uint32_t cur = U32(tgt);
+    if (cur != target) {
+      if (cur) Disable(c, cur, 0x4F34A0);
+      Enable(c, target, 0x4F34A7);
+      Put(tgt, target);
+    }
+    if (U32(image + 0x58) != U32(bound)) {
+      Push(c, U32(image + 0x58));
+      Push(c, target);
+      Put(image + 0x5C, U32(0x1535A24));
+      CallPtr(c, kglBindTexture, 0x4F34CB);
+      Put(bound, U32(image + 0x58));
+    }
+    if (env != U32(slot)) {
+      Push(c, env);
+      Push(c, 0x2200);
+      Push(c, 0x2300);
+      CallPtr(c, kglTexEnvi, 0x4F34F3);
+      Put(slot, env);
+    }
+  }
+  c.esp = e - 8;
+  if (env == 0x8570) {
+    if (unit != U32(kUnit)) {
+      Push(c, unit + 0x84C0);
+      CallPtr(c, kglActiveTextureARB, 0x4F3523);
+      Put(kUnit, unit);
+    }
+    Push(c, U32(b + 0x94));
+    Push(c, 0x2201);
+    Push(c, 0x2300);
+    CallPtr(c, kglTexEnvfv, 0x4F3540);
+    // The combiner's parameters and their fields, each its own call site.
+    static constexpr struct {
+      uint32_t pname, field;
+      bool f;
+    } kCombine[] = {
+        {0x8571, 0x10}, {0x8573, 0x2C, true}, {0x8580, 0x14}, {0x8581, 0x18},
+        {0x8582, 0x1C}, {0x8590, 0x20},       {0x8591, 0x24}, {0x8592, 0x28},
+        {0x8572, 0x30}, {0xD1C, 0x4C, true},  {0x8588, 0x34}, {0x8589, 0x38},
+        {0x858A, 0x3C}, {0x8598, 0x40},       {0x8599, 0x44}, {0x859A, 0x48},
+    };
+    uint32_t va = 0x4F355A;
+    for (const auto& k : kCombine) {
+      Push(c, U32(U32(b + 0x94) + k.field));
+      Push(c, k.pname);
+      Push(c, 0x2300);
+      CallPtr(c, k.f ? kglTexEnvf : kglTexEnvi, va);
+      va += 0x1A;
+    }
+  }
+  const uint32_t shader = U32(b + 0x98), on = 0x1534608 + 4 * unit;
+  if (shader && (U32(shader) || U32(on))) {
+    if (unit != U32(kUnit)) {
+      Push(c, unit + 0x84C0);
+      CallPtr(c, kglActiveTextureARB, 0x4F3717);
+      Put(kUnit, unit);
+    }
+    Push(c, U32(shader));
+    Push(c, 0x86DF);
+    Push(c, 0x86DE);
+    CallPtr(c, kglTexEnvi, 0x4F3736);
+    // The shader operations' cases (0x86E7 on, from the original's
+    // table): 0 the offset matrix, 2 the previous texture input and the
+    // dot product's, 3 the const eye vector and those, 1 the previous
+    // texture input only, 4 nothing.
+    static constexpr uint8_t kCase[13] = {0, 4, 1, 1, 4, 2, 4, 2, 4, 2, 2, 2, 3};
+    const uint32_t op = U32(shader) - 0x86E7;
+    const uint8_t k = op <= 12 ? kCase[op] : 4;
+    if (k == 0) {
+      Push(c, shader + 0xC);
+      Push(c, 0x86E0);
+      Push(c, 0x86DE);
+      CallPtr(c, kglTexEnvfv, 0x4F376B);
+    } else if (k == 1) {
+      Push(c, U32(shader + 4));
+      Push(c, 0x86E4);
+      Push(c, 0x86DE);
+      CallPtr(c, kglTexEnvi, 0x4F37C0);
+    } else if (k != 4) {
+      if (k == 3) {
+        Push(c, shader + 0xC);
+        Push(c, 0x86E5);
+        Push(c, 0x86DE);
+        CallPtr(c, kglTexEnvfv, 0x4F378C);
+      }
+      Push(c, U32(shader + 4));
+      Push(c, 0x86E4);
+      Push(c, 0x86DE);
+      CallPtr(c, kglTexEnvi, 0x4F37A6);
+      Push(c, U32(shader + 8));
+      Push(c, 0x86D9);
+      Push(c, 0x86DE);
+      CallPtr(c, kglTexEnvi, 0x4F37C0);
+    }
+    Put(on, U32(shader) != 0);
+  }
+  c.esp = e + 4;
+}
+
+// Turns texturing off on unit EAX: its target disabled (selecting the
+// unit) and its NV texture shader off.
+void f_004F3810(Ctx& c) {
+  const uint32_t unit = c.eax, tgt = kTarget + 4 * unit;
+  c.esp -= 4;
+  if (U32(tgt)) {
+    if (unit != U32(kUnit)) {
+      Push(c, unit + 0x84C0);
+      CallPtr(c, kglActiveTextureARB, 0x4F382D);
+      Put(kUnit, unit);
+    }
+    Disable(c, U32(tgt), 0x4F3841);
+    Put(tgt, 0);
+    if (U32(0x1534608 + 4 * unit)) {
+      Push(c, 0);
+      Push(c, 0x86DF);
+      Push(c, 0x86DE);
+      CallPtr(c, kglTexEnvi, 0x4F3870);
+      Put(0x1534608 + 4 * unit, 0);
+    }
+  }
+  c.esp += 8;
+}
+
+// The texture coordinates of client unit ESI (stack: bundle, pointer,
+// stride): selects the unit, enables its array and points it at them, of
+// the bundle's size.
+void f_004F38B0(Ctx& c) {
+  const uint32_t e = c.esp, unit = c.esi;
+  if (U32(kClientUnit) != unit) {
+    Push(c, unit + 0x84C0);
+    CallPtr(c, kglClientActiveTextureARB, 0x4F38C1);
+    Put(kClientUnit, unit);
+  }
+  if (!((1u << (U32(kClientUnit) & 31)) & U32(kArrayBits))) {
+    Push(c, 0x8078);
+    CallPtr(c, kglEnableClientState, 0x4F38E4);
+    Put(kArrayBits, U32(kArrayBits) | 1u << (U32(kClientUnit) & 31));
+  }
+  Push(c, Arg(c, e, 2));
+  Push(c, Arg(c, e, 3));
+  Push(c, 0x1406);
+  Push(c, U32(Arg(c, e, 1) + 0x8C));
+  CallPtr(c, kglTexCoordPointer, 0x4F3917);
+  c.esp = e + 4;
+}
+
+// Turns client unit EDI's texture coordinate array off (selecting it).
+void f_004F3920(Ctx& c) {
+  const uint32_t unit = c.edi, bit = 1u << (unit & 31);
+  c.esp -= 4;
+  if (bit & U32(kArrayBits)) {
+    if (U32(kClientUnit) != unit) {
+      Push(c, unit + 0x84C0);
+      CallPtr(c, kglClientActiveTextureARB, 0x4F3942);
+      Put(kClientUnit, unit);
+    }
+    Push(c, 0x8078);
+    CallPtr(c, kglDisableClientState, 0x4F3953);
+    Put(kArrayBits, U32(kArrayBits) & ~bit);
+  }
+  c.esp += 8;
+}
+
+// A stage's textures on every unit (stack: stage, the texture coordinate
+// pointers per unit, stride; the stage's slot is left holding the client
+// unit): the current client unit's array and the
+// current unit's texture first, then the other units', so that the units
+// end selected as they were; then the stage's register combiners, vertex
+// program and fragment shader (+0x648, +0x64C, +0x644).
+void f_004F3D80(Ctx& c) {
+  const uint32_t e = c.esp, stage = Arg(c, e, 1), coords = Arg(c, e, 2),
+                 stride = Arg(c, e, 3);
+  const uint32_t esi = c.esi, edi = c.edi;
+  auto bundle = [&](uint32_t u) { return stage + 4 + 0xC8 * u; };
+  auto coords_on = [&](uint32_t u, uint32_t ret) {
+    Push(c, stride);
+    Push(c, U32(coords + 4 * u));
+    Push(c, bundle(u));
+    c.esi = u;
+    Call(c, f_004F38B0, ret);
+    c.esp += 0xC;
+  };
+  auto bind = [&](uint32_t u, uint32_t bind_ret, uint32_t off_ret) {
+    if (U32(bundle(u) + 0x90)) {
+      c.eax = bundle(u);
+      c.edi = u;
+      Call(c, f_004F3410, bind_ret);
+    } else {
+      c.eax = u;
+      Call(c, f_004F3810, off_ret);
+    }
+  };
+  c.esp = e - 0x10;
+  const uint32_t client = U32(kClientUnit);
+  Put(e + 4, client);  // the stage's slot keeps the client unit
+  if (U32(bundle(client) + 0x90)) {
+    coords_on(client, 0x4F3DBD);
+  } else {
+    c.edi = client;
+    Call(c, f_004F3920, 0x4F3DC9);
+  }
+  const uint32_t unit = U32(kUnit);
+  c.edi = unit;
+  bind(unit, 0x4F3DF1, 0x4F3DFA);
+  if (I32(kNumUnits) > 0) {
+    c.esp = e - 0x14;
+    for (uint32_t u = 0; int32_t(u) < I32(kNumUnits); u++) {
+      if (u != client) {
+        if (U32(bundle(u) + 0x90)) {
+          coords_on(u, 0x4F3E33);
+        } else {
+          const uint32_t bit = 1u << (u & 31);
+          if (U32(kArrayBits) & bit) {
+            if (U32(kClientUnit) != u) {
+              Push(c, u + 0x84C0);
+              CallPtr(c, kglClientActiveTextureARB, 0x4F3E59);
+              Put(kClientUnit, u);
+            }
+            Push(c, 0x8078);
+            CallPtr(c, kglDisableClientState, 0x4F3E6A);
+            Put(kArrayBits, U32(kArrayBits) & ~bit);
+          }
+        }
+      }
+      if (u != unit) bind(u, 0x4F3E97, 0x4F3EA0);
+    }
+    c.esp = e - 0x10;
+  }
+  if (U32(stage + 0x648)) {
+    Push(c, U32(stage + 0x648));
+    Call(c, f_004F3A70, 0x4F3EC5);
+    c.esp += 4;
+  }
+  if (U32(stage + 0x64C)) {
+    c.esi = U32(stage + 0x64C);
+    Call(c, f_004F3C70, 0x4F3ED7);
+  }
+  const uint32_t frag = U32(stage + 0x644);
+  if (frag != U32(0x1534670)) {
+    Push(c, frag);
+    CallPtr(c, 0x1535014, 0x4F3EE6);
+    Put(0x1534670, frag);
+  }
+  c.esi = esi;
+  c.edi = edi;
   c.esp = e + 4;
 }
 

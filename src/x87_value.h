@@ -146,6 +146,14 @@ inline int32_t Ftol(St v) {
   return int32_t(int64_t(v.v));
 }
 
+// FISTP m32 at round to nearest (even): the integer indefinite for a NaN
+// and out of range.
+inline int32_t Fistp(St v) {
+  const double r = std::nearbyint(v.v);
+  if (!(r >= -0x1p31 && r < 0x1p31)) return INT32_MIN;
+  return int32_t(r);
+}
+
 // FCOM and friends: C++ comparisons (false when unordered).
 #define COD1_X87_CMP(op)                                                   \
   inline bool operator op(St a, St b) { return a.v op b.v; }               \

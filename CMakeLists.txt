@@ -226,17 +226,23 @@ if(EXISTS "${COD1_GAME_EXE}")
 endif()
 
 # The native renderer back end (src/render_backend.cpp) against the
-# originals, lifted from COD1_GAME_EXE like skinning_oracle's, their GL
-# calls recorded: tests/render_backend_test.cpp, on random cases.
+# originals, lifted from COD1_GAME_EXE like skinning_oracle's, with the
+# lifted functions they call stubbed (tests/render_backend_stubs.manifest)
+# and their GL calls recorded: tests/render_backend_test.cpp, on random
+# cases.
 if(EXISTS "${COD1_GAME_EXE}")
   set(_dir "${CMAKE_CURRENT_BINARY_DIR}/render_backend_oracle")
   set(_gen "${_dir}/gen/gen_000.cpp" "${_dir}/gen/table.cpp")
+  set(_manifest "${_dir}/render_backend_test.manifest")
   add_custom_command(OUTPUT ${_gen}
+    COMMAND ${CMAKE_COMMAND} -E cat "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_backend_stubs.manifest" > "${_manifest}"
     COMMAND recomp_lift --exe "${COD1_GAME_EXE}"
             --symbols "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
-            --manifest "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
-            --only 004C89D0,004C8A20,004CB3B0,004CB5D0,004CB640,004CB710,004CBBE0,004F3180,004F32C0 --insns-per-file 1000000 --out "${_dir}/gen"
+            --manifest "${_manifest}"
+            --only 004C89D0,004C8A20,004CB3B0,004CB5D0,004CB640,004CB710,004CBBE0,004F3180,004F32C0,004F3330,004F3410,004F3810,004F38B0,004F3920,004F3D80,0051D2C1 --insns-per-file 1000000 --out "${_dir}/gen"
     DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_backend_stubs.manifest"
     COMMENT "Lifting the renderer back end for render_backend_oracle_test")
   add_executable(render_backend_oracle_test tests/render_backend_test.cpp
                  tests/render_backend_native.cpp ${_gen})

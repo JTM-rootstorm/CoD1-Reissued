@@ -1,0 +1,6 @@
+# Added to manifest/CoDSP.manifest for render_backend_oracle_test: the
+# lifted functions the native back end calls, stubbed (recording each call)
+# in tests/render_backend_test.cpp.
+replace 004FCE80
+replace 004F3A70
+replace 004F3C70

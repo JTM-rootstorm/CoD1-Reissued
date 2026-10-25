@@ -10,4 +10,10 @@
 #define f_004CBBE0 n_004CBBE0
 #define f_004F3180 n_004F3180
 #define f_004F32C0 n_004F32C0
+#define f_004F3330 n_004F3330
+#define f_004F3410 n_004F3410
+#define f_004F3810 n_004F3810
+#define f_004F38B0 n_004F38B0
+#define f_004F3920 n_004F3920
+#define f_004F3D80 n_004F3D80
 #include "../src/render_backend.cpp"
