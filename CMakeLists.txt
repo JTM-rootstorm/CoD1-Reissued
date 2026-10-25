@@ -33,7 +33,7 @@ if(TARGET cod1_lifted)
                  src/screen2d.cpp
                  src/pmove_fixed.cpp src/pmove.cpp src/unzip.cpp
                  src/zlib.cpp src/jpeg_idct.cpp src/crt.cpp src/xanim.cpp
-                 src/render.cpp
+                 src/render.cpp src/render_backend.cpp
                  $<TARGET_OBJECTS:cod1_lifted>)
   target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32 recomp_d3d7
                         recomp_opengl ZLIB::ZLIB)
@@ -128,6 +128,9 @@ set_source_files_properties(src/xanim.cpp PROPERTIES COMPILE_OPTIONS
 # in host doubles), with the originals' wrapping integer arithmetic.
 set_source_files_properties(src/render.cpp PROPERTIES COMPILE_OPTIONS
   "${_skinning_options};-fno-strict-aliasing;-fwrapv")
+# The back end likewise.
+set_source_files_properties(src/render_backend.cpp PROPERTIES COMPILE_OPTIONS
+  "${_skinning_options};-fno-strict-aliasing;-fwrapv")
 # The pk3 reads overlay unzip's structures on guest memory.
 set_source_files_properties(src/unzip.cpp PROPERTIES COMPILE_OPTIONS
   "-fnon-call-exceptions;${RECOMP_FAULT_FRAME_FLAGS};-fno-strict-aliasing")
@@ -220,6 +223,30 @@ if(EXISTS "${COD1_GAME_EXE}")
     "${_skinning_options};-fno-strict-aliasing;-fwrapv")
   set(COD1_RENDER_CAPTURES "" CACHE STRING "captured renderer calls for render_oracle (a list of files)")
   add_test(NAME render_oracle COMMAND render_oracle_test "${COD1_GAME_EXE}" ${COD1_RENDER_CAPTURES})
+endif()
+
+# The native renderer back end (src/render_backend.cpp) against the
+# originals, lifted from COD1_GAME_EXE like skinning_oracle's, their GL
+# calls recorded: tests/render_backend_test.cpp, on random cases.
+if(EXISTS "${COD1_GAME_EXE}")
+  set(_dir "${CMAKE_CURRENT_BINARY_DIR}/render_backend_oracle")
+  set(_gen "${_dir}/gen/gen_000.cpp" "${_dir}/gen/table.cpp")
+  add_custom_command(OUTPUT ${_gen}
+    COMMAND recomp_lift --exe "${COD1_GAME_EXE}"
+            --symbols "${CMAKE_CURRENT_SOURCE_DIR}/symbols/CoDSP"
+            --manifest "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+            --only 004C89D0,004C8A20,004CB3B0,004CB5D0,004CB640,004CB710,004CBBE0,004F3180,004F32C0 --insns-per-file 1000000 --out "${_dir}/gen"
+    DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
+    COMMENT "Lifting the renderer back end for render_backend_oracle_test")
+  add_executable(render_backend_oracle_test tests/render_backend_test.cpp
+                 tests/render_backend_native.cpp ${_gen})
+  target_include_directories(render_backend_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_link_libraries(render_backend_oracle_test PRIVATE recomp_x87 recomp_image)
+  set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
+    "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
+  set_source_files_properties(tests/render_backend_native.cpp PROPERTIES COMPILE_OPTIONS
+    "${_skinning_options};-fno-strict-aliasing;-fwrapv")
+  add_test(NAME render_backend_oracle COMMAND render_backend_oracle_test "${COD1_GAME_EXE}")
 endif()
 
 # The native pk3 reads (src/unzip.cpp) against the original unzip and
