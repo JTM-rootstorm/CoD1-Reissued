@@ -35,17 +35,43 @@ on gfx::Device" below).
   and off 0x4F3920 (EDI), and a stage's textures on every unit 0x4F3D80
   (stack: stage, coordinates per unit, stride; the stage's argument slot
   is left holding the client unit). Bundles are 200 bytes from stage+4.
-- Oracle: random cached state, cvars, images, bundles, stages, fog colours
-  with special values, and index lists whose triangles continue or break
-  strips; 200000 cases, 1.76M calls out, 0 mismatches (2 s). Mutations: 25,
-  of which 21 fail the oracle, 1 did not build, and 3 cannot change a result
-  (u + u for u * 2, a test of the old fog bit that the diff already
-  implies, and the operand order of time x speed, which only shows in a NaN's
-  payload, and every NaN rounds to the same integer).
+- Layer 3, what a flush sets up: the fog per flush 0x4F5D50 (by the
+  refdef's flags 0x15496EC: 1 none, 0x40 the sky's fog 0x1535820, 8 with
+  0x154D734 the view's 0x1535860, else the world's 0x1535920 when
+  0x13F9CF8 > 0), a fog's parameters 0x4C8830 (ESI; mode, density, hint,
+  start, end or the far clip cvar's, each sent only when it differs from
+  the cached 0x1534638-0x1534658) and fog off 0x4C89A0; the texture units
+  back to one 0x4F4090; the vertex deform dispatch 0x509F20 (52-byte
+  deforms at tess.shader+0xB0; the deform functions read EDI the deform,
+  EBX the deform or a text buffer, ESI, EAX the type, and see EDX/EBX/ESI
+  as the previous iteration left them, all kept); and a stage's vertex
+  colours 0x4F4FA0 (rgbGen +0x664, alphaGen +0x67C; the portal alpha and
+  the four view-dependent alphas, which rotate the view origin into the
+  entity's space with 0x426A60 and normalise per vertex with 0x4268B0, on
+  the original's stack locals). The stage's argument slot is the
+  original's scratch for its int and float conversions. The deforms and
+  the colour and alpha generators stay lifted (stubbed in the oracle).
+- Oracle: random cached state, cvars, images, bundles, stages, fogs,
+  tessellator vertices, entities and fog colours with special values, and
+  index lists whose triangles continue or break strips; 200000 cases over
+  21 entries, 1.43M calls out, 0 mismatches (2 s). Mutations: 43, of which
+  35 fail the oracle, 1 did not build, and 6 cannot change a result (u + u
+  for u * 2; a test of the old fog bit that the diff already implies; the
+  operand order of time x speed, which only shows in a NaN's payload that
+  FISTP turns into the same integer; two orders of an addition of x87
+  stack values; a clamp's `<` for `<=`, equal only at 0). One is a gap:
+  the order of the portal alpha's sum of squares changes the double's last
+  bit, which survives the float store only within 2^-53 of a rounding
+  midpoint, which random cases do not reach.
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
-  base as base against base: all loading and briefing frames shared, 47/740
-  in-level frames identical, the rest differing only in the time-faded 2D
-  overlays (at most 634 px, base vs base 609).
+  base as base against base: all loading and briefing frames shared, 46-47
+  of 740 in-level frames identical, the rest differing only in the
+  time-faded 2D overlays (at most 743 px, base vs base 609). With layer 3
+  the second frame after the briefing repeated the first (cursor still up,
+  "Objectives updated." not yet drawn) in both runs; base with the
+  briefing click 20 or 40 ms later does the same: the click is scheduled
+  in real time and landed a frame later. Frame dumps are about 800 MB a
+  run: write them to disk (not the RAM-backed /tmp) and keep hashes.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),

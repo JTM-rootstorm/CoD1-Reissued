@@ -81,16 +81,10 @@ void f_004F3D80_lifted(Ctx& c);
 void f_004F3D80(Ctx& c) { f_004F3D80_lifted(c); }
 void f_004C8830_lifted(Ctx& c);
 void f_004C8830(Ctx& c) { f_004C8830_lifted(c); }
-void f_004C89A0_lifted(Ctx& c);
-void f_004C89A0(Ctx& c) { f_004C89A0_lifted(c); }
 void f_004F5D50_lifted(Ctx& c);
 void f_004F5D50(Ctx& c) { f_004F5D50_lifted(c); }
 void f_004F4090_lifted(Ctx& c);
 void f_004F4090(Ctx& c) { f_004F4090_lifted(c); }
-void f_00509F20_lifted(Ctx& c);
-void f_00509F20(Ctx& c) { f_00509F20_lifted(c); }
-void f_004F4FA0_lifted(Ctx& c);
-void f_004F4FA0(Ctx& c) { f_004F4FA0_lifted(c); }
 }  // namespace gen
 
 // Nothing the cases reach calls out: RB_CheckOverflow never overflows.
