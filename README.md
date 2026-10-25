@@ -1,7 +1,7 @@
 # CoD1-Reissued
 
 A native port of **Call of Duty** (PC, 2003, single player) to 64-bit
-Linux, with macOS on Apple Silicon (Metal) to follow. Goals beyond running
+Linux and macOS on Apple Silicon (Metal). Goals beyond running
 natively: widescreen at any resolution with a UI and HUD that scale
 properly, Hor+ field of view, and high refresh rates (144 Hz and up)
 without the Quake 3 engine family's frame-rate-dependent physics.
@@ -12,11 +12,21 @@ build reads it from where you installed it.
 
 ## Status
 
-Early. Nothing is playable yet. The game's code is lifted and starts
-natively. Its C runtime and WinMain run, and it gets past video-memory
-detection. It stops at the first Windows function not yet reimplemented,
-on the way to its renderer. [FINDINGS.md](FINDINGS.md) tracks progress
-and [ARCHITECTURE.md](ARCHITECTURE.md) the plan.
+In game on Linux. The game's five modules are lifted and linked into one
+native program. It boots through the intro cinematics to the main menu
+with its music, starts a new game through the briefing, and the training
+level plays through to completion (played by hand), with EAX 3 through
+the game's own EAX Manager. Widescreen at any resolution, Hor+ FOV, a HUD
+that keeps its shapes on wide screens and exact frame caps are in, and
+the hottest engine code runs as native C++.
+
+On macOS (Apple Silicon, Metal) it builds, passes its tests and runs:
+scripted runs reach the training level at 60 fps (also fullscreen on a 5K
+display), and the training level has been played by hand on the Mac
+through the obstacle course, not yet to its end.
+
+[FINDINGS.md](FINDINGS.md) tracks progress and
+[ARCHITECTURE.md](ARCHITECTURE.md) the plan.
 
 Developed against the Steam release (v1.5b, app 2620). Other releases
 need their own lifter manifests.
@@ -32,7 +42,7 @@ Siege):
   `cgamex86.dll`, `uix86.dll` and `EaxMan.dll`) is translated ahead of
   time into C++, with exact integer, x87 and SSE/SSE2 semantics, and
   linked with a runtime that reimplements the Windows and Miles Sound
-  System APIs the game uses (OpenGL is next).
+  System APIs the game uses, OpenGL 1.x included.
 - That recompiled code is scaffolding. The aim is native source: lifted
   functions are replaced by hand-written C++ one subsystem at a time
   (widescreen, UI scaling and frame pacing first), each checked against
@@ -167,6 +177,17 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
    - `com_maxfps` is exact (144 gives 144, not 166) and the cap sleeps
      instead of keeping a core busy. With a variable-refresh display use
      `r_swapInterval 0` and a `com_maxfps` a little under its refresh rate.
+
+**macOS** (Apple Silicon): SDL_GPU runs on Metal. With Homebrew (`brew
+install cmake ninja sdl3 ffmpeg llvm@22 glslang spirv-cross ghidra
+openjdk@21`), the steps are the same with these differences: CMake finds
+Homebrew's LLVM; pass `-DX86RECOMP_DIR=<path>` unless x86recomp is at
+`../../x86recomp`; `pe_symbols.py` needs `/opt/homebrew/opt/llvm@22/bin`
+on `PATH` (for `llvm-undname`); Ghidra's headless script is
+`$(brew --prefix ghidra)/libexec/support/analyzeHeadless`, run with
+`JAVA_HOME=$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home`
+(without a terminal it cannot ask for the JDK). Settings and saves live
+under `~/Library/Application Support/cod1`.
 
 ## Tests
 
