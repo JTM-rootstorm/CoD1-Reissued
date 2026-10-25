@@ -84,6 +84,9 @@ constexpr Gl kGl[] = {
     {0x1534A10, "glTexEnvfv", 3, false, 2, 4},
     {0x15349B8, "glTexEnvf", 3},
     {0x15349A0, "glTexCoordPointer", 4},
+    {0x1534C84, "glFogi", 2},
+    {0x1535598, "glFogf", 2},
+    {0x15351A0, "glHint", 2},
     {0x1535014, "qgl 0x1535014", 1},
     {0x1549600, "ri.Printf", 2, true},
     {0x1549604, "ri.Error", 2, true},
@@ -97,19 +100,25 @@ constexpr uint32_t kLockArrays = 0x1534DDC;  // only tested for null
 struct CallRec {
   uint32_t target, ret, esp, args[4];
   uint32_t data[4];
+  uint32_t regs[7];  // stubs: the registers their callee reads
   bool operator==(const CallRec&) const = default;
 };
 std::vector<CallRec> g_calls;
 
+enum Reg { kEax = 1, kEcx = 2, kEdx = 4, kEbx = 8, kEsi = 16, kEdi = 32, kEbp = 64 };
+constexpr int kAll = 127;
+
 // The lifted functions the native ones call (tests/render_backend_stubs.manifest),
-// recorded as the GL calls are, with the register each reads in data[0].
-void Stub(Ctx& c, uint32_t va, uint32_t reg, int args) {
+// recorded as the GL calls are, with the registers each reads.
+void Stub(Ctx& c, uint32_t va, int regs, int args) {
   CallRec r{};
   r.target = va;
   r.esp = c.esp;
   r.ret = Rd(c.esp);
   for (int k = 0; k < args; k++) r.args[k] = Rd(c.esp + 4 + 4 * uint32_t(k));
-  r.data[0] = reg;
+  const uint32_t all[7] = {c.eax, c.ecx, c.edx, c.ebx, c.esi, c.edi, c.ebp};
+  for (int i = 0; i < 7; i++)
+    if (regs & (1 << i)) r.regs[i] = all[i];
   g_calls.push_back(r);
   const uint32_t junk = 0xC0DE0000u + uint32_t(g_calls.size());
   c.eax = junk;
@@ -123,10 +132,43 @@ void Stub(Ctx& c, uint32_t va, uint32_t reg, int args) {
 namespace recomp {
 namespace gen {
 // The stubs: the video generator's update (ECX; time, unit), the register
-// combiners (combiners) and the vertex program (ESI).
-void f_004FCE80(Ctx& c) { Stub(c, 0x4FCE80, c.ecx, 2); }
+// combiners (combiners), the vertex program (ESI), the vertex deforms
+// (every register: the dispatch passes them as the original leaves them),
+// and the colour and alpha generators.
+void f_004FCE80(Ctx& c) { Stub(c, 0x4FCE80, kEcx, 2); }
 void f_004F3A70(Ctx& c) { Stub(c, 0x4F3A70, 0, 1); }
-void f_004F3C70(Ctx& c) { Stub(c, 0x4F3C70, c.esi, 0); }
+void f_004F3C70(Ctx& c) { Stub(c, 0x4F3C70, kEsi, 0); }
+#define COD1_STUB(va, regs, args) \
+  void f_##va(Ctx& c) { Stub(c, 0x##va, regs, args); }
+COD1_STUB(00508AE0, kAll, 0)
+COD1_STUB(00508C50, kAll, 0)
+COD1_STUB(00508F00, kAll, 0)
+COD1_STUB(00508DE0, kAll, 0)
+COD1_STUB(00509040, kAll, 1)
+COD1_STUB(005090E0, kAll, 0)
+COD1_STUB(00508800, kAll, 0)
+COD1_STUB(005095F0, kAll, 0)
+COD1_STUB(005098A0, kAll, 0)
+COD1_STUB(00509190, kAll, 0)
+COD1_STUB(0050A030, kEcx, 0)
+COD1_STUB(0050A070, kEcx, 0)
+COD1_STUB(0050A170, kEax | kEsi, 0)
+COD1_STUB(0050B040, 0, 1)
+COD1_STUB(004F2E60, kEax | kEdi, 0)
+COD1_STUB(0050A0E0, kEcx, 0)
+COD1_STUB(0050A120, kEcx, 0)
+COD1_STUB(0050AEC0, kEax, 0)
+COD1_STUB(0050A270, kEax, 1)
+#undef COD1_STUB
+// unzCloseCurrentFile, tolower and the memcpy 0x42B0A0, native in the
+// game (src/unzip.cpp, src/crt.cpp, src/render.cpp): here only the stubbed
+// functions' lifted bodies reach them.
+void f_0049EAA0_lifted(Ctx& c);
+void f_0049EAA0(Ctx& c) { f_0049EAA0_lifted(c); }
+void f_0051B3DD_lifted(Ctx& c);
+void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
+void f_0042B0A0_lifted(Ctx& c);
+void f_0042B0A0(Ctx& c) { f_0042B0A0_lifted(c); }
 // The originals...
 void f_004C89D0_lifted(Ctx& c);
 void f_004C8A20_lifted(Ctx& c);
@@ -143,6 +185,12 @@ void f_004F3810_lifted(Ctx& c);
 void f_004F38B0_lifted(Ctx& c);
 void f_004F3920_lifted(Ctx& c);
 void f_004F3D80_lifted(Ctx& c);
+void f_004C8830_lifted(Ctx& c);
+void f_004C89A0_lifted(Ctx& c);
+void f_004F5D50_lifted(Ctx& c);
+void f_004F4090_lifted(Ctx& c);
+void f_00509F20_lifted(Ctx& c);
+void f_004F4FA0_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -160,6 +208,12 @@ void f_004F3810(Ctx& c) { f_004F3810_lifted(c); }
 void f_004F38B0(Ctx& c) { f_004F38B0_lifted(c); }
 void f_004F3920(Ctx& c) { f_004F3920_lifted(c); }
 void f_004F3D80(Ctx& c) { f_004F3D80_lifted(c); }
+void f_004C8830(Ctx& c) { f_004C8830_lifted(c); }
+void f_004C89A0(Ctx& c) { f_004C89A0_lifted(c); }
+void f_004F5D50(Ctx& c) { f_004F5D50_lifted(c); }
+void f_004F4090(Ctx& c) { f_004F4090_lifted(c); }
+void f_00509F20(Ctx& c) { f_00509F20_lifted(c); }
+void f_004F4FA0(Ctx& c) { f_004F4FA0_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -175,6 +229,12 @@ void n_004F3810(Ctx& c);
 void n_004F38B0(Ctx& c);
 void n_004F3920(Ctx& c);
 void n_004F3D80(Ctx& c);
+void n_004C8830(Ctx& c);
+void n_004C89A0(Ctx& c);
+void n_004F5D50(Ctx& c);
+void n_004F4090(Ctx& c);
+void n_00509F20(Ctx& c);
+void n_004F4FA0(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -255,7 +315,10 @@ const Entry kEntries[] = {
     COD1_ENTRY(004F32C0, "draw elements"), COD1_ENTRY(004F3330, "bundle image"),
     COD1_ENTRY(004F3410, "bind bundle"),   COD1_ENTRY(004F3810, "unit off"),
     COD1_ENTRY(004F38B0, "coords on"),     COD1_ENTRY(004F3920, "coords off"),
-    COD1_ENTRY(004F3D80, "stage textures"),
+    COD1_ENTRY(004F3D80, "stage textures"), COD1_ENTRY(004C8830, "fog params"),
+    COD1_ENTRY(004C89A0, "fog off"),       COD1_ENTRY(004F5D50, "flush fog"),
+    COD1_ENTRY(004F4090, "units reset"),   COD1_ENTRY(00509F20, "deforms"),
+    COD1_ENTRY(004F4FA0, "stage colours"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -272,7 +335,10 @@ struct Window {
 // counters, and the first page (a null image's fields).
 const Window kGlobals[] = {
     {0x1534000, 0x3000}, {0x1549000, 0x1000}, {0x13F9000, 0x1000},
-    {0x11E0000, 0x1000}, {0x17F0000, 0x1000}, {0x0, 0x100},
+    {0x11E0000, 0x1000}, {0x17F0000, 0x1000}, {0x154D000, 0x1000}, {0x0, 0x100},
+    // The tessellator's positions, vertex colours and normals, and the
+    // stage colours (as many as the cases' vertices use).
+    {0x1630C40, 0x800}, {0x1690C40, 0x100}, {0x1698C40, 0x200}, {0x16E0C40, 0x100},
 };
 
 struct Stats {
@@ -496,6 +562,51 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(0x17F0C78, g() % 4 ? time_bits : RandFloat(g));
   Wr(0x1536360, g());
   for (uint32_t i = 0; i < 4; i++) Wr(0x1535A3C + 4 * i, Image(a, g));
+  // The tessellator: up to 40 vertices (positions 4 or 8 floats apart).
+  Wr(0x17F0C88, g() % 16 ? g() % 41 : 0);
+  Wr(0x17F0C60, g() % 4 ? 4 : 8);
+  for (uint32_t i = 0; i < 0x800; i += 4) Wr(0x1630C40 + i, RandFloat(g));
+  for (uint32_t i = 0; i < 0x200; i += 4) Wr(0x1698C40 + i, RandFloat(g));
+  for (uint32_t i = 0; i < 0x100; i += 4) {
+    Wr(0x1690C40 + i, uint32_t(g()));
+    Wr(0x16E0C40 + i, uint32_t(g()));
+  }
+  const uint32_t shader = a.Alloc(0x700);
+  Wr(shader + 0xA4, RandFloat(g));
+  Wr(shader + 0xAC, g() % 8 ? g() % 5 : g() % 9);
+  for (uint32_t d = 0; d < 8; d++) Wr(shader + 0xB0 + 0x34 * d, g() % 8 ? 1 + g() % 18 : g() % 24);
+  Wr(0x17F0C70, shader);
+  Wr(0x17F0C84, uint32_t(g()));
+  if (g() % 2) Wr(0x1536290, 0x3F800000);  // tr.identityLight 1
+  Wr(0x1536294, g() & 0xFF);
+  Wr(0x1536298, g() % 4 ? g() % 3 : uint32_t(g()));  // overbright bits
+  for (uint32_t i = 0; i < 12; i += 4) Wr(0x1549828 + i, RandFloat(g));  // view origin
+  if (g() % 2) {
+    Wr(0x1549B3C, 0x1535D6C);  // the world entity
+  } else {
+    const uint32_t ent = a.Alloc(0x60);
+    for (uint32_t i = 0x1C; i < 0x50; i += 4) Wr(ent + i, RandFloat(g));
+    Wr(0x1549B3C, ent);
+  }
+  Wr(0x154D734, g() % 2);
+  Wr(0x15343F0, Cvar(a, g, 0));                  // the far clip
+  if (g() % 2) Wr(Rd(0x15343F0) + 0x1C, 0);
+  Wr(0x15343E8, Cvar(a, g, g() % 8));
+  // The sky's, the view's and the world's fogs, and the values last sent.
+  for (uint32_t fog : {0x1535820u, 0x1535860u, 0x1535920u}) {
+    Wr(fog, Pick(g, {0, 0x2601, 0x800, 0x801, uint32_t(g())}));
+    Wr(fog + 4, Pick(g, {0, 0x1100, 0x1101, 0x1102}));
+    for (uint32_t i = 0x10; i < 0x30; i += 4) Wr(fog + i, RandFloat(g));
+    if (g() % 4 == 0) Wr(fog + 0x2C, 0);
+    Wr(fog + 0x30, g() % 3 != 0);
+  }
+  Wr(0x13F9CF8, g() % 3 ? g() % 3 : uint32_t(g()));
+  const uint32_t sent = 0x1535820 + 0x40 * (g() % 2);
+  Wr(0x1534638, g() % 2 ? Rd(sent) : uint32_t(g()));
+  Wr(0x153463C, g() % 2 ? Rd(sent + 4) : uint32_t(g()));
+  Wr(0x1534650, g() % 2 ? Rd(sent + 0x20) : RandFloat(g));
+  Wr(0x1534654, g() % 2 ? Rd(sent + 0x24) : RandFloat(g));
+  Wr(0x1534658, g() % 2 ? Rd(sent + 0x2C) : RandFloat(g));
   Wr(0x1549B18, g());
 }
 
@@ -609,6 +720,17 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
     case 0x4F3920:
       k.edi = g() % 8;
       break;
+    case 0x4C8830:
+      k.esi = Pick(g, {0x1535820, 0x1535860, 0x1535920});
+      break;
+    case 0x4F4FA0: {
+      const uint32_t stage = a.Alloc(0x700);
+      Wr(stage + 0x664, g() % 8 ? g() % 15 : uint32_t(g()));
+      Wr(stage + 0x67C, g() % 8 ? g() % 15 : uint32_t(g()));
+      Wr(stage + 0x680, uint32_t(g()));
+      k.args = {stage};
+      break;
+    }
     case 0x4F3D80: {
       const uint32_t coords = a.Alloc(32);
       for (uint32_t u = 0; u < 8; u++) Wr(coords + 4 * u, uint32_t(g()));

@@ -90,7 +90,8 @@ replace 0042B0A0
 # The renderer back end (src/render_backend.cpp): GL_Bind, the cull face,
 # the texture environment, the state bits and the client arrays, fog on
 # and the fog colour, and the element draws (glDrawElements or strips);
-# a stage's texture units: each bundle's image, binding and coordinates.
+# a stage's texture units: each bundle's image, binding and coordinates;
+# a flush's fog, unit reset, vertex deform dispatch and stage colours.
 replace 004C89D0
 replace 004C8A20
 replace 004CB3B0
@@ -106,6 +107,12 @@ replace 004F3810
 replace 004F38B0
 replace 004F3920
 replace 004F3D80
+replace 004C8830
+replace 004C89A0
+replace 004F5D50
+replace 004F4090
+replace 00509F20
+replace 004F4FA0
 
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0

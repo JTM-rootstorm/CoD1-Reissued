@@ -1,8 +1,10 @@
 // The renderer's back end natively, from the bottom up: the layer that
 // turns the renderer's state into GL calls (GL_Bind, the cull face, the
 // texture environment, the state bits, the client arrays, the fog colour
-// and the element draws), and a stage's texture units (each bundle's image,
-// texture, environment and coordinates). Replacements of lifted functions named
+// and the element draws), a stage's texture units (each bundle's image,
+// texture, environment and coordinates), and what a flush sets up before
+// its stages draw: the fog, the texture units back to one, the vertex
+// deforms and each stage's colours. Replacements of lifted functions named
 // with `replace` in manifest/CoDSP.manifest; FINDINGS.md "Renderer back
 // end". Names and evidence are in the Ghidra plate comments.
 //
@@ -34,6 +36,31 @@ void f_004F3920(Ctx& c);
 void f_004FCE80(Ctx& c);  // updates a video generator's texture (ECX; time, unit)
 void f_004F3A70(Ctx& c);  // sets up NV register combiners (combiners)
 void f_004F3C70(Ctx& c);  // sets up a vertex program (ESI program)
+void f_004C8830(Ctx& c);
+void f_004C89A0(Ctx& c);
+// The vertex deforms (registers: f_00509F20).
+void f_00508AE0(Ctx& c);
+void f_00508C50(Ctx& c);
+void f_00508F00(Ctx& c);
+void f_00508DE0(Ctx& c);
+void f_00509040(Ctx& c);
+void f_005090E0(Ctx& c);
+void f_00508800(Ctx& c);
+void f_005095F0(Ctx& c);
+void f_005098A0(Ctx& c);
+void f_00509190(Ctx& c);
+// The colour and alpha generators (registers: f_004F4FA0).
+void f_0050A030(Ctx& c);
+void f_0050A070(Ctx& c);
+void f_0050A170(Ctx& c);
+void f_0050B040(Ctx& c);
+void f_004F2E60(Ctx& c);
+void f_0050A0E0(Ctx& c);
+void f_0050A120(Ctx& c);
+void f_0050AEC0(Ctx& c);
+void f_0050A270(Ctx& c);
+void f_00426A60(Ctx& c);  // rotates ECX by the axes EAX into EDX
+void f_004268B0(Ctx& c);  // normalises EAX (approximate inverse square root)
 
 namespace {
 
@@ -85,7 +112,8 @@ constexpr uint32_t kglEnable = 0x1534F68, kglDisable = 0x15349E0,
                    kglEnd = 0x1534EE0, kglDrawElements = 0x153513C,
                    kglArrayElement = 0x1535104, kglLockArraysEXT = 0x1534DDC,
                    kglActiveTextureARB = 0x1534C14, kglTexEnvfv = 0x1534A10,
-                   kglTexEnvf = 0x15349B8, kglTexCoordPointer = 0x15349A0;
+                   kglTexEnvf = 0x15349B8, kglTexCoordPointer = 0x15349A0,
+                   kglFogi = 0x1534C84, kglFogf = 0x1535598, kglHint = 0x15351A0;
 // The refimport table's ri.Printf and ri.Error (cdecl).
 constexpr uint32_t kPrintf = 0x1549600, kError = 0x1549604;
 
@@ -100,8 +128,15 @@ constexpr uint32_t kStateBits = 0x1534630, kArrayBits = 0x1534634,
                    kTexEnv = 0x15345C8, kTarget = 0x15345E8;
 // The number of texture units the renderer uses.
 constexpr uint32_t kNumUnits = 0x1534758;
-// tr.identityLight (float).
-constexpr uint32_t kIdentityLight = 0x1536290;
+// tr.identityLight (float) and its byte.
+constexpr uint32_t kIdentityLight = 0x1536290, kIdentityLightByte = 0x1536294;
+// The tessellator: its shader, vertex count, positions (kXyzStride dwords
+// apart), normals (12 bytes apart) and vertex colours; and the stage
+// colours computed from them.
+constexpr uint32_t kTessShader = 0x17F0C70, kTessVerts = 0x17F0C88,
+                   kTessXyz = 0x1630C40, kXyzStride = 0x17F0C60,
+                   kTessNormals = 0x1698C40, kVertColors = 0x1690C40,
+                   kColors = 0x16E0C40;
 
 void Enable(Ctx& c, uint32_t cap, uint32_t va) {
   Push(c, cap);
@@ -879,6 +914,435 @@ void f_004F3D80(Ctx& c) {
     Push(c, frag);
     CallPtr(c, 0x1535014, 0x4F3EE6);
     Put(0x1534670, frag);
+  }
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+
+// ---- fog per flush ----------------------------------------------------------
+
+// Fog off: disables it if the state bits have it on.
+void f_004C89A0(Ctx& c) {
+  if (U32(kStateBits) & 0x200000) {
+    Disable(c, 0xB60, 0x4C89B1);
+    Put(kStateBits, U32(kStateBits) & ~0x200000u);
+  }
+  c.esp += 4;
+}
+
+// A fog's parameters (ESI: mode +0, hint +4, colour +0x10, start +0x20, end
+// +0x24, density +0x2C, on +0x30), for the fog cvar: defaults for a zero
+// density (1), hint (GL_DONT_CARE) and mode (GL_LINEAR), fog on, the mode,
+// the colour (into the fog colour the blend follows), the density, the
+// hint, the start and the end (the far clip cvar's when nonzero), each
+// sent only when it differs from the one last sent.
+void f_004C8830(Ctx& c) {
+  const uint32_t e = c.esp, fog = c.esi;
+  c.esp = e - 4;
+  if (!CvarInt(0x15347F4) || !U32(fog + 0x30)) {
+    if (U32(kStateBits) & 0x200000) {
+      Disable(c, 0xB60, 0x4C8852);
+      Put(kStateBits, U32(kStateBits) & ~0x200000u);
+    }
+    c.esp = e + 4;
+    return;
+  }
+  if (St(Ld(fog + 0x2C)) == 0.0f) Put(fog + 0x2C, 0x3F800000);
+  if (!U32(fog + 4)) Put(fog + 4, 0x1100);
+  if (!U32(fog)) Put(fog, 0x2601);
+  Call(c, f_004C89D0, 0x4C88A0);
+  if (U32(fog) != U32(0x1534638)) {
+    Push(c, U32(fog));
+    Push(c, 0xB65);
+    CallPtr(c, kglFogi, 0x4C88B0);
+    Put(0x1534638, U32(fog));
+  }
+  for (uint32_t i = 0; i < 0x10; i += 4) Put(0x1534640 + i, U32(fog + 0x10 + i));
+  Call(c, f_004C8A20, 0x4C88E6);
+  if (!(St(Ld(fog + 0x2C)) == Ld(0x1534658))) {
+    Push(c, U32(fog + 0x2C));
+    Push(c, 0xB62);
+    CallPtr(c, kglFogf, 0x4C88FF);
+    Put(0x1534658, U32(fog + 0x2C));
+  }
+  if (U32(0x153463C) != U32(fog + 4)) {
+    Push(c, U32(fog + 4));
+    Push(c, 0xC54);
+    CallPtr(c, kglHint, 0x4C891F);
+    Put(0x153463C, U32(fog + 4));
+  }
+  if (!(St(Ld(0x1534650)) == Ld(fog + 0x20))) {
+    Push(c, U32(fog + 0x20));
+    Push(c, 0xB63);
+    CallPtr(c, kglFogf, 0x4C8947);
+    Put(0x1534650, U32(fog + 0x20));
+  }
+  const uint32_t zfar = U32(0x15343F0) + 0x1C;
+  const St end(Ld(!(St(Ld(zfar)) == 0.0f) ? zfar : fog + 0x24));
+  Put(e - 4, Fst(end));
+  if (!(end == Ld(0x1534654))) {
+    Push(c, U32(e - 4));
+    Push(c, 0xB64);
+    CallPtr(c, kglFogf, 0x4C898F);
+    Put(0x1534654, U32(e - 4));
+  }
+  c.esp = e + 4;
+}
+
+// The fog of a flush, by the refdef's flags (0x15496EC): none (1), the
+// sky's fog 0x1535820 (0x40; none without it), the view's 0x1535860 (8,
+// when 0x154D734 is set) or the world's 0x1535920 when it has one; fog off
+// otherwise.
+void f_004F5D50(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, flags = U8(0x15496EC);
+  c.esp = e - 4;
+  auto off = [&] {
+    if (U32(kStateBits) & 0x200000) {
+      Disable(c, 0xB60, 0x4F5D6B);
+      Put(kStateBits, U32(kStateBits) & ~0x200000u);
+    }
+  };
+  auto params = [&](uint32_t fog, uint32_t ret) {
+    c.esi = fog;
+    Call(c, f_004C8830, ret);
+    c.esi = esi;
+  };
+  if (flags & 1) {
+    off();
+  } else if (flags & 0x40) {
+    if (U32(0x1535850)) params(0x1535820, 0x4F5D94);
+    else off();
+  } else if (U32(0x154D734) && (flags & 8)) {
+    if (!U32(0x1535890)) {
+      c.esp = e;
+      return f_004C89A0(c);
+    }
+    params(0x1535860, 0x4F5DB7);
+  } else if (I32(0x13F9CF8) > 0) {
+    params(0x1535920, 0x4F5DCC);
+  } else {
+    c.esp = e;
+    return f_004C89A0(c);
+  }
+  c.esp = e + 4;
+}
+
+// ---- a flush's setup ----------------------------------------------------------
+
+// Back to one texture unit: units 1 on have their coordinate arrays and
+// textures off; unit 0 is selected (and its client unit) with GL_MODULATE.
+void f_004F4090(Ctx& c) {
+  const uint32_t e = c.esp;
+  c.esp = e - 4;
+  if (I32(kNumUnits) > 1) {
+    c.esp = e - 8;
+    for (uint32_t u = 1; int32_t(u) < I32(kNumUnits); u++) {
+      const uint32_t bit = 1u << (u & 31);
+      if (U32(kArrayBits) & bit) {
+        if (U32(kClientUnit) != u) {
+          Push(c, u + 0x84C0);
+          CallPtr(c, kglClientActiveTextureARB, 0x4F40C1);
+          Put(kClientUnit, u);
+        }
+        Push(c, 0x8078);
+        CallPtr(c, kglDisableClientState, 0x4F40D2);
+        Put(kArrayBits, U32(kArrayBits) & ~bit);
+      }
+      c.eax = u;
+      Call(c, f_004F3810, 0x4F40ED);
+    }
+  }
+  c.esp = e;
+  if (U32(kUnit)) {
+    Push(c, 0x84C0);
+    CallPtr(c, kglActiveTextureARB, 0x4F4107);
+    Put(kUnit, 0);
+  }
+  if (U32(kClientUnit)) {
+    Push(c, 0x84C0);
+    CallPtr(c, kglClientActiveTextureARB, 0x4F4123);
+    Put(kClientUnit, 0);
+  }
+  const uint32_t slot = kTexEnv + 4 * U32(kUnit);
+  if (U32(slot) != 0x2100) {
+    Push(c, 0x2100);
+    Push(c, 0x2200);
+    Push(c, 0x2300);
+    Put(slot, 0x2100);
+    CallPtr(c, kglTexEnvi, 0x4F415A);
+  }
+  c.esp = e + 4;
+}
+
+// The shader's vertex deforms (tess.shader 0x17F0C70: count +0xAC, 52-byte
+// deforms from +0xB0, type first), each by its function with the
+// original's registers: EDI the deform, EBP its offset, EAX its type (0 or
+// 1 for the two kinds of 0x508C50), ECX the type - 1, EBX the deform for
+// types 4 and 5 and the text's buffer (32 bytes from 0x15496F4) for the
+// texts 11-18, ESI the deform for type 7; EBX, ESI and EDX keep what the
+// previous call left as they do in the original.
+void f_00509F20(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  c.esp = e - 0x14;
+  for (uint32_t i = 0, off = 0; int32_t(i) < I32(U32(kTessShader) + 0xAC); i++, off += 0x34) {
+    const uint32_t ds = U32(kTessShader) + 0xB0 + off, type = U32(ds);
+    Put(e - 4, i);
+    c.edi = ds;
+    c.ebp = off;
+    c.eax = type;
+    c.ecx = type - 1;
+    switch (type) {
+      case 1: Call(c, f_00508AE0, 0x509F6F); break;
+      case 2: c.eax = 0; Call(c, f_00508C50, 0x509F78); break;
+      case 3: c.eax = 1; Call(c, f_00508C50, 0x509F84); break;
+      case 4: c.ebx = ds; Call(c, f_00508F00, 0x509F5F); break;
+      case 5: c.ebx = ds; Call(c, f_00508DE0, 0x509F68); break;
+      case 6:
+        Push(c, ds);
+        Call(c, f_00509040, 0x509F8C);
+        c.esp += 4;
+        break;
+      case 7: c.esi = ds; Call(c, f_005090E0, 0x509F98); break;
+      case 8: Call(c, f_00508800, 0x509F9F); break;
+      case 9: Call(c, f_005095F0, 0x509FA6); break;
+      case 10: Call(c, f_005098A0, 0x509FAD); break;
+      case 11: case 12: case 13: case 14: case 15: case 16: case 17: case 18:
+        c.ebx = ((type - 11) << 5) + 0x15496F4;
+        Call(c, f_00509190, 0x509FC0);
+        break;
+    }
+    c.edx = U32(U32(kTessShader) + 0xAC);
+  }
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// ---- a stage's colours ----------------------------------------------------------
+
+namespace {
+
+void Alpha(uint32_t i, uint32_t a) { Wr<uint8_t>(g_guest_base, kColors + 4 * i + 3, uint8_t(a)); }
+
+// The view-dependent alphas' view origin (at e - 0xC): the view's, or for
+// an entity the difference rotated into its space (0x426A60, through the
+// original's locals).
+void ViewOrigin(Ctx& c, uint32_t e, uint32_t ret) {
+  const uint32_t v = e - 0x18, o = e - 0xC, ent = U32(0x1549B3C);
+  if (ent == 0x1535D6C) {
+    for (uint32_t k = 0; k < 12; k += 4) Put(o + k, U32(0x1549828 + k));
+    return;
+  }
+  for (uint32_t k = 0; k < 12; k += 4) Put(v + k, Fst(St(Ld(0x1549828 + k)) - Ld(ent + 0x44 + k)));
+  c.eax = ent + 0x1C;
+  c.edx = o;
+  c.ecx = v;
+  Call(c, f_00426A60, ret);
+}
+
+// Per vertex of the view-dependent alphas: the normalised direction to the
+// view origin (0x4268B0 on the original's local at e - 0x18) against the
+// vertex normal, stored as a float in the stage's slot; `alpha` takes the
+// slot's bits to the alpha.
+template <typename F>
+void ViewAlphas(Ctx& c, uint32_t e, uint32_t ret, bool xz, bool negate, F alpha) {
+  const uint32_t v = e - 0x18, o = e - 0xC;
+  uint32_t xyz = kTessXyz, normal = kTessNormals + 4;
+  for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) {
+    for (uint32_t k = 0; k < 12; k += 4) Put(v + k, Fst(St(Ld(o + k)) - Ld(xyz + k)));
+    c.eax = v;
+    Call(c, f_004268B0, ret);
+    const St x = St(Ld(v)) * Ld(normal - 4), z = St(Ld(v + 8)) * Ld(normal + 4);
+    const St dot = (xz ? x + z : z + x) + St(Ld(v + 4)) * Ld(normal);
+    Put(e + 4, Fst(negate ? -dot : dot));
+    Alpha(i, alpha(U32(e + 4)));
+    xyz += 4 * U32(kXyzStride);
+    normal += 0xC;
+  }
+}
+
+}  // namespace
+
+// A stage's vertex colours (stage on the stack) into the stage colours
+// 0x16E0C40, by its rgbGen (+0x664: 2 white, 3/4 and 8-10 lifted
+// generators, 5 the vertex colours, 6 them shifted down by the overbright
+// bits, 7 one minus them, 12 a constant (+0x680), 13 a constant or the
+// debug colours, otherwise tr.identityLight's byte) and alphaGen (+0x67C:
+// 0 opaque, 2/3/6/7 lifted generators, 4 the vertices', 5 one minus them,
+// 8 the portal distance, 9 a constant (+0x683), 10-13 view-dependent),
+// from the tessellator's vertices (colours 0x1690C40). The stage's slot is
+// the original's scratch for the values it converts.
+void f_004F4FA0(Ctx& c) {
+  const uint32_t e = c.esp, stage = Arg(c, e, 1);
+  const uint32_t esi = c.esi, edi = c.edi;
+  c.esp = e - 0x28;
+  auto fill = [](uint32_t v) {
+    for (uint32_t i = 0, n = U32(kTessVerts); i < n; i++) Put(kColors + 4 * i, v);
+  };
+  auto byte = [](uint32_t va, uint32_t v) { Wr<uint8_t>(g_guest_base, va, uint8_t(v)); };
+  const uint32_t rgb = U32(stage + 0x664);
+  switch (rgb) {
+    case 2:
+      fill(0xFFFFFFFF);
+      break;
+    case 3:
+      c.ecx = kColors;
+      Call(c, f_0050A030, 0x4F51CD);
+      break;
+    case 4:
+      c.ecx = kColors;
+      Call(c, f_0050A070, 0x4F51D9);
+      break;
+    case 6:
+      if (const uint32_t shift = U32(0x1536298)) {
+        const uint32_t s = shift & 31;
+        for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) {
+          const uint32_t from = kVertColors + 4 * i, to = kColors + 4 * i;
+          byte(to, U8(from) >> s);
+          byte(to + 1, U8(from + 1) >> s);
+          byte(to + 3, U8(from + 3));
+          byte(to + 2, U8(from + 2) >> s);
+        }
+        break;
+      }
+      [[fallthrough]];
+    case 5:
+      for (uint32_t i = 0, n = U32(kTessVerts); i < n; i++) Put(kColors + 4 * i, U32(kVertColors + 4 * i));
+      break;
+    case 7:
+      for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++)
+        for (uint32_t k = 0; k < 3; k++) {
+          const uint32_t from = U8(kVertColors + 4 * i + k);
+          if (St(Ld(kIdentityLight)) == 1.0f) {
+            byte(kColors + 4 * i + k, 0xFF - from);
+          } else {
+            Put(e + 4, 0xFF - from);
+            byte(kColors + 4 * i + k, uint32_t(Ftol(FromInt(int32_t(0xFF - from)) * Ld(kIdentityLight))));
+          }
+        }
+      break;
+    case 8:
+      c.esi = stage + 0x650;
+      c.eax = kColors;
+      Call(c, f_0050A170, 0x4F51BE);
+      c.esi = esi;
+      break;
+    case 9:
+    case 10:
+      if (U32(U32(0x1535A34) + 0x118)) {
+        fill(0xFFFFFFFF);
+      } else {
+        Push(c, kColors);
+        Call(c, f_0050B040, 0x4F4FE5);
+        c.esp += 4;
+      }
+      break;
+    case 12:
+      for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) Put(kColors + 4 * i, U32(stage + 0x680));
+      break;
+    case 13:
+      if (I32(U32(0x15343E8) + 0x20) >= 5) {
+        c.eax = U32(0x17F0C84);
+        c.edi = kColors;
+        Call(c, f_004F2E60, 0x4F51F5);
+        c.edi = edi;
+      } else {
+        Put(kColors, U32(stage + 0x680));
+      }
+      for (uint32_t i = 1; int32_t(i) < I32(kTessVerts); i++) Put(kColors + 4 * i, U32(kColors));
+      break;
+    default:
+      fill(U8(kIdentityLightByte) * 0x01010101u);
+      break;
+  }
+
+  // Clamps of a float's bits: negative (sign set) to +0, or positive to +0.
+  auto non_negative = [](uint32_t b) { return int32_t(b) < 0 ? 0u : b; };
+  auto non_positive = [](uint32_t b) { return int32_t(b) < 0 ? b : 0u; };
+  switch (U32(stage + 0x67C)) {
+    case 0:
+      if (rgb != 2 && !(rgb == 6 && St(Ld(kIdentityLight)) == 1.0f))
+        for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) Alpha(i, 0xFF);
+      break;
+    case 2:
+      c.ecx = kColors;
+      Call(c, f_0050A0E0, 0x4F5337);
+      break;
+    case 3:
+      c.ecx = kColors;
+      Call(c, f_0050A120, 0x4F5349);
+      break;
+    case 4:
+      if (rgb != 6)
+        for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) Alpha(i, U8(kVertColors + 4 * i + 3));
+      break;
+    case 5:
+      for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) Alpha(i, 0xFF - U8(kVertColors + 4 * i + 3));
+      break;
+    case 6:
+      c.eax = kColors;
+      Call(c, f_0050AEC0, 0x4F5325);
+      break;
+    case 7:
+      Push(c, kColors);
+      c.eax = stage + 0x668;
+      Call(c, f_0050A270, 0x4F5310);
+      c.esp += 4;
+      break;
+    case 8: {
+      // The distance to the view over the shader's portal range (+0xA4):
+      // 0 in front, 255 beyond 1.
+      uint32_t xyz = kTessXyz;
+      for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) {
+        const St dx = St(Ld(xyz)) - Ld(0x1549828), dy = St(Ld(xyz + 4)) - Ld(0x154982C),
+                 dz = St(Ld(xyz + 8)) - Ld(0x1549830);
+        const St d = Sqrt(dz * dz + dy * dy + dx * dx) / Ld(U32(kTessShader) + 0xA4);
+        Put(e + 4, Fst(d));
+        uint32_t a;
+        if (d < 0.0f) a = 0;
+        else if (!(Ld(e + 4) > 1.0f)) a = uint32_t(Ftol(St(Ld(e + 4)) * 255.0f));
+        else a = 0xFF;
+        Alpha(i, a);
+        xyz += 4 * U32(kXyzStride);
+      }
+      break;
+    }
+    case 9:
+      if (rgb != 12)
+        for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) Alpha(i, U8(stage + 0x683));
+      break;
+    case 10:
+      ViewOrigin(c, e, 0x4F54DE);
+      ViewAlphas(c, e, 0x4F5529, false, false, [&](uint32_t b) {
+        Put(e + 4, non_negative(b));
+        return uint32_t(Ftol(St(Ld(e + 4)) * 255.0f + 0.5f));
+      });
+      break;
+    case 11:
+      ViewOrigin(c, e, 0x4F55F6);
+      ViewAlphas(c, e, 0x4F5639, false, false, [&](uint32_t b) {
+        Put(e + 4, non_negative(b));
+        return uint32_t(Ftol((St(1.0f) - Ld(e + 4)) * 255.0f + 0.5f));
+      });
+      break;
+    case 12:
+      ViewOrigin(c, e, 0x4F570C);
+      ViewAlphas(c, e, 0x4F574E, true, false, [&](uint32_t b) {
+        Put(e + 4, non_positive(b));
+        return uint32_t(Ftol((St(Ld(e + 4)) + 1.0f) * 255.0f + 0.5f));
+      });
+      break;
+    case 13:
+      ViewOrigin(c, e, 0x4F581F);
+      ViewAlphas(c, e, 0x4F5869, false, true, [&](uint32_t b) {
+        Put(e + 4, non_negative(b));
+        return uint32_t(Ftol(St(Ld(e + 4)) * 255.0f + 0.5f));
+      });
+      break;
   }
   c.esi = esi;
   c.edi = edi;
