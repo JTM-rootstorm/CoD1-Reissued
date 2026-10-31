@@ -88,6 +88,12 @@ constexpr Gl kGl[] = {
     {0x1535598, "glFogf", 2},
     {0x15351A0, "glHint", 2},
     {0x1535014, "qgl 0x1535014", 1},
+    {0x153542C, "glColorPointer", 4},
+    {0x153503C, "glNormalPointer", 3},
+    {0x15354F0, "glVertexPointer", 4},
+    {0x1534DDC, "glLockArraysEXT", 2},
+    {0x1534C2C, "glUnlockArraysEXT", 0},
+    {0x1830CA0, "stage iterator", 1, true},
     {0x1549600, "ri.Printf", 2, true},
     {0x1549604, "ri.Error", 2, true},
     {0x1549684, "ri 0x1549684", 1, true},
@@ -95,7 +101,9 @@ constexpr Gl kGl[] = {
 };
 constexpr int kNumGl = sizeof(kGl) / sizeof(kGl[0]);
 constexpr uint32_t kGlTarget = 0x7FFD0000;  // + 0x10 * index
-constexpr uint32_t kLockArrays = 0x1534DDC;  // only tested for null
+// The stage iterator RB_EndSurface tests for (a sky's), recorded as the
+// other iterators are.
+constexpr uint32_t kSkyIterator = 0x4DD6E0;
 
 struct CallRec {
   uint32_t target, ret, esp, args[4];
@@ -106,7 +114,7 @@ struct CallRec {
 std::vector<CallRec> g_calls;
 
 enum Reg { kEax = 1, kEcx = 2, kEdx = 4, kEbx = 8, kEsi = 16, kEdi = 32, kEbp = 64 };
-constexpr int kAll = 127;
+constexpr int kAll = 127, kSaved = kEbx | kEsi | kEdi | kEbp;
 
 // The lifted functions the native ones call (tests/render_backend_stubs.manifest),
 // recorded as the GL calls are, with the registers each reads.
@@ -159,7 +167,36 @@ COD1_STUB(0050A0E0, kEcx, 0)
 COD1_STUB(0050A120, kEcx, 0)
 COD1_STUB(0050AEC0, kEax, 0)
 COD1_STUB(0050A270, kEax, 1)
+// Under the stages and the flush: ComputeTexCoords, the dlight pass, the
+// flush of shader 0x1535AEC, the debug lines and normals, setting a cvar,
+// printing, va, fprintf and the optimised iterators, each with the
+// registers the native code keeps as the original has them.
+COD1_STUB(004F5940, kEax | kSaved, 0)
+COD1_STUB(004F5F50, kSaved, 0)
+COD1_STUB(005082D0, kSaved, 0)
+COD1_STUB(004F44A0, kEax | kSaved, 0)
+COD1_STUB(004F4560, kSaved, 1)
+COD1_STUB(004F4850, kSaved, 0)
+COD1_STUB(00431CF0, kEax | kSaved, 2)
+COD1_STUB(0042E300, kSaved, 1)
+COD1_STUB(00440940, kSaved, 2)
+COD1_STUB(0051D45A, kSaved, 3)
+COD1_STUB(004F6380, kSaved, 0)
+COD1_STUB(004F66C0, kSaved, 0)
+COD1_STUB(004F6A40, kSaved, 0)
+COD1_STUB(004F6D70, kSaved, 0)
+COD1_STUB(004F70F0, kSaved, 0)
+COD1_STUB(004F73D0, kSaved, 0)
+COD1_STUB(004F76B0, kSaved, 0)
+COD1_STUB(004F7950, kSaved, 0)
 #undef COD1_STUB
+// _stricmp, recorded and answering as the CRT's: 0 when the strings match
+// but for case.
+void f_0052AB6F(Ctx& c) {
+  const uint32_t a = Rd(c.esp + 4), b = Rd(c.esp + 8);
+  Stub(c, 0x52AB6F, kSaved, 2);
+  c.eax = strcasecmp(g_mem.ptr<char>(a), g_mem.ptr<char>(b)) != 0;
+}
 // unzCloseCurrentFile, tolower and the memcpy 0x42B0A0, native in the
 // game (src/unzip.cpp, src/crt.cpp, src/render.cpp): here only the stubbed
 // functions' lifted bodies reach them.
@@ -191,6 +228,11 @@ void f_004F5D50_lifted(Ctx& c);
 void f_004F4090_lifted(Ctx& c);
 void f_00509F20_lifted(Ctx& c);
 void f_004F4FA0_lifted(Ctx& c);
+void f_004F5DE0_lifted(Ctx& c);
+void f_004F6070_lifted(Ctx& c);
+void f_004F60E0_lifted(Ctx& c);
+void f_004F7C30_lifted(Ctx& c);
+void f_004F7D00_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -214,6 +256,11 @@ void f_004F5D50(Ctx& c) { f_004F5D50_lifted(c); }
 void f_004F4090(Ctx& c) { f_004F4090_lifted(c); }
 void f_00509F20(Ctx& c) { f_00509F20_lifted(c); }
 void f_004F4FA0(Ctx& c) { f_004F4FA0_lifted(c); }
+void f_004F5DE0(Ctx& c) { f_004F5DE0_lifted(c); }
+void f_004F6070(Ctx& c) { f_004F6070_lifted(c); }
+void f_004F60E0(Ctx& c) { f_004F60E0_lifted(c); }
+void f_004F7C30(Ctx& c) { f_004F7C30_lifted(c); }
+void f_004F7D00(Ctx& c) { f_004F7D00_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -235,9 +282,18 @@ void n_004F5D50(Ctx& c);
 void n_004F4090(Ctx& c);
 void n_00509F20(Ctx& c);
 void n_004F4FA0(Ctx& c);
+void n_004F5DE0(Ctx& c);
+void n_004F6070(Ctx& c);
+void n_004F60E0(Ctx& c);
+void n_004F7C30(Ctx& c);
+void n_004F7D00(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
+  if (target == kSkyIterator) {
+    Stub(c, kSkyIterator, kSaved, 1);
+    return;
+  }
   const uint32_t i = (target - kGlTarget) / 0x10;
   if (target < kGlTarget || i >= uint32_t(kNumGl) || target != kGlTarget + 0x10 * i) {
     std::printf("unexpected call to %08X from %08X\n", target, va);
@@ -258,6 +314,8 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
   c.eax = junk;
   c.ecx = junk ^ 1;
   c.edx = junk ^ 2;
+  // A stage iterator now and then leaves no indexes.
+  if (gl.ptr == 0x1830CA0 && (Rd(0x17F0C88) & 1)) Wr(0x17F0C84, 0);
   c.esp += 4 + (gl.cdecl ? 0 : 4 * uint32_t(gl.args));
 }
 void Resume(Ctx&, GuestResume r) {
@@ -318,7 +376,9 @@ const Entry kEntries[] = {
     COD1_ENTRY(004F3D80, "stage textures"), COD1_ENTRY(004C8830, "fog params"),
     COD1_ENTRY(004C89A0, "fog off"),       COD1_ENTRY(004F5D50, "flush fog"),
     COD1_ENTRY(004F4090, "units reset"),   COD1_ENTRY(00509F20, "deforms"),
-    COD1_ENTRY(004F4FA0, "stage colours"),
+    COD1_ENTRY(004F4FA0, "stage colours"), COD1_ENTRY(004F5DE0, "stage draw"),
+    COD1_ENTRY(004F6070, "stage loop"),    COD1_ENTRY(004F60E0, "generic iterator"),
+    COD1_ENTRY(004F7C30, "optimised"),     COD1_ENTRY(004F7D00, "end surface"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -336,6 +396,7 @@ struct Window {
 const Window kGlobals[] = {
     {0x1534000, 0x3000}, {0x1549000, 0x1000}, {0x13F9000, 0x1000},
     {0x11E0000, 0x1000}, {0x17F0000, 0x1000}, {0x154D000, 0x1000}, {0x0, 0x100},
+    {0x1830C00, 0x100},
     // The tessellator's positions, vertex colours and normals, and the
     // stage colours (as many as the cases' vertices use).
     {0x1630C40, 0x800}, {0x1690C40, 0x100}, {0x1698C40, 0x200}, {0x16E0C40, 0x100},
@@ -360,7 +421,7 @@ void Load(const std::vector<Window>& w, const std::vector<uint8_t>& in) {
 
 struct Call {
   int entry;
-  uint32_t eax = 0, ecx = 0, edx = 0, esi = 0, edi = 0;
+  uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0, esi = 0, edi = 0;
   std::vector<uint32_t> args;
 };
 
@@ -384,7 +445,7 @@ void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
   c0.eax = k.eax;
   c0.ecx = k.ecx ? k.ecx : uint32_t(g());
   c0.edx = k.edx;
-  c0.ebx = g();
+  c0.ebx = k.ebx ? k.ebx : uint32_t(g());
   c0.esi = k.esi;
   c0.edi = k.edi;
   c0.ebp = g();
@@ -515,10 +576,63 @@ uint32_t StateBits(std::mt19937& g) {
   return b;
 }
 
+// A stage: 8 bundles of 200 bytes from +4, then the combiners, vertex
+// program and fragment shader at +0x644..+0x64C, the colour and alpha
+// generators (+0x664, +0x67C, constant +0x680) and the state bits +0x684.
+uint32_t Bundle(Arena& a, std::mt19937& g, uint32_t b) {
+  // Up to 32 images (+0..+0x7C), from a few distinct ones; the count now
+  // and then negative.
+  uint32_t pool[4];
+  for (uint32_t& im : pool) im = Image(a, g);
+  for (uint32_t i = 0; i < 32; i++) Wr(b + 4 * i, pool[g() % 4]);
+  Wr(b + 0x80, g() % 4 ? g() % 6 : g() % 2 ? g() % 33 : uint32_t(g()) | 0x80000000u);
+  Wr(b + 0x84, RandFloat(g));
+  Wr(b + 0x88, g() % 8 == 0 ? a.Alloc(16) : 0);
+  Wr(b + 0x8C, 2 + g() % 3);
+  Wr(b + 0x90, g() % 5 == 0 ? 0 : Pick(g, {0x2100, 0x1E01, 0x104, 0x8570, uint32_t(g())}));
+  const uint32_t combine = a.Alloc(0x50);
+  for (uint32_t i = 0; i < 0x50; i += 4) Wr(combine + i, i == 0x2C || i == 0x4C ? RandFloat(g) : uint32_t(g()));
+  Wr(b + 0x94, combine);
+  uint32_t shader = 0;
+  if (g() % 4 == 0) {
+    shader = a.Alloc(0x20);
+    Wr(shader, g() % 4 ? 0x86E7 + g() % 14 : g() % 3 ? 0 : uint32_t(g()));
+    for (uint32_t i = 4; i < 0x20; i += 4) Wr(shader + i, uint32_t(g()));
+  }
+  Wr(b + 0x98, shader);
+  Wr(b + 0xC0, g() % 4);
+  g_mem.write<uint8_t>(b + 0xC4, g() % 4 == 0);
+  g_mem.write<uint8_t>(b + 0xC5, g() % 8 == 0);
+  g_mem.write<uint8_t>(b + 0xC6, g() % 2);
+  return b;
+}
+uint32_t Stage(Arena& a, std::mt19937& g) {
+  const uint32_t s = a.Alloc(0x690);
+  g_mem.write<uint8_t>(s, uint8_t(g()));  // its sign bit: drawn per light
+  for (uint32_t u = 0; u < 8; u++) Bundle(a, g, s + 4 + 0xC8 * u);
+  if (g() % 2) Wr(s + 0xCC, 0);  // no second bundle: one unit
+  Wr(s + 0x644, g() % 4 ? Rd(0x1534670) : g() % 3);
+  Wr(s + 0x648, g() % 8 == 0 ? g() : 0);
+  Wr(s + 0x64C, g() % 8 == 0 ? g() : 0);
+  Wr(s + 0x664, g() % 8 ? g() % 15 : uint32_t(g()));
+  Wr(s + 0x67C, g() % 8 ? g() % 15 : uint32_t(g()));
+  Wr(s + 0x680, uint32_t(g()));
+  Wr(s + 0x684, StateBits(g));
+  return s;
+}
+
+// A string in the arena.
+uint32_t Str(Arena& a, const char* s) {
+  const uint32_t va = a.Alloc(uint32_t(std::strlen(s)) + 1);
+  std::strcpy(g_mem.ptr<char>(va), s);
+  return va;
+}
+
 void Randomize(Arena& a, std::mt19937& g) {
   a.Reset();
   for (int i = 0; i < kNumGl; i++) Wr(kGl[i].ptr, kGlTarget + 0x10 * uint32_t(i));
-  Wr(kLockArrays, g() % 3 ? 0x7FFC0000 : 0);
+  if (g() % 3 == 0) Wr(0x1534DDC, 0);  // no compiled vertex arrays
+  if (g() % 3 == 0) Wr(0x1534C2C, 0);
   Wr(0x1534630, g() % 4 ? StateBits(g) : 0);
   Wr(0x1534634, g() % 4 ? g() & 0x7FF : g());
   Wr(0x153462C, g() % 4);
@@ -575,8 +689,47 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(shader + 0xA4, RandFloat(g));
   Wr(shader + 0xAC, g() % 8 ? g() % 5 : g() % 9);
   for (uint32_t d = 0; d < 8; d++) Wr(shader + 0xB0 + 0x34 * d, g() % 8 ? 1 + g() % 18 : g() % 24);
+  Wr(shader + 0x50, uint32_t(g()));
+  g_mem.write<uint8_t>(shader + 0x54, uint8_t(g()));
+  Wr(shader + 0x58, g() % 4 ? Pick(g, {0x40A00000, 0x40800000, 0x40C00000, 0x41000000, 0x3F800000}) : RandFloat(g));
+  Wr(shader + 0x5C, g() % 2 ? 0 : uint32_t(g()) & 0x30007);
+  Wr(shader + 0xA8, g() % 3);
+  Wr(shader + 0x188, 10 + g() % 21);
+  // The flush's stages: up to 8, now and then fewer than the count says.
+  const uint32_t stages = a.Alloc(0x20), num = g() % 4;
+  for (uint32_t i = 0; i < 8; i++) Wr(stages + 4 * i, i < num + g() % 2 ? Stage(a, g) : 0);
+  Wr(0x1830CA4, stages);
+  Wr(0x1830C9C, g() % 8 ? num : uint32_t(g()));
+  Wr(shader + 0x154, Rd(stages) ? Rd(stages) : Stage(a, g));
+  Wr(Rd(shader + 0x154) + 0x15C, g() % 4 == 0);
   Wr(0x17F0C70, shader);
-  Wr(0x17F0C84, uint32_t(g()));
+  Wr(0x1535AEC, g() % 16 ? 0 : shader);  // the shader with its own flush
+  Wr(0x17F0C84, g() % 8 ? g() % 64 : 0);
+  Wr(0x17F0C80, g() % 2 ? uint32_t(g()) : 0);  // dlight bits
+  Wr(0x11E075C, g() % 4 == 0);
+  for (uint32_t i = 0; i < 64; i++) g_mem.write<uint16_t>(0x1618C40 + 2 * i, uint16_t(g() % 40));
+  g_mem.write<uint16_t>(0x1630C3E, g() % 16 ? 0 : uint16_t(g()));
+  Wr(0x1650C30, g() % 16 ? 0 : RandFloat(g));  // the last vertex's x, 4 or
+  Wr(0x1670C20, g() % 16 ? 0 : RandFloat(g));  // 8 floats apart
+  for (uint32_t i = 0; i < 8; i++) Wr(0x16E8C40 + 4 * i, uint32_t(g()));
+  Wr(0x154992C, g() % 4 == 0);
+  Wr(0x1534438, Cvar(a, g, g() % 2));
+  Wr(0x1535AC4, Image(a, g));
+  Wr(0x1534704, Cvar(a, g, g() % 4 == 0));  // the log
+  Wr(0x1830CE4, g() % 2 ? uint32_t(g()) : 0);  // the log file
+  Wr(0x153468C, Cvar(a, g, g() % 2 ? 0 : g() % 8 ? g() % 20 : uint32_t(g())));
+  const uint32_t normals = Cvar(a, g, 0);
+  const char* const kShowNormals[] = {"", "", "", "white", "White", "color", "other"};
+  Wr(normals + 4, Str(a, kShowNormals[g() % 7]));
+  Wr(0x1534698, normals);
+  Wr(0x1830CA0, g() % 4 ? Rd(0x1830CA0) : kSkyIterator);
+  Wr(0x154D708, g() % 2);
+  Wr(0x1830C94, g() % 2 ? g() % 1000 : 0);
+  Wr(0x1830C98, g() % 1000);
+  Wr(0x1549B08, g());
+  Wr(0x1549B40, g() % 2 ? 0 : uint32_t(g()));  // the light the stages draw for
+  Wr(0x1549B0C, g());
+  Wr(0x1549B10, g());
   if (g() % 2) Wr(0x1536290, 0x3F800000);  // tr.identityLight 1
   Wr(0x1536294, g() & 0xFF);
   Wr(0x1536298, g() % 4 ? g() % 3 : uint32_t(g()));  // overbright bits
@@ -584,9 +737,18 @@ void Randomize(Arena& a, std::mt19937& g) {
   if (g() % 2) {
     Wr(0x1549B3C, 0x1535D6C);  // the world entity
   } else {
-    const uint32_t ent = a.Alloc(0x60);
+    const uint32_t ent = a.Alloc(0x120);
     for (uint32_t i = 0x1C; i < 0x50; i += 4) Wr(ent + i, RandFloat(g));
     Wr(0x1549B3C, ent);
+  }
+  // The entity's lights: the light (type 8 skipped) and its scale.
+  const uint32_t ent = Rd(0x1549B3C), num_lights = g() % 2 ? 0 : g() % 8 ? g() % 5 : uint32_t(g()) | 0x80000000u;
+  Wr(ent + 0xCC, num_lights);
+  for (uint32_t i = 0; i < 4; i++) {
+    const uint32_t light = a.Alloc(16);
+    Wr(light, g() % 3 ? 0 : 8);
+    Wr(ent + 0xD0 + 8 * i, light);
+    Wr(ent + 0xD4 + 8 * i, RandFloat(g));
   }
   Wr(0x154D734, g() % 2);
   Wr(0x15343F0, Cvar(a, g, 0));                  // the far clip
@@ -631,44 +793,6 @@ uint32_t Indexes(Arena& a, std::mt19937& g, int tris) {
   }
   for (size_t i = 0; i < v.size(); i++) g_mem.write<uint16_t>(p + 2 * uint32_t(i), v[i]);
   return p;
-}
-
-// A stage: 8 bundles of 200 bytes from +4, then the combiners, vertex
-// program and fragment shader at +0x644..+0x64C.
-uint32_t Bundle(Arena& a, std::mt19937& g, uint32_t b) {
-  // Up to 32 images (+0..+0x7C), from a few distinct ones; the count now
-  // and then negative.
-  uint32_t pool[4];
-  for (uint32_t& im : pool) im = Image(a, g);
-  for (uint32_t i = 0; i < 32; i++) Wr(b + 4 * i, pool[g() % 4]);
-  Wr(b + 0x80, g() % 4 ? g() % 6 : g() % 2 ? g() % 33 : uint32_t(g()) | 0x80000000u);
-  Wr(b + 0x84, RandFloat(g));
-  Wr(b + 0x88, g() % 8 == 0 ? a.Alloc(16) : 0);
-  Wr(b + 0x8C, 2 + g() % 3);
-  Wr(b + 0x90, g() % 5 == 0 ? 0 : Pick(g, {0x2100, 0x1E01, 0x104, 0x8570, uint32_t(g())}));
-  const uint32_t combine = a.Alloc(0x50);
-  for (uint32_t i = 0; i < 0x50; i += 4) Wr(combine + i, i == 0x2C || i == 0x4C ? RandFloat(g) : uint32_t(g()));
-  Wr(b + 0x94, combine);
-  uint32_t shader = 0;
-  if (g() % 4 == 0) {
-    shader = a.Alloc(0x20);
-    Wr(shader, g() % 4 ? 0x86E7 + g() % 14 : g() % 3 ? 0 : uint32_t(g()));
-    for (uint32_t i = 4; i < 0x20; i += 4) Wr(shader + i, uint32_t(g()));
-  }
-  Wr(b + 0x98, shader);
-  Wr(b + 0xC0, g() % 4);
-  g_mem.write<uint8_t>(b + 0xC4, g() % 4 == 0);
-  g_mem.write<uint8_t>(b + 0xC5, g() % 8 == 0);
-  g_mem.write<uint8_t>(b + 0xC6, g() % 2);
-  return b;
-}
-uint32_t Stage(Arena& a, std::mt19937& g) {
-  const uint32_t s = a.Alloc(0x650);
-  for (uint32_t u = 0; u < 8; u++) Bundle(a, g, s + 4 + 0xC8 * u);
-  Wr(s + 0x644, g() % 4 ? Rd(0x1534670) : g() % 3);
-  Wr(s + 0x648, g() % 8 == 0 ? g() : 0);
-  Wr(s + 0x64C, g() % 8 == 0 ? g() : 0);
-  return s;
 }
 
 void Cases(Arena& a, std::mt19937& g, Stats& s) {
@@ -723,14 +847,20 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
     case 0x4C8830:
       k.esi = Pick(g, {0x1535820, 0x1535860, 0x1535920});
       break;
-    case 0x4F4FA0: {
-      const uint32_t stage = a.Alloc(0x700);
-      Wr(stage + 0x664, g() % 8 ? g() % 15 : uint32_t(g()));
-      Wr(stage + 0x67C, g() % 8 ? g() % 15 : uint32_t(g()));
-      Wr(stage + 0x680, uint32_t(g()));
-      k.args = {stage};
+    case 0x4F4FA0:
+      k.args = {Stage(a, g)};
       break;
-    }
+    case 0x4F5DE0:
+      k.eax = Stage(a, g);
+      k.ebx = 0x1618C40;
+      k.args = {uint32_t(g() % 64)};
+      break;
+    case 0x4F6070:
+      k.args = {0x1618C40};
+      break;
+    case 0x4F60E0:
+      k.args = {g() % 2 ? 0 : g() % 4 ? 1 : uint32_t(g())};
+      break;
     case 0x4F3D80: {
       const uint32_t coords = a.Alloc(32);
       for (uint32_t u = 0; u < 8; u++) Wr(coords + 4 * u, uint32_t(g()));

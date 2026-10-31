@@ -51,8 +51,8 @@ void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 // lifted code reaches it.
 void f_0042B0A0_lifted(Ctx& c);
 void f_0042B0A0(Ctx& c) { f_0042B0A0_lifted(c); }
-// The back end's GL state, texture units and flush setup, native in the game
-// (src/render_backend.cpp): here only lifted code reaches them.
+// The back end's GL state, texture units, flush setup and the flush, native
+// in the game (src/render_backend.cpp): here only lifted code reaches them.
 void f_004C89D0_lifted(Ctx& c);
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
 void f_004C8A20_lifted(Ctx& c);
@@ -85,6 +85,10 @@ void f_004F5D50_lifted(Ctx& c);
 void f_004F5D50(Ctx& c) { f_004F5D50_lifted(c); }
 void f_004F4090_lifted(Ctx& c);
 void f_004F4090(Ctx& c) { f_004F4090_lifted(c); }
+void f_004F7C30_lifted(Ctx& c);
+void f_004F7C30(Ctx& c) { f_004F7C30_lifted(c); }
+void f_004F7D00_lifted(Ctx& c);
+void f_004F7D00(Ctx& c) { f_004F7D00_lifted(c); }
 }  // namespace gen
 
 // Nothing the cases reach calls out: RB_CheckOverflow never overflows.

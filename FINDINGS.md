@@ -51,6 +51,39 @@ on gfx::Device" below).
   the original's stack locals). The stage's argument slot is the
   original's scratch for its int and float conversions. The deforms and
   the colour and alpha generators stay lifted (stubbed in the oracle).
+- Layer 4, the stages and the flush: a stage's draw 0x4F5DE0 (EAX stage,
+  EBX indexes, count on the stack: colours, ComputeTexCoords, the colour
+  array, then all units when the second bundle has an image or the first
+  unit's image, combiners, vertex program and fragment shader; then the
+  element draw), the stage loop 0x4F6070 (stages 0x1830CA4, skipping those
+  with the sign bit of their first byte; with the cvar 0x15343B4 it stops
+  after a stage with a lightmap bundle), RB_StageIteratorGeneric 0x4F60E0
+  (its log string; 8-aligned EBP frame, stack arg "dlights only": deforms,
+  log, one unit, fog, cull, client arrays with normals by the shader's
+  flag 0x100 at +0x50, the colour and texture coordinate arrays set once
+  for a single stage (0x11E075C, which a stage's draw then leaves), the
+  vertex array and glLockArraysEXT, the stages, then the dlight pass
+  0x4F5F50 (sort +0x58 at most 5, flags +0x5C without 0x20004) or, for a
+  shader with the sign bit of +0x54, the entity's lights (0x1549B3C +0xCC
+  count, 8-byte entries from +0xD0; the light 0x1549B40, its scale
+  0x1549B44) over the sign-bit stages; glUnlockArraysEXT), the optimised
+  iterators' dispatch 0x4F7C30 (shader +0x188: 12-15 0x4F70F0, 0x4F73D0,
+  0x4F76B0, 0x4F7950; 25-28 0x4F6380, 0x4F66C0, 0x4F6A40, 0x4F6D70; their
+  batch counts 0x1830C98/0x1830C94 into the frame's 0x1549B0C/0x1549B10),
+  and RB_EndSurface 0x4F7D00 (its SHADER_MAX_INDEXES/VERTEXES errors: the
+  optimised batch first, the overflow checks, the shader 0x1535AEC by its
+  own flush 0x5082D0, skips by the cvar 0x153468C against the sort and by
+  the portal state 0x154D734/0x154D708 against the sky iterator 0x4DD6E0,
+  the counters, the shader's iterator 0x1830CA0 (`call eax`, the arg 1
+  after an optimised batch), the debug lines 0x4F44A0 (cvar 0x15343E8),
+  r_shownormals 0x1534698 ("white" 0x4F4560, "color" 0x4F4850, else reset
+  and its usage printed), the index count to zero, "----------" to the log
+  file 0x1830CE4). qgl slots confirmed from QGL_Init's strings:
+  glColorPointer 0x153542C, glNormalPointer 0x153503C, glVertexPointer
+  0x15354F0; the extension loader stores glUnlockArraysEXT at 0x1534C2C
+  next to glLockArraysEXT. The eight optimised iterators, ComputeTexCoords
+  (native, src/render.cpp), the dlight pass and the debug draws stay
+  lifted callees (stubbed in the oracle; _stricmp answers as the CRT's).
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -62,7 +95,13 @@ on gfx::Device" below).
   stack values; a clamp's `<` for `<=`, equal only at 0). One is a gap:
   the order of the portal alpha's sum of squares changes the double's last
   bit, which survives the float store only within 2^-53 of a rounding
-  midpoint, which random cases do not reach.
+  midpoint, which random cases do not reach. With layer 4: 200000 cases
+  over 26 entries, 2.28M calls out, 0 mismatches (7 s; the stage iterator
+  recorder now and then zeroes the index count, the light 0x1549B40 starts
+  random). Its mutations: 34, all fail the oracle once those two were
+  added (three first passed: the two they cover, and a store of the sort
+  cvar into the pushed ECX slot below ESP, which the native code no longer
+  makes, as with the other layers' locals).
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -72,6 +111,14 @@ on gfx::Device" below).
   briefing click 20 or 40 ms later does the same: the click is scheduled
   in real time and landed a frame later. Frame dumps are about 800 MB a
   run: write them to disk (not the RAM-backed /tmp) and keep hashes.
+  With layer 4 (2026-10-31; base main b5fe3d2's build, layers 1-2): all 13
+  loading and briefing frames shared, 46 of 740 in-level frames identical;
+  the rest differ in the 2D text and in the distant soldiers' poses (up to
+  8033 px around +197), and layer 4 against a second layer 4 run differs
+  the same way (8058 px at +197): run-to-run timing, not the back end. A
+  base run against a second base run diverged by whole frames after +58.
+  The first run in a fresh XDG_DATA_HOME draws different loading frames:
+  make a throwaway run before any reference run.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),

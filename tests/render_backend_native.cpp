@@ -22,4 +22,9 @@
 #define f_004F4090 n_004F4090
 #define f_00509F20 n_00509F20
 #define f_004F4FA0 n_004F4FA0
+#define f_004F5DE0 n_004F5DE0
+#define f_004F6070 n_004F6070
+#define f_004F60E0 n_004F60E0
+#define f_004F7C30 n_004F7C30
+#define f_004F7D00 n_004F7D00
 #include "../src/render_backend.cpp"

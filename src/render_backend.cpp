@@ -2,9 +2,11 @@
 // turns the renderer's state into GL calls (GL_Bind, the cull face, the
 // texture environment, the state bits, the client arrays, the fog colour
 // and the element draws), a stage's texture units (each bundle's image,
-// texture, environment and coordinates), and what a flush sets up before
-// its stages draw: the fog, the texture units back to one, the vertex
-// deforms and each stage's colours. Replacements of lifted functions named
+// texture, environment and coordinates), what a flush sets up before its
+// stages draw: the fog, the texture units back to one, the vertex deforms
+// and each stage's colours, and the flush itself: a stage's draw, the
+// stage loop, the generic stage iterator, the optimised iterators'
+// dispatch and RB_EndSurface. Replacements of lifted functions named
 // with `replace` in manifest/CoDSP.manifest; FINDINGS.md "Renderer back
 // end". Names and evidence are in the Ghidra plate comments.
 //
@@ -61,6 +63,26 @@ void f_0050AEC0(Ctx& c);
 void f_0050A270(Ctx& c);
 void f_00426A60(Ctx& c);  // rotates ECX by the axes EAX into EDX
 void f_004268B0(Ctx& c);  // normalises EAX (approximate inverse square root)
+void f_004F5940(Ctx& c);  // ComputeTexCoords (EAX stage; src/render.cpp)
+void f_004F5F50(Ctx& c);  // the dlight pass
+void f_005082D0(Ctx& c);  // the flush of shader 0x1535AEC
+void f_004F44A0(Ctx& c);  // the debug lines of cvar 0x15343E8 (EAX the tessellator)
+void f_004F4560(Ctx& c);  // the white normals (the tessellator)
+void f_004F4850(Ctx& c);  // the coloured normals (EBX the tessellator)
+void f_0052AB6F(Ctx& c);  // _stricmp
+void f_00431CF0(Ctx& c);  // sets a cvar (name, value; EAX force)
+void f_0042E300(Ctx& c);  // prints (format, ...)
+void f_00440940(Ctx& c);  // va (format, ...)
+void f_0051D45A(Ctx& c);  // fprintf
+// The stage iterators for the shaders with an optimised form (by +0x188).
+void f_004F6380(Ctx& c);
+void f_004F66C0(Ctx& c);
+void f_004F6A40(Ctx& c);
+void f_004F6D70(Ctx& c);
+void f_004F70F0(Ctx& c);
+void f_004F73D0(Ctx& c);
+void f_004F76B0(Ctx& c);
+void f_004F7950(Ctx& c);
 
 namespace {
 
@@ -113,7 +135,9 @@ constexpr uint32_t kglEnable = 0x1534F68, kglDisable = 0x15349E0,
                    kglArrayElement = 0x1535104, kglLockArraysEXT = 0x1534DDC,
                    kglActiveTextureARB = 0x1534C14, kglTexEnvfv = 0x1534A10,
                    kglTexEnvf = 0x15349B8, kglTexCoordPointer = 0x15349A0,
-                   kglFogi = 0x1534C84, kglFogf = 0x1535598, kglHint = 0x15351A0;
+                   kglFogi = 0x1534C84, kglFogf = 0x1535598, kglHint = 0x15351A0,
+                   kglColorPointer = 0x153542C, kglNormalPointer = 0x153503C,
+                   kglVertexPointer = 0x15354F0, kglUnlockArraysEXT = 0x1534C2C;
 // The refimport table's ri.Printf and ri.Error (cdecl).
 constexpr uint32_t kPrintf = 0x1549600, kError = 0x1549604;
 
@@ -1347,6 +1371,383 @@ void f_004F4FA0(Ctx& c) {
   c.esi = esi;
   c.edi = edi;
   c.esp = e + 4;
+}
+
+// ---- the stages and the flush ------------------------------------------------
+
+// The tessellator's indexes and index count.
+constexpr uint32_t kTessIndexes = 0x1618C40, kTessIndexCount = 0x17F0C84;
+// The flush's stages (eight pointers, null-terminated), how many there are,
+// and whether the generic iterator has set the arrays up for a single stage
+// (then a stage leaves them).
+constexpr uint32_t kTessStages = 0x1830CA4, kNumStages = 0x1830C9C, kArraysSet = 0x11E075C;
+
+// One stage drawn (EAX stage, EBX indexes; stack: index count): its
+// colours, its texture coordinates, the colour array, then either all its
+// texture units (a second bundle with an image, +0xCC: lines for the cvar
+// 0x154992C) or the first unit's image (the shader's first stage state bit
+// 0x100000 with the cvar 0x1534438: the image 0x1535AC4) with the stage's
+// combiners, vertex program and fragment shader; then the draw.
+void f_004F5DE0(Ctx& c) {
+  const uint32_t e = c.esp, stage = c.eax, n = Arg(c, e, 1);
+  const uint32_t esi = c.esi, edi = c.edi, ebp = c.ebp;
+  c.esp = e - 0x10;
+  c.edi = stage;
+  c.ebp = n;
+  Push(c, stage);
+  Call(c, f_004F4FA0, 0x4F5DF0);
+  c.esp += 4;
+  c.eax = stage;
+  Call(c, f_004F5940, 0x4F5DFA);
+  if (!U32(kArraysSet)) {
+    c.esi = 0x100;
+    if (!(U32(kArrayBits) & 0x100)) {
+      Push(c, 0x8076);
+      CallPtr(c, kglEnableClientState, 0x4F5E16);
+      Put(kArrayBits, U32(kArrayBits) | 0x100);
+    }
+    Push(c, kColors);
+    Push(c, 0);
+    Push(c, 0x1401);
+    Push(c, 4);
+    CallPtr(c, kglColorPointer, 0x4F5E30);
+  }
+  uint32_t ret;
+  if (U32(stage + 0xCC)) {
+    c.eax = U32(stage + 0x684);
+    Call(c, f_004CB710, 0x4F5E4B);
+    if (U32(0x154992C)) {
+      Push(c, 0x1B02);
+      Push(c, 0x408);
+      CallPtr(c, kglPolygonMode, 0x4F5E5E);
+    }
+    Push(c, 0);
+    Push(c, 0x16E8C40);
+    Push(c, stage);
+    Call(c, f_004F3D80, 0x4F5E71);
+    c.esp += 0xC;
+    ret = 0x4F5E7D;
+  } else {
+    if (!U32(kArraysSet)) {
+      Push(c, U32(0x16E8C40));
+      Push(c, 0);
+      Push(c, 0x1406);
+      Push(c, U32(stage + 0x90));
+      CallPtr(c, kglTexCoordPointer, 0x4F5E9F);
+    }
+    if ((U32(U32(U32(kTessShader) + 0x154) + 0x684) & 0x100000) && CvarInt(0x1534438)) {
+      c.esi = U32(0x1535AC4);
+    } else {
+      c.esi = stage + 4;
+      Push(c, U32(kUnit));
+      Call(c, f_004F3330, 0x4F5EE1);
+      c.esp += 4;
+      c.esi = c.eax;
+    }
+    Call(c, f_004CB3B0, 0x4F5EEB);
+    c.eax = U32(stage + 0x684);
+    Call(c, f_004CB710, 0x4F5EF6);
+    if (U32(stage + 0x648)) {
+      Push(c, U32(stage + 0x648));
+      Call(c, f_004F3A70, 0x4F5F06);
+      c.esp += 4;
+    }
+    c.esi = U32(stage + 0x64C);
+    if (c.esi) Call(c, f_004F3C70, 0x4F5F18);
+    c.edi = U32(stage + 0x644);
+    if (c.edi != U32(0x1534670)) {
+      Push(c, c.edi);
+      CallPtr(c, 0x1535014, 0x4F5F27);
+      Put(0x1534670, c.edi);
+    }
+    ret = 0x4F5F3C;
+  }
+  c.edx = n;
+  c.eax = c.ebx;
+  Call(c, f_004F32C0, ret);
+  c.esi = esi;
+  c.edi = edi;
+  c.ebp = ebp;
+  c.esp = e + 4;
+}
+
+// The flush's stages drawn in turn (stack: the indexes, unused) from one
+// texture unit, but for those with the sign bit of their first byte; with
+// the cvar 0x15343B4 the first stage with a lightmap bundle (+0xC8 or
+// +0x190 set) is the last.
+void f_004F6070(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi;
+  c.esp = e - 0x10;
+  Call(c, f_004F4090, 0x4F6079);
+  for (c.edi = 0; int32_t(c.edi) < 0x20; c.edi += 4) {
+    c.esi = U32(c.edi + U32(kTessStages));
+    if (!c.esi) break;
+    if (int8_t(U8(c.esi)) < 0) continue;
+    Push(c, U32(kTessIndexCount));
+    c.ebx = kTessIndexes;
+    c.eax = c.esi;
+    Call(c, f_004F5DE0, 0x4F60A4);
+    c.esp += 4;
+    if (CvarInt(0x15343B4) && (U8(c.esi + 0xC8) || U8(c.esi + 0x190))) break;
+  }
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// RB_StageIteratorGeneric ("--- RB_StageIteratorGeneric( %s ) ---" to the
+// log file), on an 8-aligned frame (stack: dlights only, after an
+// optimised iterator): the deforms, the log line (cvar 0x1534704, the file
+// 0x1830CE4), one texture unit, the fog and the shader's cull; the client
+// arrays (normals with the shader's flag 0x100 at +0x50), and for a single
+// stage of a shader without +0x15C the colour and texture coordinate
+// arrays here (kArraysSet); the vertex array, locked when the extension
+// is there; the stages, then the dlights (the shader's sort +0x58 at most
+// 5, flags +0x5C without 0x20004) or, for a shader with the sign bit of
+// +0x54, the entity's (0x1549B3C) lights over the stages with the sign bit
+// of their first byte (each light 0x1549B40, its scale 0x1549B44).
+void f_004F60E0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, ebp = c.ebp;
+  c.ebp = e - 4;
+  c.esp = ((e - 4) & ~7u) - 0x10;
+  const uint32_t dlights_only = Arg(c, e, 1);
+  if (I32(kNumStages) > 0 && (!dlights_only || U32(0x17F0C80))) {
+    Call(c, f_00509F20, 0x4F6110);
+    const uint32_t normals = (U32(U32(kTessShader) + 0x50) >> 8) & 1;
+    c.ebx = normals;
+    c.edi = 1;
+    if (CvarInt(0x1534704)) {
+      Push(c, U32(kTessShader));
+      Push(c, 0x53C044);
+      Call(c, f_00440940, 0x4F613A);
+      c.esp += 8;
+      if (const uint32_t log = U32(0x1830CE4)) {
+        Push(c, c.eax);
+        Push(c, 0x55B2B4);
+        Push(c, log);
+        Call(c, f_0051D45A, 0x4F6153);
+        c.esp += 0xC;
+      }
+    }
+    Call(c, f_004F4090, 0x4F615B);
+    Call(c, f_004F5D50, 0x4F6160);
+    c.esi = U32(U32(kTessShader) + 0xA8);
+    Call(c, f_004CB5D0, 0x4F6171);
+    auto arrays = [&](uint32_t bits, uint32_t ret) {
+      Push(c, bits);
+      Call(c, f_004CBBE0, ret);
+      c.esp += 4;
+    };
+    if (I32(kNumStages) > 1 || U32(U32(U32(kTessShader) + 0x154) + 0x15C)) {
+      if (normals) arrays(0x600, 0x4F6252);
+      else arrays(0x400, 0x4F6261);
+    } else {
+      Put(kArraysSet, 1);
+      arrays(normals ? 0x701 : 0x501, 0x4F61B1);
+      Push(c, kColors);
+      Push(c, 0);
+      Push(c, 0x1401);
+      Push(c, 4);
+      CallPtr(c, kglColorPointer, 0x4F61C2);
+      Push(c, 0x16E8C60);
+      Push(c, 0);
+      Push(c, 0x1406);
+      Push(c, U32(U32(U32(kTessShader) + 0x154) + 0x90));
+      CallPtr(c, kglTexCoordPointer, 0x4F61E7);
+    }
+    if (normals) {
+      Push(c, kTessNormals);
+      Push(c, 0xC);
+      Push(c, 0x1406);
+      CallPtr(c, kglNormalPointer, 0x4F61FD);
+    }
+    Push(c, kTessXyz);
+    Push(c, 0);
+    Push(c, 0x1406);
+    Push(c, U32(kXyzStride));
+    CallPtr(c, kglVertexPointer, 0x4F6216);
+    if (const uint32_t lock = U32(kglLockArraysEXT)) {
+      Push(c, U32(kTessVerts));
+      Push(c, 0);
+      CallTo(c, lock, 0x4F622E);
+    }
+    if (!U32(kArraysSet)) arrays(normals ? 0x701 : 0x501, 0x4F6270);
+    if (!dlights_only) {
+      Push(c, kTessIndexes);
+      Call(c, f_004F6070, 0x4F6284);
+      c.esp += 4;
+    }
+    const uint32_t shader = U32(kTessShader);
+    if (U32(0x17F0C80) && St(Ld(shader + 0x58)) <= 5.0f && !(U32(shader + 0x5C) & 0x20004)) {
+      Call(c, f_004F5F50, 0x4F62B4);
+    } else if (int8_t(U8(shader + 0x54)) < 0 && U32(0x1549B3C) && U32(U32(0x1549B3C) + 0xCC)) {
+      uint32_t ent = U32(0x1549B3C);
+      if (I32(ent + 0xCC) > 0) {
+        for (c.edi = 0; int32_t(c.edi) < I32(ent + 0xCC); c.edi++) {
+          const uint32_t light = U32(ent + 8 * c.edi + 0xD0);
+          Put(0x1549B40, light);
+          if (U32(light) == 8) continue;
+          Put(0x1549B44, Fst(St(Ld(ent + 8 * c.edi + 0xD4))));
+          for (c.esi = 0; int32_t(c.esi) < 0x20; c.esi += 4) {
+            const uint32_t stage = U32(c.esi + U32(kTessStages));
+            if (!stage) break;
+            if (int8_t(U8(stage)) >= 0) continue;
+            Push(c, U32(kTessIndexCount));
+            c.ebx = kTessIndexes;
+            c.eax = stage;
+            Call(c, f_004F5DE0, 0x4F6333);
+            ent = U32(0x1549B3C);
+            c.esp += 4;
+          }
+        }
+      }
+      Put(0x1549B40, 0);
+    }
+    if (const uint32_t unlock = U32(kglUnlockArraysEXT)) CallTo(c, unlock, 0x4F6362);
+    Put(kArraysSet, 0);
+  }
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.ebp = ebp;
+  c.esp = e + 4;
+}
+
+// The optimised stage iterator of the shader's kind (+0x188: 12-15, 25-28),
+// on an 8-aligned frame; then its vertex and index counts (0x1830C98,
+// 0x1830C94) into the frame's (0x1549B0C, 0x1549B10).
+void f_004F7C30(Ctx& c) {
+  const uint32_t e = c.esp, ebp = c.ebp;
+  c.ebp = e - 4;
+  c.esp = (e - 4) & ~7u;
+  switch (U32(U32(kTessShader) + 0x188)) {
+    case 12: Call(c, f_004F70F0, 0x4F7C78); break;
+    case 13: Call(c, f_004F73D0, 0x4F7C7F); break;
+    case 14: Call(c, f_004F76B0, 0x4F7C86); break;
+    case 15: Call(c, f_004F7950, 0x4F7C8D); break;
+    case 25: Call(c, f_004F6380, 0x4F7C5C); break;
+    case 26: Call(c, f_004F66C0, 0x4F7C63); break;
+    case 27: Call(c, f_004F6A40, 0x4F7C6A); break;
+    case 28: Call(c, f_004F6D70, 0x4F7C71); break;
+  }
+  Put(0x1549B10, U32(0x1549B10) + U32(0x1830C94));
+  Put(0x1549B0C, U32(0x1549B0C) + U32(0x1830C98));
+  Put(0x1830C94, 0);
+  Put(0x1830C98, 0);
+  c.ebp = ebp;
+  c.esp = e + 4;
+}
+
+// RB_EndSurface (its overflow errors): the optimised iterator's
+// batch first if it has one; then, for a surface with indexes, the overflow
+// checks (the last index and the last vertex's x must be untouched), the
+// shader 0x1535AEC by its own flush; a shader is skipped for the cvar
+// 0x153468C below its sort, and by the view's portal state (0x154D734:
+// the refdef's flag 8 and 0x154D708) against the stage iterator 0x4DD6E0;
+// otherwise the counters (surfaces 0x1549B08; for a shader with stages
+// vertices and indexes), the shader's stage iterator (0x1830CA0; dlights
+// only after the optimised one), the debug lines (cvar 0x15343E8) and the
+// normals (r_shownormals, 0x1534698: "white", "color", or anything else
+// reset with its usage printed); the index count back to zero, and
+// "----------" to the log file.
+void f_004F7D00(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi;
+  c.esp = e - 0xC;
+  c.ebx = 0;
+  c.esi = 0;
+  auto done = [&] {
+    c.ebx = ebx;
+    c.esi = esi;
+    c.esp = e + 4;
+  };
+  if (U32(0x1830C94)) {
+    Call(c, f_004F7C30, 0x4F7D15);
+    c.esi = 1;
+  }
+  if (!U32(kTessIndexCount)) return done();
+  if (U16(0x1630C3E)) {
+    Push(c, 0x53BFC8);
+    Push(c, 1);
+    CallPtr(c, kError, 0x4F7D36);
+    c.esp += 8;
+  }
+  if (!(St(Ld(kTessXyz + U32(kXyzStride) * 0x7FFC)) == 0.0f)) {
+    Push(c, 0x53BF9C);
+    Push(c, 1);
+    CallPtr(c, kError, 0x4F7D64);
+    c.esp += 8;
+  }
+  const uint32_t shader = U32(kTessShader);
+  auto skip = [&] {
+    Put(kTessIndexCount, 0);
+    done();
+  };
+  if (shader == U32(0x1535AEC)) {
+    Call(c, f_005082D0, 0x4F7D80);
+    return skip();
+  }
+  const uint32_t sort = CvarInt(0x153468C);
+  if (sort && FromInt(int32_t(sort)) < Ld(shader + 0x58)) return skip();
+  const uint32_t iterator = U32(0x1830CA0);
+  if (U32(0x154D734)) {
+    if (!(U8(0x15496EC) & 8)) {
+      if (iterator == 0x4DD6E0) return skip();
+    } else if (!U32(0x154D708) && iterator != 0x4DD6E0) {
+      return skip();
+    }
+  }
+  Put(0x1549B08, U32(0x1549B08) + 1);
+  if (U32(kNumStages)) {
+    Put(0x1549B0C, U32(0x1549B0C) + U32(kTessVerts));
+    Put(0x1549B10, U32(0x1549B10) + U32(kTessIndexCount));
+  }
+  Push(c, c.esi);
+  CallTo(c, iterator, 0x4F7E1F);
+  c.esp += 4;
+  if (CvarInt(0x15343E8) && U32(kTessIndexCount)) {
+    c.eax = kTessIndexes;
+    Call(c, f_004F44A0, 0x4F7E42);
+  }
+  if (U8(U32(U32(0x1534698) + 4))) {
+    Push(c, 0x559E60);
+    Push(c, U32(U32(0x1534698) + 4));
+    Call(c, f_0052AB6F, 0x4F7E5A);
+    c.esp += 8;
+    if (!c.eax) {
+      Push(c, kTessIndexes);
+      Call(c, f_004F4560, 0x4F7E6B);
+      c.esp += 4;
+    } else {
+      Push(c, 0x53BF94);
+      Push(c, U32(U32(0x1534698) + 4));
+      Call(c, f_0052AB6F, 0x4F7E81);
+      c.esp += 8;
+      if (!c.eax) {
+        c.ebx = kTessIndexes;
+        Call(c, f_004F4850, 0x4F7E92);
+        c.ebx = 0;
+      } else {
+        Push(c, 0x54ED00);
+        Push(c, 0x54D8D8);
+        c.eax = 1;
+        Call(c, f_00431CF0, 0x4F7EAA);
+        c.esp += 8;
+        Push(c, 0x53BF68);
+        Call(c, f_0042E300, 0x4F7EB7);
+        c.esp += 4;
+      }
+    }
+  }
+  Put(kTessIndexCount, 0);
+  if (const uint32_t log = U32(0x1830CE4)) {
+    Push(c, 0x541D04);
+    Push(c, 0x55B2B4);
+    Push(c, log);
+    Call(c, f_0051D45A, 0x4F7ED9);
+    c.esp += 0xC;
+  }
+  done();
 }
 
 }  // namespace recomp::gen
