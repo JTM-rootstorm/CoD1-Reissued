@@ -21,6 +21,7 @@
 // NaNs or huge), and index lists for the strips that continue a strip or
 // start a new one at random.
 
+#include <bit>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -172,12 +173,11 @@ COD1_STUB(0050A0E0, kEcx, 0)
 COD1_STUB(0050A120, kEcx, 0)
 COD1_STUB(0050AEC0, kEax, 0)
 COD1_STUB(0050A270, kEax, 1)
-// Under the stages and the flush: ComputeTexCoords, the dlight pass, the
+// Under the stages and the flush: ComputeTexCoords, the
 // flush of shader 0x1535AEC, the debug lines and normals, setting a cvar,
 // printing, va and fprintf, each with the registers the native code keeps
 // as the original has them.
 COD1_STUB(004F5940, kEax | kSaved, 0)
-COD1_STUB(004F5F50, kSaved, 0)
 COD1_STUB(005082D0, kSaved, 0)
 COD1_STUB(004F44A0, kEax | kSaved, 0)
 COD1_STUB(004F4560, kSaved, 1)
@@ -240,6 +240,9 @@ void f_004F70F0_lifted(Ctx& c);
 void f_004F73D0_lifted(Ctx& c);
 void f_004F76B0_lifted(Ctx& c);
 void f_004F7950_lifted(Ctx& c);
+void f_004F30A0_lifted(Ctx& c);
+void f_004F4BD0_lifted(Ctx& c);
+void f_004F5F50_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -278,6 +281,9 @@ void f_004F70F0(Ctx& c) { f_004F70F0_lifted(c); }
 void f_004F73D0(Ctx& c) { f_004F73D0_lifted(c); }
 void f_004F76B0(Ctx& c) { f_004F76B0_lifted(c); }
 void f_004F7950(Ctx& c) { f_004F7950_lifted(c); }
+void f_004F30A0(Ctx& c) { f_004F30A0_lifted(c); }
+void f_004F4BD0(Ctx& c) { f_004F4BD0_lifted(c); }
+void f_004F5F50(Ctx& c) { f_004F5F50_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -314,6 +320,9 @@ void n_004F70F0(Ctx& c);
 void n_004F73D0(Ctx& c);
 void n_004F76B0(Ctx& c);
 void n_004F7950(Ctx& c);
+void n_004F30A0(Ctx& c);
+void n_004F4BD0(Ctx& c);
+void n_004F5F50(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -411,6 +420,8 @@ const Entry kEntries[] = {
     COD1_ENTRY(004F6A40, "shader object"), COD1_ENTRY(004F6D70, "shader NV"),
     COD1_ENTRY(004F70F0, "world memory"),  COD1_ENTRY(004F73D0, "world buffer"),
     COD1_ENTRY(004F76B0, "world object"),  COD1_ENTRY(004F7950, "world memory 2"),
+    COD1_ENTRY(004F30A0, "axes"),          COD1_ENTRY(004F4BD0, "dlight"),
+    COD1_ENTRY(004F5F50, "dlight pass"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -432,6 +443,8 @@ const Window kGlobals[] = {
     // The tessellator's positions, vertex colours and normals, and the
     // stage colours (as many as the cases' vertices use).
     {0x1630C40, 0x800}, {0x1690C40, 0x100}, {0x1698C40, 0x200}, {0x16E0C40, 0x100},
+    // The vertices' two axes and the dlight's texture coordinates.
+    {0x16B0C40, 0x200}, {0x16C8C40, 0x200}, {0x1670C40, 0x200},
 };
 
 struct Stats {
@@ -562,6 +575,12 @@ struct Arena {
 
 uint32_t Pick(std::mt19937& g, std::initializer_list<uint32_t> v) {
   return v.begin()[g() % v.size()];
+}
+
+uint32_t Float(float f) {
+  uint32_t b;
+  std::memcpy(&b, &f, 4);
+  return b;
 }
 
 // A float's bits: ordinary values, now and then special ones.
@@ -732,6 +751,7 @@ void Randomize(Arena& a, std::mt19937& g) {
   // The flush's stages: up to 8, now and then fewer than the count says.
   const uint32_t stages = a.Alloc(0x20), num = g() % 4;
   for (uint32_t i = 0; i < 8; i++) Wr(stages + 4 * i, i < num + g() % 2 ? Stage(a, g) : 0);
+  if (g() % 8 == 0) Wr(stages + 4 * 7, Stage(a, g));  // one past the terminator
   Wr(0x1830CA4, stages);
   // (A count past the stages only negative: the optimised iterators read
   // as many as it says.)
@@ -752,6 +772,47 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(tris + 0xA8, g() % 3);
   Wr(tris + 0x154, Stage(a, g));
   Wr(0x1535B5C, tris);
+  // The dlights: a colour, radius and origin about the vertices' (which
+  // are within 16 of 0), the cvar 0x15344E4 and the batch's flags for the
+  // vertices' axes, and the shader 0x1535AF4 drawn in for them.
+  const uint32_t num_dlights = g() % 8 ? g() % 4 : uint32_t(g()) | 0x80000000u;
+  const uint32_t dlights = a.Alloc(4 * 0x88);
+  for (uint32_t d = 0; d < 4; d++) {
+    const uint32_t dl = dlights + 0x88 * d;
+    for (uint32_t i = 4; i < 0x10; i += 4) Wr(dl + i, g() % 4 ? Float(float(g() % 1001) / 1000.0f) : RandFloat(g));
+    Wr(dl + 0x74, g() % 8 ? Float(float(1 + g() % 3200) / 100.0f) : RandFloat(g));
+    for (uint32_t i = 0x78; i < 0x84; i += 4) Wr(dl + i, g() % 8 ? Float(float(int(g() % 4001) - 2000) / 100.0f) : RandFloat(g));
+  }
+  // Now and then the first vertices on a grid and the first dlight at
+  // offsets from the first that put coordinates and distances on the
+  // bounds the clip bits test (radius 3: a coordinate just past 1 that its
+  // store rounds to 1; radius 4: exactly 0).
+  if (g() % 2) {
+    const uint32_t stride = 4 * Rd(0x17F0C60);
+    for (uint32_t v = 0; v < 4; v++)
+      for (uint32_t k = 0; k < 12; k += 4) Wr(0x1630C40 + stride * v + k, Float(float(int(g() % 9) - 4)));
+    const float r = std::bit_cast<float>(Pick(g, {Float(3.0f), Float(4.0f), Float(1.5f), Float(6.0f)}));
+    Wr(dlights + 0x74, Float(r));
+    for (uint32_t k = 0; k < 12; k += 4) {
+      const float dx = r * std::bit_cast<float>(Pick(g, {Float(0.0f), Float(0.5f), Float(-0.5f), Float(1.0f), Float(-1.0f), Float(0.25f)}));
+      Wr(dlights + 0x78 + k, Float(std::bit_cast<float>(Rd(0x1630C40 + k)) + dx));
+    }
+  }
+  Wr(0x15497FC, num_dlights);
+  Wr(0x1549804, dlights);
+  Wr(0x15344E4, Cvar(a, g, g() % 2));
+  Wr(0x17F0C64, g() % 2);
+  Wr(0x17F0C68, g() % 2);
+  Wr(0x17F0C6C, g() % 2);
+  for (uint32_t i = 0; i < 0x200; i += 4) {
+    Wr(0x16B0C40 + i, RandFloat(g));
+    Wr(0x16C8C40 + i, RandFloat(g));
+  }
+  const uint32_t dlight_shader = a.Alloc(0x160);
+  Wr(dlight_shader + 0x154, g() % 4 ? Stage(a, g) : 0);
+  Wr(0x1535AF4, dlight_shader);
+  Wr(0x1549B20, g());
+  Wr(0x13F96D8, g());
   Wr(0x17F0C70, shader);
   Wr(0x1535AEC, g() % 16 ? 0 : shader);  // the shader with its own flush
   Wr(0x17F0C84, g() % 8 ? g() % 64 : 0);
@@ -931,6 +992,20 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
     case 0x4F7950:
       k.esi = g();
       k.edi = g();
+      break;
+    case 0x4F30A0: {
+      // A normal: x above, at or below -1 now and then.
+      k.ecx = a.Alloc(12);
+      for (uint32_t i = 0; i < 12; i += 4) Wr(k.ecx + i, RandFloat(g));
+      if (g() % 4 == 0) Wr(k.ecx, Pick(g, {0xBF800000, 0xBF800001, 0xBF7FFFFF, 0xC0000000}));
+      k.esi = a.Alloc(12);
+      k.edx = a.Alloc(12);
+      break;
+    }
+    case 0x4F4BD0:
+      k.ecx = 0x1690C40;
+      k.edx = 0x1670C40;
+      k.args = {Rd(0x1549804) + 0x88 * uint32_t(g() % 4), a.Alloc(0x80)};
       break;
     case 0x4F3D80: {
       const uint32_t coords = a.Alloc(32);

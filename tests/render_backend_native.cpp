@@ -37,4 +37,7 @@
 #define f_004F73D0 n_004F73D0
 #define f_004F76B0 n_004F76B0
 #define f_004F7950 n_004F7950
+#define f_004F30A0 n_004F30A0
+#define f_004F4BD0 n_004F4BD0
+#define f_004F5F50 n_004F5F50
 #include "../src/render_backend.cpp"

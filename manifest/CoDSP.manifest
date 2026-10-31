@@ -94,7 +94,7 @@ replace 0042B0A0
 # a flush's fog, unit reset, vertex deform dispatch and stage colours;
 # a stage's draw, the stage loop, RB_StageIteratorGeneric, the optimised
 # iterators' dispatch and RB_EndSurface; the eight optimised iterators and
-# a stage's texture units from an ATI vertex array object.
+# a stage's texture units from an ATI vertex array object; the dlight pass.
 replace 004C89D0
 replace 004C8A20
 replace 004CB3B0
@@ -131,6 +131,9 @@ replace 004F70F0
 replace 004F73D0
 replace 004F76B0
 replace 004F7950
+replace 004F30A0
+replace 004F4BD0
+replace 004F5F50
 
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0

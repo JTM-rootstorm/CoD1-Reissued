@@ -6,8 +6,8 @@
 // object), what a flush sets up before its stages draw: the fog, the
 // texture units back to one, the vertex deforms and each stage's colours,
 // and the flush itself: a stage's draw, the stage loop, the generic stage
-// iterator, the optimised iterators and their dispatch, and
-// RB_EndSurface. Replacements of lifted functions named
+// iterator with the dlight pass, the optimised iterators and their
+// dispatch, and RB_EndSurface. Replacements of lifted functions named
 // with `replace` in manifest/CoDSP.manifest; FINDINGS.md "Renderer back
 // end". Names and evidence are in the Ghidra plate comments.
 //
@@ -65,7 +65,6 @@ void f_0050A270(Ctx& c);
 void f_00426A60(Ctx& c);  // rotates ECX by the axes EAX into EDX
 void f_004268B0(Ctx& c);  // normalises EAX (approximate inverse square root)
 void f_004F5940(Ctx& c);  // ComputeTexCoords (EAX stage; src/render.cpp)
-void f_004F5F50(Ctx& c);  // the dlight pass
 void f_005082D0(Ctx& c);  // the flush of shader 0x1535AEC
 void f_004F44A0(Ctx& c);  // the debug lines of cvar 0x15343E8 (EAX the tessellator)
 void f_004F4560(Ctx& c);  // the white normals (the tessellator)
@@ -1590,6 +1589,199 @@ void f_004F6070(Ctx& c) {
   c.ebx = ebx;
   c.esi = esi;
   c.edi = edi;
+  c.esp = e + 4;
+}
+
+// ---- the dlights -----------------------------------------------------------------
+
+// Two axes across the normal ECX, into ESI and EDX: from 1 / (1 + x) for a
+// normal with x above -1, else from 1 / (1 + z).
+void f_004F30A0(Ctx& c) {
+  const uint32_t n = c.ecx, s = c.esi, t = c.edx;
+  if (Ld(n) > -1.0f) {
+    const F32 k = Fst(1.0f / (St(Ld(n)) + 1.0f));
+    const uint32_t y = U32(n + 4);
+    const St ny(Ld(n + 4)), t1 = ny * ny * k, t2 = St(Ld(n + 8)) * Ld(n + 4) * k;
+    const St nz(Ld(n + 8));
+    Put(s, y);
+    const F32 k2 = Fst(nz * nz * k);
+    Put(s + 4, Fst(t1 - 1.0f));
+    Put(s + 8, Fst(t2));
+    const uint32_t z = U32(n + 8);
+    Put(t + 4, Fst(t2));
+    Put(t, z);
+    Put(t + 8, Fst(St(k2) - 1.0f));
+  } else {
+    const F32 k = Fst(1.0f / (St(Ld(n + 8)) + 1.0f));
+    const St nx(Ld(n)), t1 = nx * nx * k, t2 = St(Ld(n + 4)) * Ld(n) * k;
+    const St ny(Ld(n + 4)), t3 = ny * ny * k;
+    Put(s, Fst(-t2));
+    Put(s + 4, Fst(St(1.0f) - t3));
+    Put(s + 8, Fst(-St(Ld(n + 4))));
+    Put(t, Fst(t1 - 1.0f));
+    Put(t + 4, Fst(t2));
+    Put(t + 8, U32(n));
+  }
+  c.esp += 4;
+}
+
+// A dlight on the tessellator (stack: the dlight, the index buffer; ECX
+// the colours, EDX the texture coordinates; returns the index count): with
+// the cvar 0x15344E4 and 0x17F0C64 the vertices' axes (0x16B0C40,
+// 0x16C8C40, 0x4F30A0) once per batch (0x17F0C68, 0x17F0C6C), the light's
+// offset from each vertex projected onto them, else taken as it is; the
+// coordinates 0.5 plus the offset over the radius (+0x74), the colour the
+// light's (+4, 0-1) times its strength along the third axis (full within
+// half the radius, falling to none at it), and per vertex the clip bits
+// outside 0-1 and the radius, in the original's frame; then the triangles
+// not wholly outside one side. The cookie check and __chkstk's probes
+// (the guest stack is committed) are left out.
+void f_004F4BD0(Ctx& c) {
+  const uint32_t e = c.esp, light = Arg(c, e, 1), out = Arg(c, e, 2);
+  const uint32_t ebx = c.ebx, esi = c.esi, edi = c.edi, ebp = c.ebp;
+  const uint32_t clip = e - 0x2004;
+  auto byte = [](uint32_t va, uint32_t v) { Wr<uint8_t>(g_guest_base, va, uint8_t(v)); };
+  const F32 radius = Ld(light + 0x74), inv = Fst(1.0f / St(radius));
+  const F32 colour[3] = {Fst(St(Ld(light + 4)) * 255.0f), Fst(St(Ld(light + 8)) * 255.0f),
+                         Fst(St(Ld(light + 0xC)) * 255.0f)};
+  const F32 origin[3] = {Ld(light + 0x78), Ld(light + 0x7C), Ld(light + 0x80)};
+  uint32_t coords = c.edx, colours = c.ecx;
+  c.ebx = coords;
+  c.edi = colours;
+  c.esp = e - 0x2058;
+  auto axes = [] { return CvarInt(0x15344E4) && U32(0x17F0C64); };
+  if (axes() && (!U32(0x17F0C6C) || !U32(0x17F0C68))) {
+    for (c.ebp = 0; int32_t(c.ebp) < I32(kTessVerts); c.ebp++) {
+      c.esi = 0x16C8C40 + 0xC * c.ebp;
+      c.edx = c.esi - 0x18000;
+      c.ecx = c.esi - 0x30000;
+      Call(c, f_004F30A0, 0x4F4CA1);
+    }
+    Put(0x17F0C6C, 1);
+    Put(0x17F0C68, 1);
+  }
+  uint32_t xyz = kTessXyz;
+  for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) {
+    St s, t, dist;
+    if (axes()) {
+      const uint32_t a = 0x16C8C40 + 0xC * i, b = a - 0x18000, n = a - 0x30000;
+      const F32 d0 = Fst(St(origin[0]) - Ld(xyz)), d1 = Fst(St(origin[1]) - Ld(xyz + 4));
+      const St d2s = St(origin[2]) - Ld(xyz + 8);  // kept on the stack for the first axis
+      const F32 d2 = Fst(d2s);
+      s = d2s * Ld(a + 8) + St(d0) * Ld(a) + St(d1) * Ld(a + 4);
+      t = St(d2) * Ld(b + 8) + St(d1) * Ld(b + 4) + St(d0) * Ld(b);
+      dist = St(d2) * Ld(n + 8) + St(d1) * Ld(n + 4) + St(d0) * Ld(n);
+    } else {
+      s = St(origin[0]) - Ld(xyz);
+      t = St(origin[1]) - Ld(xyz + 4);
+      dist = St(origin[2]) - Ld(xyz + 8);
+    }
+    const F32 d = Fst(dist);
+    Put(0x1549B20, U32(0x1549B20) + 1);
+    const F32 sf = Fst(s * inv + 0.5f);
+    Put(coords, sf);
+    const St tv = t * inv + 0.5f;  // compared before its store rounds it
+    Put(coords + 4, Fst(tv));
+    uint32_t bits = 0;
+    if (sf < 0.0f) bits = 1;
+    else if (sf > 1.0f) bits = 2;
+    if (tv < 0.0f) bits |= 4;
+    else if (tv > 1.0f) bits |= 8;
+    F32 strength;
+    if (d > St(radius)) {
+      bits |= 0x10;
+      strength = {0};
+    } else if (-St(radius) > d) {
+      bits |= 0x20;
+      strength = {0};
+    } else {
+      const F32 a = {d.bits & 0x7FFFFFFF};
+      if (St(radius) * 0.5f > a) {
+        strength = {0x3F800000};
+      } else {
+        const St x = (St(radius) - a) * inv;
+        strength = Fst(x + x);
+      }
+    }
+    byte(clip + i, bits);
+    for (uint32_t k = 0; k < 3; k++) {
+      const uint32_t v = uint32_t(Fistp(St(Fst(St(strength) * colour[k]))));
+      Put(0x13F96D8, v);
+      byte(colours + k, v);
+    }
+    byte(colours + 3, 0xFF);
+    xyz += 4 * U32(kXyzStride);
+    coords += 8;
+    colours += 4;
+  }
+  uint32_t n = 0;
+  for (uint32_t j = 0; int32_t(j) < I32(kTessIndexCount); j += 3) {
+    const uint32_t i0 = U16(kTessIndexes + 2 * j), i1 = U16(kTessIndexes + 2 * j + 2),
+                   i2 = U16(kTessIndexes + 2 * j + 4);
+    if (!(U8(clip + i0) & U8(clip + i1) & U8(clip + i2))) {
+      Wr<uint16_t>(g_guest_base, out + 2 * n, uint16_t(i0));
+      Wr<uint16_t>(g_guest_base, out + 2 * n + 2, uint16_t(i1));
+      Wr<uint16_t>(g_guest_base, out + 2 * n + 4, uint16_t(i2));
+      n += 3;
+    }
+  }
+  c.eax = n;
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.ebp = ebp;
+  c.esp = e + 4;
+}
+
+// The dlight pass: the texture units back to one, then each dlight
+// (0x15497FC of them, 0x88 bytes from 0x1549804) whose bit the batch has
+// (0x17F0C80) with triangles left (f_004F4BD0 into the original's frame,
+// colours into the vertex colours, coordinates 0x1670C40): drawn in the
+// stages with the sign bit of their first byte for a shader with the sign
+// bit of +0x54 (the light 0x1549B40, left set), else in the first stage of
+// the shader 0x1535AF4. The cookie check and __chkstk's probes are left
+// out.
+void f_004F5F50(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, ebp = c.ebp;
+  const uint32_t indexes = e - 0x1800C;
+  c.esp = e - 0x18024;
+  if (U32(0x15497FC)) {
+    Call(c, f_004F4090, 0x4F5F83);
+    c.ebp = 0;
+    for (uint32_t i = 0; int32_t(i) < I32(0x15497FC); i++, c.ebp += 0x88) {
+      if (!(U32(0x17F0C80) & 1u << (i & 31))) continue;
+      c.esi = U32(0x1549804) + c.ebp;
+      Push(c, indexes);
+      Push(c, c.esi);
+      c.ecx = kVertColors;
+      c.edx = 0x1670C40;
+      Call(c, f_004F4BD0, 0x4F5FD1);
+      c.esp += 8;
+      c.edi = c.eax;
+      if (!c.edi) continue;
+      auto draw = [&](uint32_t stage, uint32_t ret) {
+        Push(c, c.edi);
+        c.ebx = indexes;
+        c.eax = stage;
+        Call(c, f_004F5DE0, ret);
+        c.esp += 4;
+      };
+      if (int8_t(U8(U32(kTessShader) + 0x54)) < 0) {
+        Put(0x1549B40, c.esi);
+        for (c.esi = 0; int32_t(c.esi) < 0x20; c.esi += 4) {
+          const uint32_t stage = U32(c.esi + U32(kTessStages));
+          if (!stage) break;
+          if (int8_t(U8(stage)) < 0) draw(stage, 0x4F600C);
+        }
+      } else if (const uint32_t stage = U32(U32(0x1535AF4) + 0x154)) {
+        draw(stage, 0x4F6033);
+      }
+    }
+  }
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.ebp = ebp;
   c.esp = e + 4;
 }
 

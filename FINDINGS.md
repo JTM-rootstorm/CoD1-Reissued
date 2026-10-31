@@ -112,6 +112,31 @@ on gfx::Device" below).
   loaders' strings and stores. The dlight pass 0x4F5F50 stays lifted: a
   0x18014-byte frame through __chkstk and a stack cookie, its index buffer
   in that frame.
+- Layer 6, the dlight pass (2026-10-31): 0x4F5F50 (texture units back to
+  one; each dlight, 0x15497FC of 0x88 bytes from 0x1549804, with its bit
+  in 0x17F0C80: its triangles into a 0x18000-byte buffer in the frame,
+  then drawn by 0x4F5DE0 in the stages with the sign bit of their first
+  byte for a shader with the sign bit of +0x54, setting the light
+  0x1549B40 and leaving it, else in the shader 0x1535AF4's first stage),
+  0x4F4BD0 (ECX colours, EDX texture coordinates; stack: dlight, index
+  buffer; returns the index count: per vertex the offset from the light
+  (origin +0x78), with the cvar 0x15344E4 and 0x17F0C64 projected onto
+  two axes and the normal, the axes 0x16B0C40 and 0x16C8C40 built once
+  per batch (0x17F0C68/0x17F0C6C) by 0x4F30A0; coordinates 0.5 + offset /
+  radius (+0x74), the light's colour (+4, 0-1) times 255 times its
+  strength along the normal (1 within half the radius, falling linearly
+  to 0 at it) through FISTP into 0x13F96D8, and clip bits (outside 0-1,
+  beyond +-radius) in a byte per vertex in the frame; then the triangles
+  not wholly outside one bound), and 0x4F30A0 (ECX normal into ESI and
+  EDX: two axes across it from 1 / (1 + x), or 1 / (1 + z) for x at or
+  below -1). Its x87 has two places where the original uses a value
+  before the store that rounds it: the third offset in the first axis's
+  dot product, and the t coordinate in its clip tests. The clip bytes
+  stay in the original's frame because an index past the vertex count
+  reads whatever is there. Both frames come from __chkstk (0x524810) and
+  end in the cookie check (0x523CD9); the native code skips both, since
+  the guest stack is committed whole (process.cpp) and a native frame
+  has no cookie to check.
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -138,6 +163,19 @@ on gfx::Device" below).
   0x100 in 0x4F76B0 before 0x4F5D50 (which does not read it), the loop's
   signed compare (entered only with a positive count), and the register
   0x4F76B0 leaves a count in (restored before anything reads it).
+  With layer 6: 200000 cases over 39 entries, 5.29M calls out, 0
+  mismatches (random dlights; now and then the first vertices on a grid
+  and a dlight at offsets that put coordinates and distances on the clip
+  bounds, and a stage past the stage list's terminator). Its mutations:
+  34, 27 fail the oracle (the < for <= on s, t's store before its test
+  against 1 and FISTP without the float store before it only with the
+  grid cases, break for continue only with the stage past the
+  terminator); of the 7 that pass, 5 cannot change a result (the
+  normal's y read again, fabs for the bit mask on a distance in either
+  use, x * 2 + 0 for x + x, the ESP of 0x4F30A0's call), one only through
+  a t + 0.5 below 2^-150, which a sum with 0.5 never is (t's store
+  before its test against 0), and one is a rounding mid-point random
+  cases do not reach (the order of t's sum).
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -162,7 +200,13 @@ on gfx::Device" below).
   times: 0x4F6380 (the shader's vertices in memory) 14190 and 0x4F70F0
   (the world's) 2838; the buffer, array object and NV forms never, as the
   opengl32 HLE offers none of those extensions. Only the oracle covers
-  them.
+  them. With layer 6 (base the same build): all 13 loading and briefing
+  frames shared, 47 of 740 in-level frames identical, the rest differing
+  only in the 2D text (at most 299 px, within (8,225)-(355,457)). The
+  walk never reaches the dlight pass (RB_StageIteratorGeneric 67196
+  times under gdb, 0x4F5F50 none: no dlight touches a batch on that
+  path), so only the oracle covers it; a run with gunfire or explosions
+  near lit surfaces would.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),
