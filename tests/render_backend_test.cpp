@@ -93,6 +93,11 @@ constexpr Gl kGl[] = {
     {0x15354F0, "glVertexPointer", 4},
     {0x1534DDC, "glLockArraysEXT", 2},
     {0x1534C2C, "glUnlockArraysEXT", 0},
+    {0x1534DB0, "glDrawRangeElementsEXT", 6},
+    {0x1534DE4, "glBindBufferARB", 2},
+    {0x1535390, "glArrayObjectATI", 6},
+    {0x153539C, "glDepthRange", 4},
+    {0x1534EB0, "glColor4ubv", 1, false, 0, 1},
     {0x1830CA0, "stage iterator", 1, true},
     {0x1549600, "ri.Printf", 2, true},
     {0x1549604, "ri.Error", 2, true},
@@ -106,7 +111,7 @@ constexpr uint32_t kGlTarget = 0x7FFD0000;  // + 0x10 * index
 constexpr uint32_t kSkyIterator = 0x4DD6E0;
 
 struct CallRec {
-  uint32_t target, ret, esp, args[4];
+  uint32_t target, ret, esp, args[6];
   uint32_t data[4];
   uint32_t regs[7];  // stubs: the registers their callee reads
   bool operator==(const CallRec&) const = default;
@@ -169,8 +174,8 @@ COD1_STUB(0050AEC0, kEax, 0)
 COD1_STUB(0050A270, kEax, 1)
 // Under the stages and the flush: ComputeTexCoords, the dlight pass, the
 // flush of shader 0x1535AEC, the debug lines and normals, setting a cvar,
-// printing, va, fprintf and the optimised iterators, each with the
-// registers the native code keeps as the original has them.
+// printing, va and fprintf, each with the registers the native code keeps
+// as the original has them.
 COD1_STUB(004F5940, kEax | kSaved, 0)
 COD1_STUB(004F5F50, kSaved, 0)
 COD1_STUB(005082D0, kSaved, 0)
@@ -181,14 +186,6 @@ COD1_STUB(00431CF0, kEax | kSaved, 2)
 COD1_STUB(0042E300, kSaved, 1)
 COD1_STUB(00440940, kSaved, 2)
 COD1_STUB(0051D45A, kSaved, 3)
-COD1_STUB(004F6380, kSaved, 0)
-COD1_STUB(004F66C0, kSaved, 0)
-COD1_STUB(004F6A40, kSaved, 0)
-COD1_STUB(004F6D70, kSaved, 0)
-COD1_STUB(004F70F0, kSaved, 0)
-COD1_STUB(004F73D0, kSaved, 0)
-COD1_STUB(004F76B0, kSaved, 0)
-COD1_STUB(004F7950, kSaved, 0)
 #undef COD1_STUB
 // _stricmp, recorded and answering as the CRT's: 0 when the strings match
 // but for case.
@@ -233,6 +230,16 @@ void f_004F6070_lifted(Ctx& c);
 void f_004F60E0_lifted(Ctx& c);
 void f_004F7C30_lifted(Ctx& c);
 void f_004F7D00_lifted(Ctx& c);
+void f_004F39B0_lifted(Ctx& c);
+void f_004F3F00_lifted(Ctx& c);
+void f_004F6380_lifted(Ctx& c);
+void f_004F66C0_lifted(Ctx& c);
+void f_004F6A40_lifted(Ctx& c);
+void f_004F6D70_lifted(Ctx& c);
+void f_004F70F0_lifted(Ctx& c);
+void f_004F73D0_lifted(Ctx& c);
+void f_004F76B0_lifted(Ctx& c);
+void f_004F7950_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -261,6 +268,16 @@ void f_004F6070(Ctx& c) { f_004F6070_lifted(c); }
 void f_004F60E0(Ctx& c) { f_004F60E0_lifted(c); }
 void f_004F7C30(Ctx& c) { f_004F7C30_lifted(c); }
 void f_004F7D00(Ctx& c) { f_004F7D00_lifted(c); }
+void f_004F39B0(Ctx& c) { f_004F39B0_lifted(c); }
+void f_004F3F00(Ctx& c) { f_004F3F00_lifted(c); }
+void f_004F6380(Ctx& c) { f_004F6380_lifted(c); }
+void f_004F66C0(Ctx& c) { f_004F66C0_lifted(c); }
+void f_004F6A40(Ctx& c) { f_004F6A40_lifted(c); }
+void f_004F6D70(Ctx& c) { f_004F6D70_lifted(c); }
+void f_004F70F0(Ctx& c) { f_004F70F0_lifted(c); }
+void f_004F73D0(Ctx& c) { f_004F73D0_lifted(c); }
+void f_004F76B0(Ctx& c) { f_004F76B0_lifted(c); }
+void f_004F7950(Ctx& c) { f_004F7950_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -287,6 +304,16 @@ void n_004F6070(Ctx& c);
 void n_004F60E0(Ctx& c);
 void n_004F7C30(Ctx& c);
 void n_004F7D00(Ctx& c);
+void n_004F39B0(Ctx& c);
+void n_004F3F00(Ctx& c);
+void n_004F6380(Ctx& c);
+void n_004F66C0(Ctx& c);
+void n_004F6A40(Ctx& c);
+void n_004F6D70(Ctx& c);
+void n_004F70F0(Ctx& c);
+void n_004F73D0(Ctx& c);
+void n_004F76B0(Ctx& c);
+void n_004F7950(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -379,6 +406,11 @@ const Entry kEntries[] = {
     COD1_ENTRY(004F4FA0, "stage colours"), COD1_ENTRY(004F5DE0, "stage draw"),
     COD1_ENTRY(004F6070, "stage loop"),    COD1_ENTRY(004F60E0, "generic iterator"),
     COD1_ENTRY(004F7C30, "optimised"),     COD1_ENTRY(004F7D00, "end surface"),
+    COD1_ENTRY(004F39B0, "object coords"), COD1_ENTRY(004F3F00, "object textures"),
+    COD1_ENTRY(004F6380, "shader memory"), COD1_ENTRY(004F66C0, "shader buffer"),
+    COD1_ENTRY(004F6A40, "shader object"), COD1_ENTRY(004F6D70, "shader NV"),
+    COD1_ENTRY(004F70F0, "world memory"),  COD1_ENTRY(004F73D0, "world buffer"),
+    COD1_ENTRY(004F76B0, "world object"),  COD1_ENTRY(004F7950, "world memory 2"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -427,9 +459,11 @@ struct Call {
 
 void PrintCall(const char* side, size_t i, const CallRec& r) {
   const uint32_t k = (r.target - kGlTarget) / 0x10;
-  std::printf("  %zu %s: %s ret %08X esp %08X args %08X %08X %08X %08X data %08X %08X %08X %08X\n",
+  std::printf("  %zu %s: %s ret %08X esp %08X args %08X %08X %08X %08X %08X %08X data %08X %08X "
+              "%08X %08X\n",
               i, side, k < uint32_t(kNumGl) ? kGl[k].name : "?", r.ret, r.esp, r.args[0],
-              r.args[1], r.args[2], r.args[3], r.data[0], r.data[1], r.data[2], r.data[3]);
+              r.args[1], r.args[2], r.args[3], r.args[4], r.args[5], r.data[0], r.data[1],
+              r.data[2], r.data[3]);
 }
 
 void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
@@ -699,9 +733,25 @@ void Randomize(Arena& a, std::mt19937& g) {
   const uint32_t stages = a.Alloc(0x20), num = g() % 4;
   for (uint32_t i = 0; i < 8; i++) Wr(stages + 4 * i, i < num + g() % 2 ? Stage(a, g) : 0);
   Wr(0x1830CA4, stages);
-  Wr(0x1830C9C, g() % 8 ? num : uint32_t(g()));
+  // (A count past the stages only negative: the optimised iterators read
+  // as many as it says.)
+  Wr(0x1830C9C, g() % 8 ? num : uint32_t(g()) | 0x80000000u);
   Wr(shader + 0x154, Rd(stages) ? Rd(stages) : Stage(a, g));
-  Wr(Rd(shader + 0x154) + 0x15C, g() % 4 == 0);
+  Wr(Rd(shader + 0x154) + 0x15C, Pick(g, {0, 0, 1, 0x2100, 0x1E01, 0x104}));
+  // The optimised iterators' vertices: the shader's and the world's (in
+  // memory, a buffer or an array object with its offset), the batch's
+  // vertex range, and the shader of their triangles.
+  Wr(shader + 0x18C, g());
+  Wr(shader + 0x190, g());
+  Wr(0x154955C, g());
+  Wr(0x1549560, g());
+  Wr(0x17F0C8C, g() % 1000);
+  Wr(0x17F0C90, g() % 4 ? g() % 1000 : 0);
+  if (g() % 3 == 0) Wr(0x1534DB0, 0);  // no glDrawRangeElementsEXT
+  const uint32_t tris = a.Alloc(0x160);
+  Wr(tris + 0xA8, g() % 3);
+  Wr(tris + 0x154, Stage(a, g));
+  Wr(0x1535B5C, tris);
   Wr(0x17F0C70, shader);
   Wr(0x1535AEC, g() % 16 ? 0 : shader);  // the shader with its own flush
   Wr(0x17F0C84, g() % 8 ? g() % 64 : 0);
@@ -860,6 +910,27 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       break;
     case 0x4F60E0:
       k.args = {g() % 2 ? 0 : g() % 4 ? 1 : uint32_t(g())};
+      break;
+    case 0x4F39B0:
+      k.esi = g() % 8;
+      k.args = {Bundle(a, g, a.Alloc(0xC8)), uint32_t(g()), uint32_t(g()), uint32_t(g() % 64)};
+      break;
+    case 0x4F3F00: {
+      const uint32_t coords = a.Alloc(32);
+      for (uint32_t u = 0; u < 8; u++) Wr(coords + 4 * u, uint32_t(g()));
+      k.args = {Stage(a, g), uint32_t(g()), coords, uint32_t(g() % 64)};
+      break;
+    }
+    case 0x4F6380:
+    case 0x4F66C0:
+    case 0x4F6A40:
+    case 0x4F6D70:
+    case 0x4F70F0:
+    case 0x4F73D0:
+    case 0x4F76B0:
+    case 0x4F7950:
+      k.esi = g();
+      k.edi = g();
       break;
     case 0x4F3D80: {
       const uint32_t coords = a.Alloc(32);

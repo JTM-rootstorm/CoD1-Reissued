@@ -84,6 +84,34 @@ on gfx::Device" below).
   next to glLockArraysEXT. The eight optimised iterators, ComputeTexCoords
   (native, src/render.cpp), the dlight pass and the debug draws stay
   lifted callees (stubbed in the oracle; _stricmp answers as the CRT's).
+- Layer 5, the optimised iterators (2026-10-31): all eight are one body
+  over a table of their call sites. Four draw the shader's prebuilt
+  vertices (+0x18C, the array object's offset +0x190: 32 bytes, two sets of
+  texture coordinates at +0 and +8, the colour at +0x10, the position at
+  +0x14) and set the texture environment (GL_REPLACE for 0x15343B4, else
+  the first stage's +0x15C); four the world's (0x154955C, offset
+  0x1549560: 24 bytes, one set, colour +8, position +0xC), which set up
+  the fog and the cull before the arrays but for the array object's. Each
+  set has the vertices in memory (0x4F6380 and 0x4F6D70, the latter
+  logging "RB_SurfaceOptimizedNV"; 0x4F70F0 and 0x4F7950, byte for byte
+  the same code), in a vertex buffer bound around the draws
+  (glBindBufferARB 0x1534DE4, target 0x8892; 0x4F66C0 logging
+  "RB_SurfaceOptimizedARB", 0x4F73D0) or in an ATI vertex array object
+  (glArrayObjectATI 0x1535390; 0x4F6A40, 0x4F76B0, with the textures
+  through 0x4F3F00 and 0x4F39B0, f_004F3D80 and f_004F38B0's array object
+  forms, also native now). The batch (0x1830C94 indexes at 0x17F0C94) is
+  drawn per stage with glDrawRangeElementsEXT (0x1534DB0) over
+  0x17F0C8C..0x17F0C90 when that is set, else glDrawElements. With the
+  cvar 0x15343E8 its triangles are drawn again in the shader 0x1535B5C's
+  first stage: bit 1 at glDepthRange (0x153539C) 0 to 0.1f; from 5 up
+  coloured by 0x4F2E60 through glColor4ubv (0x1534EB0), else (0,
+  tr.identityLight, 0), for the world's (identityLight / 2, identityLight,
+  identityLight). 0x4F76B0 alone keeps the cull and the colour array for
+  them and writes no "----------". The original leaves the new draw counts
+  in different registers per call site (DrawRegs). Slots confirmed from the
+  loaders' strings and stores. The dlight pass 0x4F5F50 stays lifted: a
+  0x18014-byte frame through __chkstk and a stack cookie, its index buffer
+  in that frame.
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -101,7 +129,15 @@ on gfx::Device" below).
   random). Its mutations: 34, all fail the oracle once those two were
   added (three first passed: the two they cover, and a store of the sort
   cvar into the pushed ECX slot below ESP, which the native code no longer
-  makes, as with the other layers' locals).
+  makes, as with the other layers' locals). With layer 5: 200000 cases
+  over 36 entries, 5.54M calls out, 0 mismatches (7 s; a stage count past
+  the stages is now only negative, the optimised iterators reading as many
+  as it says; GL calls record six arguments). Its mutations: 37, 32 fail
+  the oracle; the 5 that pass cannot change a result: two return addresses
+  into callees that are native in the game (which never read them), ESI
+  0x100 in 0x4F76B0 before 0x4F5D50 (which does not read it), the loop's
+  signed compare (entered only with a positive count), and the register
+  0x4F76B0 leaves a count in (restored before anything reads it).
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -119,6 +155,14 @@ on gfx::Device" below).
   base run against a second base run diverged by whole frames after +58.
   The first run in a fresh XDG_DATA_HOME draws different loading frames:
   make a throwaway run before any reference run.
+  With layer 5 (2026-10-31; base the same build): all 13 loading and
+  briefing frames shared, 45 of 740 in-level frames identical, the rest
+  in the same region as layer 4's run-to-run differences (at most 9728 px
+  around +196). Under gdb the training walk reaches the dispatch 17028
+  times: 0x4F6380 (the shader's vertices in memory) 14190 and 0x4F70F0
+  (the world's) 2838; the buffer, array object and NV forms never, as the
+  opengl32 HLE offers none of those extensions. Only the oracle covers
+  them.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),

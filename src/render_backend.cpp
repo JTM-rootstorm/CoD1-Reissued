@@ -2,11 +2,12 @@
 // turns the renderer's state into GL calls (GL_Bind, the cull face, the
 // texture environment, the state bits, the client arrays, the fog colour
 // and the element draws), a stage's texture units (each bundle's image,
-// texture, environment and coordinates), what a flush sets up before its
-// stages draw: the fog, the texture units back to one, the vertex deforms
-// and each stage's colours, and the flush itself: a stage's draw, the
-// stage loop, the generic stage iterator, the optimised iterators'
-// dispatch and RB_EndSurface. Replacements of lifted functions named
+// texture, environment and coordinates, also from an ATI vertex array
+// object), what a flush sets up before its stages draw: the fog, the
+// texture units back to one, the vertex deforms and each stage's colours,
+// and the flush itself: a stage's draw, the stage loop, the generic stage
+// iterator, the optimised iterators and their dispatch, and
+// RB_EndSurface. Replacements of lifted functions named
 // with `replace` in manifest/CoDSP.manifest; FINDINGS.md "Renderer back
 // end". Names and evidence are in the Ghidra plate comments.
 //
@@ -74,15 +75,6 @@ void f_00431CF0(Ctx& c);  // sets a cvar (name, value; EAX force)
 void f_0042E300(Ctx& c);  // prints (format, ...)
 void f_00440940(Ctx& c);  // va (format, ...)
 void f_0051D45A(Ctx& c);  // fprintf
-// The stage iterators for the shaders with an optimised form (by +0x188).
-void f_004F6380(Ctx& c);
-void f_004F66C0(Ctx& c);
-void f_004F6A40(Ctx& c);
-void f_004F6D70(Ctx& c);
-void f_004F70F0(Ctx& c);
-void f_004F73D0(Ctx& c);
-void f_004F76B0(Ctx& c);
-void f_004F7950(Ctx& c);
 
 namespace {
 
@@ -137,7 +129,10 @@ constexpr uint32_t kglEnable = 0x1534F68, kglDisable = 0x15349E0,
                    kglTexEnvf = 0x15349B8, kglTexCoordPointer = 0x15349A0,
                    kglFogi = 0x1534C84, kglFogf = 0x1535598, kglHint = 0x15351A0,
                    kglColorPointer = 0x153542C, kglNormalPointer = 0x153503C,
-                   kglVertexPointer = 0x15354F0, kglUnlockArraysEXT = 0x1534C2C;
+                   kglVertexPointer = 0x15354F0, kglUnlockArraysEXT = 0x1534C2C,
+                   kglArrayObjectATI = 0x1535390, kglBindBufferARB = 0x1534DE4,
+                   kglDrawRangeElementsEXT = 0x1534DB0, kglDepthRange = 0x153539C,
+                   kglColor4ubv = 0x1534EB0;
 // The refimport table's ri.Printf and ri.Error (cdecl).
 constexpr uint32_t kPrintf = 0x1549600, kError = 0x1549604;
 
@@ -944,6 +939,108 @@ void f_004F3D80(Ctx& c) {
   c.esp = e + 4;
 }
 
+// f_004F38B0 from an ATI vertex array object (stack: bundle, the object,
+// offset, stride): the coordinates through glArrayObjectATI.
+void f_004F39B0(Ctx& c) {
+  const uint32_t e = c.esp, unit = c.esi;
+  if (U32(kClientUnit) != unit) {
+    Push(c, unit + 0x84C0);
+    CallPtr(c, kglClientActiveTextureARB, 0x4F39C1);
+    Put(kClientUnit, unit);
+  }
+  if (!((1u << (U32(kClientUnit) & 31)) & U32(kArrayBits))) {
+    Push(c, 0x8078);
+    CallPtr(c, kglEnableClientState, 0x4F39E4);
+    Put(kArrayBits, U32(kArrayBits) | 1u << (U32(kClientUnit) & 31));
+  }
+  Push(c, Arg(c, e, 3));
+  Push(c, Arg(c, e, 2));
+  Push(c, Arg(c, e, 4));
+  Push(c, 0x1406);
+  Push(c, U32(Arg(c, e, 1) + 0x8C));
+  Push(c, 0x8078);
+  CallPtr(c, kglArrayObjectATI, 0x4F3A21);
+  c.esp = e + 4;
+}
+
+// f_004F3D80 from an ATI vertex array object (stack: stage, the object,
+// the texture coordinate offsets per unit, stride): the coordinates through
+// f_004F39B0; the stage's slot is left as it is.
+void f_004F3F00(Ctx& c) {
+  const uint32_t e = c.esp, stage = Arg(c, e, 1), object = Arg(c, e, 2),
+                 coords = Arg(c, e, 3), stride = Arg(c, e, 4);
+  const uint32_t esi = c.esi, edi = c.edi;
+  auto bundle = [&](uint32_t u) { return stage + 4 + 0xC8 * u; };
+  auto coords_on = [&](uint32_t u, uint32_t ret) {
+    Push(c, stride);
+    Push(c, U32(coords + 4 * u));
+    Push(c, object);
+    Push(c, bundle(u));
+    c.esi = u;
+    Call(c, f_004F39B0, ret);
+    c.esp += 0x10;
+  };
+  auto bind = [&](uint32_t u, uint32_t bind_ret, uint32_t off_ret) {
+    if (U32(bundle(u) + 0x90)) {
+      c.eax = bundle(u);
+      c.edi = u;
+      Call(c, f_004F3410, bind_ret);
+    } else {
+      c.eax = u;
+      Call(c, f_004F3810, off_ret);
+    }
+  };
+  c.esp = e - 0x18;
+  const uint32_t client = U32(kClientUnit);
+  if (U32(bundle(client) + 0x90)) {
+    coords_on(client, 0x4F3F45);
+  } else {
+    c.esi = client;
+    c.edi = client;
+    Call(c, f_004F3920, 0x4F3F51);
+  }
+  const uint32_t unit = U32(kUnit);
+  c.edi = unit;
+  bind(unit, 0x4F3F79, 0x4F3F82);
+  for (uint32_t u = 0; int32_t(u) < I32(kNumUnits); u++) {
+    if (u != client) {
+      if (U32(bundle(u) + 0x90)) {
+        coords_on(u, 0x4F3FB8);
+      } else {
+        const uint32_t bit = 1u << (u & 31);
+        if (U32(kArrayBits) & bit) {
+          if (U32(kClientUnit) != u) {
+            Push(c, u + 0x84C0);
+            CallPtr(c, kglClientActiveTextureARB, 0x4F3FDE);
+            Put(kClientUnit, u);
+          }
+          Push(c, 0x8078);
+          CallPtr(c, kglDisableClientState, 0x4F3FEF);
+          Put(kArrayBits, U32(kArrayBits) & ~bit);
+        }
+      }
+    }
+    if (u != unit) bind(u, 0x4F401C, 0x4F4025);
+  }
+  if (U32(stage + 0x648)) {
+    Push(c, U32(stage + 0x648));
+    Call(c, f_004F3A70, 0x4F404D);
+    c.esp += 4;
+  }
+  if (U32(stage + 0x64C)) {
+    c.esi = U32(stage + 0x64C);
+    Call(c, f_004F3C70, 0x4F405F);
+  }
+  const uint32_t frag = U32(stage + 0x644);
+  if (frag != U32(0x1534670)) {
+    Push(c, frag);
+    CallPtr(c, 0x1535014, 0x4F406E);
+    Put(0x1534670, frag);
+  }
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
 
 // ---- fog per flush ----------------------------------------------------------
 
@@ -1612,6 +1709,394 @@ void f_004F60E0(Ctx& c) {
   c.edi = edi;
   c.ebp = ebp;
   c.esp = e + 4;
+}
+
+// ---- the optimised iterators --------------------------------------------------
+
+namespace {
+
+// A register of the original's (member of Ctx).
+using Reg = uint32_t Ctx::*;
+// Where the original leaves the new index and draw counts of a draw, by
+// the form it takes (EAX for a scratch register).
+struct DrawRegs {
+  Reg range_indexes, range_draws, indexes, draws;
+};
+
+// The optimised batch's triangles (0x1830C94 indexes at 0x17F0C94): with
+// glDrawRangeElementsEXT over the vertices 0x17F0C8C..0x17F0C90 when it
+// is there and the range is set, else glDrawElements; counting the indexes
+// and the draws (0x1549B14, 0x1549B18).
+void DrawOptimised(Ctx& c, uint32_t range_va, uint32_t elements_va, const DrawRegs& r) {
+  const uint32_t n = U32(0x1830C94), indexes = U32(0x1549B14) + n,
+                 draws = U32(0x1549B18) + 1, range = U32(kglDrawRangeElementsEXT);
+  Put(0x1549B14, indexes);
+  Put(0x1549B18, draws);
+  if (range && U32(0x17F0C90)) {
+    c.*r.range_indexes = indexes;
+    c.*r.range_draws = draws;
+    Push(c, 0x17F0C94);
+    Push(c, 0x1403);
+    Push(c, n);
+    Push(c, U32(0x17F0C90));
+    Push(c, U32(0x17F0C8C));
+    Push(c, 4);
+    CallTo(c, range, range_va);
+  } else {
+    c.*r.indexes = indexes;
+    c.*r.draws = draws;
+    Push(c, 0x17F0C94);
+    Push(c, 0x1403);
+    Push(c, n);
+    Push(c, 4);
+    CallPtr(c, kglDrawElements, elements_va);
+  }
+}
+
+// An optimised iterator: its form and its call sites (the addresses of the
+// call instructions; 0 where it has none).
+struct OptimisedIterator {
+  // The vertices: in memory, in a vertex buffer (bound around the draws),
+  // or in an ATI vertex array object.
+  enum { kMemory, kBuffer, kObject } source;
+  // The world's vertices (0x154955C, the object's offset 0x1549560:
+  // 24 bytes each, one set of texture coordinates, then the colour and the
+  // position) rather than the shader's (+0x18C, +0x190: 32 bytes, two
+  // sets); the world's have no texture environment of their own and,
+  // but for the array object's, set up the fog and the cull first.
+  bool world;
+  struct {
+    uint32_t format, va, print;  // the log line (0: none)
+  } log;
+  struct {
+    uint32_t replace, mode;  // glTexEnvi, f_004CB640
+  } env;
+  struct {
+    uint32_t fog, cull;  // f_004F5D50, f_004CB5D0
+  } setup;
+  struct {
+    uint32_t bind, colours_on, normals_off, colours, positions;
+  } arrays;
+  struct {
+    uint32_t state, units, range, elements;
+  } stage;
+  // The triangles drawn over the surface for the cvar 0x15343E8.
+  struct {
+    uint32_t depth, cull, state, units, colours_off, colour, colour4ubv, colour3f,
+        range, elements, depth_back;
+    DrawRegs regs;
+  } tris;
+  uint32_t unbind, print;  // the vertex buffer unbound; the log's end
+};
+
+// The draws of the stage loop and (most often) of the triangles.
+constexpr DrawRegs kStageDraw = {&Ctx::esi, &Ctx::esi, &Ctx::eax, &Ctx::eax},
+                   kTrisDraw = {&Ctx::esi, &Ctx::edi, &Ctx::eax, &Ctx::edi};
+
+// The optimised iterators (f_004F7C30): the log line (cvar 0x1534704;
+// the shader's iterators by vertex buffer and in memory, as
+// "RB_SurfaceOptimizedARB" and "RB_SurfaceOptimizedNV"); the texture
+// environment (GL_REPLACE for the cvar 0x15343B4, else the shader's first
+// stage's +0x15C); the colour array on and the normals off, the colours
+// and positions from the vertices; the fog and the cull; then each stage
+// but those with the sign bit of their first byte: its state bits, its
+// textures (f_004F3D80, or f_004F3F00 from the array object) with the
+// texture coordinates from the vertices, and the batch's triangles. With
+// the cvar 0x15343E8 the triangles again in the shader 0x1535B5C's first
+// stage (bit 1: in front, at a depth range of 0 to 0.1f), coloured by
+// f_004F2E60 from 5 up, else (0, tr.identityLight, 0) or, for the world's,
+// tr.identityLight with red halved; "----------" to the log file.
+void Optimised(Ctx& c, const OptimisedIterator& it) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi;
+  const uint32_t shader = U32(kTessShader);
+  const bool object = it.source == OptimisedIterator::kObject;
+  const uint32_t stride = it.world ? 0x18 : 0x20, colours = it.world ? 8 : 0x10,
+                 positions = it.world ? 0xC : 0x14;
+  const uint32_t vertices = it.world ? U32(0x154955C) : U32(shader + 0x18C);
+  // The vertices' address in what the arrays point into: memory, the
+  // buffer (0) or the object (EBX, the offset in EDI).
+  uint32_t base = it.source == OptimisedIterator::kMemory ? vertices : 0;
+  c.esp = e - 0x34;
+  if (object) {
+    c.ebx = vertices;
+    c.edi = base = it.world ? U32(0x1549560) : U32(shader + 0x190);
+  }
+  if (it.log.format && CvarInt(0x1534704)) {
+    Push(c, shader);
+    Push(c, it.log.format);
+    Call(c, f_00440940, it.log.va + 5);
+    c.esp += 8;
+    if (U32(0x1830CE4)) {
+      Push(c, c.eax);
+      Push(c, 0x55B2B4);  // "%s"
+      Push(c, U32(0x1830CE4));
+      Call(c, f_0051D45A, it.log.print + 5);
+      c.esp += 0xC;
+    }
+  }
+  if (!it.world) {
+    if (CvarInt(0x15343B4)) {
+      const uint32_t env = kTexEnv + 4 * U32(kUnit);
+      if (U32(env) != 0x1E01) {
+        Push(c, 0x1E01);
+        Push(c, 0x2200);
+        Push(c, 0x2300);
+        Put(env, 0x1E01);
+        CallPtr(c, kglTexEnvi, it.env.replace);
+      }
+    } else {
+      c.eax = U32(U32(shader + 0x154) + 0x15C);
+      Call(c, f_004CB640, it.env.mode + 5);
+    }
+  }
+  auto setup = [&] {
+    Call(c, f_004F5D50, it.setup.fog + 5);
+    c.esi = U32(U32(kTessShader) + 0xA8);
+    Call(c, f_004CB5D0, it.setup.cull + 5);
+  };
+  const bool setup_first = it.world && !object;
+  if (setup_first) setup();
+  if (it.source == OptimisedIterator::kBuffer) {
+    Push(c, vertices);
+    Push(c, 0x8892);
+    CallPtr(c, kglBindBufferARB, it.arrays.bind);
+  }
+  if (it.world && object) c.esi = 0x100;  // the colour array's bit
+  if (!(U32(kArrayBits) & 0x100)) {
+    Push(c, 0x8076);
+    CallPtr(c, kglEnableClientState, it.arrays.colours_on);
+    Put(kArrayBits, U32(kArrayBits) | 0x100);
+  }
+  if (U32(kArrayBits) & 0x200) {
+    Push(c, 0x8075);
+    CallPtr(c, kglDisableClientState, it.arrays.normals_off);
+    Put(kArrayBits, U32(kArrayBits) & ~0x200u);
+  }
+  if (object) {
+    Push(c, base + colours);
+    Push(c, vertices);
+    Push(c, stride);
+    Push(c, 0x1401);
+    Push(c, 4);
+    Push(c, 0x8076);
+    CallPtr(c, kglArrayObjectATI, it.arrays.colours);
+    Push(c, base + positions);
+    Push(c, vertices);
+    Push(c, stride);
+    Push(c, 0x1406);
+    Push(c, 3);
+    Push(c, 0x8074);
+    CallPtr(c, kglArrayObjectATI, it.arrays.positions);
+  } else {
+    Push(c, base + colours);
+    Push(c, stride);
+    Push(c, 0x1401);
+    Push(c, 4);
+    CallPtr(c, kglColorPointer, it.arrays.colours);
+    Push(c, base + positions);
+    Push(c, stride);
+    Push(c, 0x1406);
+    Push(c, 3);
+    CallPtr(c, kglVertexPointer, it.arrays.positions);
+  }
+  if (!setup_first) setup();
+  // The texture coordinates per unit (the world's only the first).
+  const uint32_t coords = e - 0x24;
+  Put(coords, base);
+  if (!it.world) Put(coords + 4, base + 8);
+  auto units = [&](uint32_t stage, uint32_t va) {
+    Push(c, stride);
+    Push(c, coords);
+    if (object) Push(c, vertices);
+    Push(c, stage);
+    Call(c, object ? f_004F3F00 : f_004F3D80, va + 5);
+    c.esp += object ? 0x10 : 0xC;
+  };
+  c.edi = 0;
+  if (I32(kNumStages) > 0) {
+    do {
+      c.esi = U32(U32(kTessStages) + 4 * c.edi);
+      if (int8_t(U8(c.esi)) >= 0) {
+        c.eax = U32(c.esi + 0x684);
+        Call(c, f_004CB710, it.stage.state + 5);
+        units(c.esi, it.stage.units);
+        DrawOptimised(c, it.stage.range, it.stage.elements, kStageDraw);
+      }
+    } while (int32_t(++c.edi) < I32(kNumStages));
+  }
+  if (const uint32_t tris = CvarInt(0x15343E8)) {
+    if (tris & 1) {
+      Push(c, 0x3FB99999);  // 0.1f as a double
+      Push(c, 0xA0000000);
+      Push(c, 0);
+      Push(c, 0);
+      CallPtr(c, kglDepthRange, it.tris.depth);
+    }
+    if (it.tris.cull) {
+      c.esi = U32(U32(0x1535B5C) + 0xA8);
+      Call(c, f_004CB5D0, it.tris.cull + 5);
+    }
+    c.esi = U32(U32(0x1535B5C) + 0x154);
+    c.eax = U32(c.esi + 0x684);
+    Call(c, f_004CB710, it.tris.state + 5);
+    units(c.esi, it.tris.units);
+    if (it.tris.colours_off && (U32(kArrayBits) & 0x100)) {
+      Push(c, 0x8076);
+      CallPtr(c, kglDisableClientState, it.tris.colours_off);
+      Put(kArrayBits, U32(kArrayBits) & ~0x100u);
+    }
+    if (I32(U32(0x15343E8) + 0x20) >= 5) {
+      const uint32_t colour = e - 0x28;
+      c.eax = U32(0x1830C94);
+      c.edi = colour;
+      Call(c, f_004F2E60, it.tris.colour + 5);
+      Push(c, colour);
+      CallPtr(c, kglColor4ubv, it.tris.colour4ubv);
+    } else if (it.world) {
+      Push(c, U32(kIdentityLight));
+      Push(c, U32(kIdentityLight));
+      Push(c, Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits);  // 0.5
+      CallPtr(c, kglColor3f, it.tris.colour3f);
+    } else {
+      Push(c, 0);
+      Push(c, U32(kIdentityLight));
+      Push(c, 0);
+      CallPtr(c, kglColor3f, it.tris.colour3f);
+    }
+    DrawOptimised(c, it.tris.range, it.tris.elements, it.tris.regs);
+    Push(c, 0x3FF00000);  // 1.0
+    Push(c, 0);
+    Push(c, 0);
+    Push(c, 0);
+    CallPtr(c, kglDepthRange, it.tris.depth_back);
+  }
+  if (it.source == OptimisedIterator::kBuffer) {
+    Push(c, 0);
+    Push(c, 0x8892);
+    CallPtr(c, kglBindBufferARB, it.unbind);
+  }
+  if (it.print && U32(0x1830CE4)) {
+    Push(c, 0x541D04);  // "----------\n"
+    Push(c, 0x55B2B4);
+    Push(c, U32(0x1830CE4));
+    Call(c, f_0051D45A, it.print + 5);
+    c.esp += 0xC;
+  }
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+}  // namespace
+
+// The shader's vertices in memory.
+void f_004F6380(Ctx& c) {
+  static constexpr OptimisedIterator it = {
+      .source = OptimisedIterator::kMemory,
+      .env = {0x4F63B8, 0x4F63D2},
+      .setup = {0x4F6452, 0x4F6463},
+      .arrays = {0, 0x4F63E6, 0x4F6405, 0x4F642D, 0x4F644C},
+      .stage = {0x4F64A7, 0x4F64B4, 0x4F6505, 0x4F6536},
+      .tris = {0x4F656C, 0x4F657E, 0x4F6595, 0x4F65A2, 0x4F65B9, 0x4F65DE, 0x4F65E8, 0x4F65FA,
+               0x4F6649, 0x4F667A, 0x4F668B, kTrisDraw},
+      .print = 0x4F66A5};
+  Optimised(c, it);
+}
+// The shader's vertices in a vertex buffer ("--- RB_SurfaceOptimizedARB( %s ) ---").
+void f_004F66C0(Ctx& c) {
+  static constexpr OptimisedIterator it = {
+      .source = OptimisedIterator::kBuffer,
+      .log = {0x53C01C, 0x4F66DD, 0x4F66F6},
+      .env = {0x4F6732, 0x4F674B},
+      .setup = {0x4F67C8, 0x4F67D9},
+      .arrays = {0x4F6762, 0x4F6777, 0x4F6796, 0x4F67B1, 0x4F67C2},
+      .stage = {0x4F6818, 0x4F6825, 0x4F6876, 0x4F68A7},
+      .tris = {0x4F68DD, 0x4F68EF, 0x4F6906, 0x4F6913, 0x4F692A, 0x4F694F, 0x4F6959, 0x4F696B,
+               0x4F69BA, 0x4F69EB, 0x4F69FC, kTrisDraw},
+      .unbind = 0x4F6A09,
+      .print = 0x4F6A23};
+  Optimised(c, it);
+}
+// The shader's vertices in an ATI vertex array object.
+void f_004F6A40(Ctx& c) {
+  static constexpr OptimisedIterator it = {
+      .source = OptimisedIterator::kObject,
+      .env = {0x4F6A8B, 0x4F6A9F},
+      .setup = {0x4F6B14, 0x4F6B25},
+      .arrays = {0, 0x4F6AB3, 0x4F6AD2, 0x4F6AF5, 0x4F6B0E},
+      .stage = {0x4F6B5B, 0x4F6B69, 0x4F6BBA, 0x4F6BEB},
+      .tris = {0x4F6C21, 0x4F6C33, 0x4F6C4A, 0x4F6C58, 0x4F6C6F, 0x4F6C94, 0x4F6C9E, 0x4F6CB0,
+               0x4F6CFF, 0x4F6D30, 0x4F6D41, {&Ctx::esi, &Ctx::ebx, &Ctx::ebx, &Ctx::edi}},
+      .print = 0x4F6D5B};
+  Optimised(c, it);
+}
+// The shader's vertices in memory ("--- RB_SurfaceOptimizedNV( %s ) ---").
+void f_004F6D70(Ctx& c) {
+  static constexpr OptimisedIterator it = {
+      .source = OptimisedIterator::kMemory,
+      .log = {0x53BFF4, 0x4F6D8D, 0x4F6DA6},
+      .env = {0x4F6DE2, 0x4F6DFB},
+      .setup = {0x4F6E7C, 0x4F6E8C},
+      .arrays = {0, 0x4F6E0F, 0x4F6E2E, 0x4F6E57, 0x4F6E76},
+      .stage = {0x4F6ED8, 0x4F6EE5, 0x4F6F36, 0x4F6F67},
+      .tris = {0x4F6F9D, 0x4F6FAF, 0x4F6FC6, 0x4F6FD3, 0x4F6FEA, 0x4F700F, 0x4F7019, 0x4F702B,
+               0x4F707A, 0x4F70AB, 0x4F70BC, kTrisDraw},
+      .print = 0x4F70D6};
+  Optimised(c, it);
+}
+// The world's vertices in memory (0x4F7950 is the same code).
+void f_004F70F0(Ctx& c) {
+  static constexpr OptimisedIterator it = {
+      .source = OptimisedIterator::kMemory,
+      .world = true,
+      .setup = {0x4F70F5, 0x4F7105},
+      .arrays = {0, 0x4F7119, 0x4F7138, 0x4F715B, 0x4F7174},
+      .stage = {0x4F71AA, 0x4F71B7, 0x4F7207, 0x4F7238},
+      .tris = {0x4F726F, 0x4F7281, 0x4F7297, 0x4F72A4, 0x4F72BB, 0x4F72E0, 0x4F72EA, 0x4F7309,
+               0x4F7358, 0x4F7389, 0x4F739A, kTrisDraw},
+      .print = 0x4F73B4};
+  Optimised(c, it);
+}
+// The world's vertices in a vertex buffer.
+void f_004F73D0(Ctx& c) {
+  static constexpr OptimisedIterator it = {
+      .source = OptimisedIterator::kBuffer,
+      .world = true,
+      .setup = {0x4F73D5, 0x4F73E5},
+      .arrays = {0x4F73F6, 0x4F740B, 0x4F742A, 0x4F7445, 0x4F7456},
+      .stage = {0x4F748B, 0x4F7498, 0x4F74E9, 0x4F751A},
+      .tris = {0x4F7550, 0x4F7562, 0x4F7579, 0x4F7586, 0x4F759D, 0x4F75C2, 0x4F75CC, 0x4F75EB,
+               0x4F7639, 0x4F766A, 0x4F767B, {&Ctx::edi, &Ctx::esi, &Ctx::eax, &Ctx::edi}},
+      .unbind = 0x4F7688,
+      .print = 0x4F76A2};
+  Optimised(c, it);
+}
+// The world's vertices in an ATI vertex array object; its triangles keep
+// the cull and the colour array, and it logs no end.
+void f_004F76B0(Ctx& c) {
+  static constexpr OptimisedIterator it = {
+      .source = OptimisedIterator::kObject,
+      .world = true,
+      .setup = {0x4F7732, 0x4F7743},
+      .arrays = {0, 0x4F76D5, 0x4F76F0, 0x4F7713, 0x4F772C},
+      .stage = {0x4F7777, 0x4F7785, 0x4F77D6, 0x4F7807},
+      .tris = {0x4F783D, 0, 0x4F7855, 0x4F7863, 0, 0x4F7881, 0x4F788B, 0x4F78AA, 0x4F78F8,
+               0x4F7929, 0x4F793A, {&Ctx::ebx, &Ctx::edi, &Ctx::ebx, &Ctx::edi}}};
+  Optimised(c, it);
+}
+// The world's vertices in memory, as f_004F70F0.
+void f_004F7950(Ctx& c) {
+  static constexpr OptimisedIterator it = {
+      .source = OptimisedIterator::kMemory,
+      .world = true,
+      .setup = {0x4F7955, 0x4F7965},
+      .arrays = {0, 0x4F7979, 0x4F7998, 0x4F79BB, 0x4F79D4},
+      .stage = {0x4F7A0A, 0x4F7A17, 0x4F7A67, 0x4F7A98},
+      .tris = {0x4F7ACF, 0x4F7AE1, 0x4F7AF7, 0x4F7B04, 0x4F7B1B, 0x4F7B40, 0x4F7B4A, 0x4F7B69,
+               0x4F7BB8, 0x4F7BE9, 0x4F7BFA, kTrisDraw},
+      .print = 0x4F7C14};
+  Optimised(c, it);
 }
 
 // The optimised stage iterator of the shader's kind (+0x188: 12-15, 25-28),

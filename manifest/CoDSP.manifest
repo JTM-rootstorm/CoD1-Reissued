@@ -93,7 +93,8 @@ replace 0042B0A0
 # a stage's texture units: each bundle's image, binding and coordinates;
 # a flush's fog, unit reset, vertex deform dispatch and stage colours;
 # a stage's draw, the stage loop, RB_StageIteratorGeneric, the optimised
-# iterators' dispatch and RB_EndSurface.
+# iterators' dispatch and RB_EndSurface; the eight optimised iterators and
+# a stage's texture units from an ATI vertex array object.
 replace 004C89D0
 replace 004C8A20
 replace 004CB3B0
@@ -120,6 +121,16 @@ replace 004F6070
 replace 004F60E0
 replace 004F7C30
 replace 004F7D00
+replace 004F39B0
+replace 004F3F00
+replace 004F6380
+replace 004F66C0
+replace 004F6A40
+replace 004F6D70
+replace 004F70F0
+replace 004F73D0
+replace 004F76B0
+replace 004F7950
 
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0

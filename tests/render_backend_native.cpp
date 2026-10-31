@@ -27,4 +27,14 @@
 #define f_004F60E0 n_004F60E0
 #define f_004F7C30 n_004F7C30
 #define f_004F7D00 n_004F7D00
+#define f_004F39B0 n_004F39B0
+#define f_004F3F00 n_004F3F00
+#define f_004F6380 n_004F6380
+#define f_004F66C0 n_004F66C0
+#define f_004F6A40 n_004F6A40
+#define f_004F6D70 n_004F6D70
+#define f_004F70F0 n_004F70F0
+#define f_004F73D0 n_004F73D0
+#define f_004F76B0 n_004F76B0
+#define f_004F7950 n_004F7950
 #include "../src/render_backend.cpp"
