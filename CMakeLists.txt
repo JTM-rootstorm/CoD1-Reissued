@@ -4,14 +4,14 @@ project(cod1 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-# x86recomp's runtime and HLE modules are shared libraries: rebuilding one
+# SwARc's runtime and HLE modules are shared libraries: rebuilding one
 # does not relink the game.
 set(CMAKE_LINK_DEPENDS_NO_SHARED ON)
 
-# x86recomp: the lifter, x87 model and runtime (a sibling checkout).
-set(X86RECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../x86recomp"
-    CACHE PATH "x86recomp source tree")
-# Graphics go through x86recomp's SDL_GPU backend (Vulkan, Metal on macOS).
+# SwARc: the lifter, x87 model and runtime (a sibling checkout).
+set(SWARC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../SwARc"
+    CACHE PATH "SwARc source tree")
+# Graphics go through SwARc's SDL_GPU backend (Vulkan, Metal on macOS).
 # dxvk-native (d3d9 only, SDL3 WSI) is opt-in and not built by default:
 # configure with -DDXVK_NATIVE_DIR=<its install prefix> (as the Dungeon
 # Siege project builds it, ../../Dungeon Siege/tools_ext/dxvk-native) to add the d3d9
@@ -19,7 +19,7 @@ set(X86RECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../x86recomp"
 set(DXVK_NATIVE_DIR "" CACHE PATH "dxvk-native install prefix (opt-in d3d9 backend)")
 
 enable_testing()
-add_subdirectory("${X86RECOMP_DIR}" x86recomp)
+add_subdirectory("${SWARC_DIR}" swarc)
 
 # Host libraries in place of the EXE's statically linked copies.
 find_package(ZLIB REQUIRED)
@@ -161,7 +161,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
     COMMENT "Lifting the CPU skinning functions for skinning_oracle_test")
   add_executable(skinning_oracle_test tests/skinning_test.cpp src/skinning.cpp ${_gen})
-  target_include_directories(skinning_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_include_directories(skinning_oracle_test PRIVATE "${SWARC_DIR}/src")
   target_link_libraries(skinning_oracle_test PRIVATE recomp_x87 recomp_image)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
@@ -185,7 +185,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
     COMMENT "Lifting the collision traces for cm_trace_oracle_test")
   add_executable(cm_trace_oracle_test tests/cm_trace_test.cpp tests/cm_trace_native.cpp ${_gen})
-  target_include_directories(cm_trace_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_include_directories(cm_trace_oracle_test PRIVATE "${SWARC_DIR}/src")
   target_link_libraries(cm_trace_oracle_test PRIVATE recomp_x87 recomp_image)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
@@ -215,7 +215,7 @@ if(EXISTS "${COD1_GAME_EXE}")
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_stubs.manifest"
     COMMENT "Lifting the renderer functions for render_oracle_test")
   add_executable(render_oracle_test tests/render_test.cpp tests/render_native.cpp ${_gen})
-  target_include_directories(render_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_include_directories(render_oracle_test PRIVATE "${SWARC_DIR}/src")
   target_link_libraries(render_oracle_test PRIVATE recomp_x87 recomp_image)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
@@ -246,7 +246,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     COMMENT "Lifting the renderer back end for render_backend_oracle_test")
   add_executable(render_backend_oracle_test tests/render_backend_test.cpp
                  tests/render_backend_native.cpp ${_gen})
-  target_include_directories(render_backend_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_include_directories(render_backend_oracle_test PRIVATE "${SWARC_DIR}/src")
   target_link_libraries(render_backend_oracle_test PRIVATE recomp_x87 recomp_image)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
@@ -277,7 +277,7 @@ if(EXISTS "${COD1_GAME_EXE}")
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/crt_stubs.manifest"
     COMMENT "Lifting unzip and inflate for unzip_oracle_test")
   add_executable(unzip_oracle_test tests/unzip_test.cpp tests/unzip_native.cpp ${_gen})
-  target_include_directories(unzip_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_include_directories(unzip_oracle_test PRIVATE "${SWARC_DIR}/src")
   target_link_libraries(unzip_oracle_test PRIVATE recomp_x87 recomp_image ZLIB::ZLIB)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
@@ -306,7 +306,7 @@ if(EXISTS "${COD1_GAME_EXE}")
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/crt_stubs.manifest"
     COMMENT "Lifting zlib for zlib_oracle_test")
   add_executable(zlib_oracle_test tests/zlib_test.cpp tests/zlib_native.cpp ${_gen})
-  target_include_directories(zlib_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_include_directories(zlib_oracle_test PRIVATE "${SWARC_DIR}/src")
   target_link_libraries(zlib_oracle_test PRIVATE recomp_x87 recomp_image ZLIB::ZLIB)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
@@ -327,7 +327,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     DEPENDS recomp_lift "${COD1_GAME_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/manifest/CoDSP.manifest"
     COMMENT "Lifting tolower for crt_oracle_test")
   add_executable(crt_oracle_test tests/crt_test.cpp tests/crt_native.cpp ${_gen})
-  target_include_directories(crt_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_include_directories(crt_oracle_test PRIVATE "${SWARC_DIR}/src")
   target_link_libraries(crt_oracle_test PRIVATE recomp_x87 recomp_image)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
@@ -351,7 +351,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     COMMENT "Lifting jpeg_idct_float for jpeg_idct_oracle_test")
   add_executable(jpeg_idct_oracle_test tests/jpeg_idct_test.cpp tests/jpeg_idct_native.cpp
                  ${_gen})
-  target_include_directories(jpeg_idct_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_include_directories(jpeg_idct_oracle_test PRIVATE "${SWARC_DIR}/src")
   target_link_libraries(jpeg_idct_oracle_test PRIVATE recomp_x87 recomp_image JPEG::JPEG
                         ZLIB::ZLIB)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
@@ -382,7 +382,7 @@ if(EXISTS "${COD1_GAME_EXE}")
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/xanim_stubs.manifest"
     COMMENT "Lifting the XAnim evaluation for xanim_oracle_test")
   add_executable(xanim_oracle_test tests/xanim_test.cpp tests/xanim_native.cpp ${_gen})
-  target_include_directories(xanim_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_include_directories(xanim_oracle_test PRIVATE "${SWARC_DIR}/src")
   target_link_libraries(xanim_oracle_test PRIVATE recomp_x87 recomp_image)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
@@ -419,7 +419,7 @@ if(EXISTS "${COD1_GAME_EXE}" AND COD1_MSS32_DLL)
     DEPENDS recomp_lift "${COD1_GAME_EXE}" "${_man}/gamex86.manifest" "${_man}/cgamex86.manifest"
     COMMENT "Lifting Pmove for pmove_oracle_test")
   add_executable(pmove_oracle_test tests/pmove_test.cpp tests/pmove_native.cpp ${_gen})
-  target_include_directories(pmove_oracle_test PRIVATE "${X86RECOMP_DIR}/src")
+  target_include_directories(pmove_oracle_test PRIVATE "${SWARC_DIR}/src")
   target_link_libraries(pmove_oracle_test PRIVATE recomp_x87 recomp_image)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
@@ -429,7 +429,7 @@ if(EXISTS "${COD1_GAME_EXE}" AND COD1_MSS32_DLL)
   add_test(NAME pmove_oracle COMMAND pmove_oracle_test "${_game_dir}" ${COD1_PMOVE_CAPTURES})
 endif()
 
-# x86recomp's Miles-compatible digital reverb, and its Miles 6.5 sample
+# SwARc's Miles-compatible digital reverb, and its Miles 6.5 sample
 # levels and Fast 2D, against the original routines of the installed
 # game's mss32.dll (Miles 6.5e) and miles/msssoft.m3d next to it, lifted
 # into the build tree at build time. Configure with

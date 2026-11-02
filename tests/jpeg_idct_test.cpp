@@ -1,7 +1,7 @@
 // The native jpeg_idct_float (src/jpeg_idct.cpp) against the original
 // (0x519140, and the CRT conversion 0x52E218 it calls), lifted from the EXE
 // at build time with `recomp_lift --only` (CMakeLists.txt) and run on
-// x86recomp's exact x87 model (SoftFloat, not its host-double runs) at the
+// SwARc's exact x87 model (SoftFloat, not its host-double runs) at the
 // game's CW 0x027F.
 //
 //   jpeg_idct_test EXE [PK3...]

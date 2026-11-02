@@ -1,6 +1,6 @@
 // The native player movement (src/pmove.cpp) against the original Pmove of
 // gamex86.dll and cgamex86.dll, lifted from the DLLs at build time with
-// `recomp_lift --only` (CMakeLists.txt) and run on x86recomp's exact x87
+// `recomp_lift --only` (CMakeLists.txt) and run on SwARc's exact x87
 // model (SoftFloat, not its host-double runs). Both DLLs are mapped as the
 // game maps them, for their constants, tables and globals.
 //

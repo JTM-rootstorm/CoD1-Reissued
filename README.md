@@ -33,7 +33,7 @@ need their own lifter manifests.
 
 ## How it works
 
-The port is built on [x86recomp](https://github.com/JTM-rootstorm/x86recomp),
+The port is built on [SwARc](https://github.com/JTM-rootstorm/SwARc),
 a static-recompilation library shared with
 [DS1-Rebuilt](https://github.com/JTM-rootstorm/DS1-Rebuilt) (Dungeon
 Siege):
@@ -47,7 +47,7 @@ Siege):
   functions are replaced by hand-written C++ one subsystem at a time
   (widescreen, UI scaling and frame pacing first), each checked against
   the exact lifted version, until nothing lifted is left.
-- Graphics go through x86recomp's backend-neutral fixed-function device
+- Graphics go through SwARc's backend-neutral fixed-function device
   on SDL_GPU: Vulkan on Linux, Metal on macOS. Host OpenGL is never
   used.
 
@@ -65,20 +65,20 @@ replacements, and the docs.
   development packages (zlib comes with the macOS SDK), and glslang
   (`glslangValidator`, for the shaders).
 - Ghidra (12.1 used), headless, to find the game's functions.
-- A checkout of [x86recomp](https://github.com/JTM-rootstorm/x86recomp).
+- A checkout of [SwARc](https://github.com/JTM-rootstorm/SwARc).
 
 ## Building
 
 Paths below assume the game is in `$GAME` (e.g.
 `~/.local/share/Steam/steamapps/common/Call of Duty`) and this repository
-in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
-`-DX86RECOMP_DIR=...` to cmake otherwise).
+in `$REPO`, with SwARc checked out at `$REPO/../../SwARc` (pass
+`-DSWARC_DIR=...` to cmake otherwise).
 
-1. **x86recomp**:
+1. **SwARc**:
 
    ```sh
-   git clone https://github.com/JTM-rootstorm/x86recomp.git "$REPO/../../x86recomp"
-   X86RECOMP="$REPO/../../x86recomp"
+   git clone https://github.com/JTM-rootstorm/SwARc.git "$REPO/../../SwARc"
+   SWARC="$REPO/../../SwARc"
    ```
 
 2. **dxvk-native** (optional and off by default, needs Meson; DXVK
@@ -117,9 +117,9 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
    Ghidra's plain auto-analysis is all that is needed:
 
    ```sh
-   python3 -I "$X86RECOMP/tools/pe_symbols.py" unpacked/CoDSP.exe --out symbols/CoDSP
+   python3 -I "$SWARC/tools/pe_symbols.py" unpacked/CoDSP.exe --out symbols/CoDSP
    for m in gamex86 cgamex86 uix86 EaxMan; do
-     python3 -I "$X86RECOMP/tools/pe_symbols.py" "$GAME/$m.dll" --out symbols/$m
+     python3 -I "$SWARC/tools/pe_symbols.py" "$GAME/$m.dll" --out symbols/$m
    done
    mkdir -p /tmp/cod1_ghidra
    bash /usr/share/ghidra/support/analyzeHeadless /tmp/cod1_ghidra cod1 \
@@ -127,7 +127,7 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
        "$GAME/EaxMan.dll"
    for m in CoDSP.exe gamex86.dll cgamex86.dll uix86.dll EaxMan.dll; do
      bash /usr/share/ghidra/support/analyzeHeadless /tmp/cod1_ghidra cod1 \
-       -process "$m" -noanalysis -readOnly -scriptPath "$X86RECOMP/tools/ghidra" \
+       -process "$m" -noanalysis -readOnly -scriptPath "$SWARC/tools/ghidra" \
        -postScript ExportFunctions.java "symbols/${m%.*}/functions.tsv" \
        -postScript ExportJumpTables.java "symbols/${m%.*}/jumptables.tsv"
    done
@@ -137,7 +137,7 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
    and build:
 
    ```sh
-   out/build/release/x86recomp/tools/lifter/recomp_lift \
+   out/build/release/swarc/tools/lifter/recomp_lift \
      --exe unpacked/CoDSP.exe --symbols symbols/CoDSP --manifest manifest/CoDSP.manifest \
      --module "$GAME/gamex86.dll" --symbols symbols/gamex86 --manifest manifest/gamex86.manifest \
      --module "$GAME/cgamex86.dll" --symbols symbols/cgamex86 --manifest manifest/cgamex86.manifest \
@@ -181,8 +181,8 @@ in `$REPO`, with x86recomp checked out at `$REPO/../../x86recomp` (pass
 **macOS** (Apple Silicon): SDL_GPU runs on Metal. With Homebrew (`brew
 install cmake ninja sdl3 ffmpeg llvm@22 glslang spirv-cross ghidra
 openjdk@21`), the steps are the same with these differences: CMake finds
-Homebrew's LLVM; pass `-DX86RECOMP_DIR=<path>` unless x86recomp is at
-`../../x86recomp`; `pe_symbols.py` needs `/opt/homebrew/opt/llvm@22/bin`
+Homebrew's LLVM; pass `-DSWARC_DIR=<path>` unless SwARc is at
+`../../SwARc`; `pe_symbols.py` needs `/opt/homebrew/opt/llvm@22/bin`
 on `PATH` (for `llvm-undname`); Ghidra's headless script is
 `$(brew --prefix ghidra)/libexec/support/analyzeHeadless`, run with
 `JAVA_HOME=$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home`
@@ -193,7 +193,7 @@ under `~/Library/Application Support/cod1`.
 
 Configure with `-DCOD1_GAME_EXE="$REPO/unpacked/CoDSP.exe"` and
 `-DCOD1_GAME_DIR="$GAME"`, then `ctest --test-dir out/build/release`.
-Besides x86recomp's own tests, this runs every x87, integer and SSE
+Besides SwARc's own tests, this runs every x87, integer and SSE
 instruction form found in the EXE both lifted and natively on your CPU,
 from random states, and requires bit-identical results; and each native
 replacement against the original it replaces, lifted (the pk3 reads and
@@ -210,4 +210,4 @@ family sources (ioquake3, iortcw) are used only as references for
 understanding the engine; no code from them is in this repository.
 
 The code here is under the [MIT License](LICENSE). Dependencies keep
-their own licences; see x86recomp's README.
+their own licences; see SwARc's README.

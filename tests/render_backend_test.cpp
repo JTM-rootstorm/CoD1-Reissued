@@ -1,6 +1,6 @@
 // The native renderer back end (src/render_backend.cpp) against the
 // originals, lifted from the EXE at build time with `recomp_lift --only`
-// (CMakeLists.txt) and run on x86recomp's exact x87 model. CoDSP.exe is
+// (CMakeLists.txt) and run on SwARc's exact x87 model. CoDSP.exe is
 // mapped as the game maps it, for its constants and globals. The renderer's
 // qgl pointers (and ri.Printf, ri.Error and the element function of the
 // strips) point at recorders that log each call: the GL entry point, its

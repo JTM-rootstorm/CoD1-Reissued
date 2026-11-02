@@ -26,14 +26,14 @@ from their code.
 - **Static recompilation** of CoDSP.exe and the game/cgame/ui DLLs, not
   a source port on ioq3/iortcw (those stay references only).
 - **Shared library**: the lifter, x87 model, runtime and HLE are
-  x86recomp (github.com/JTM-rootstorm/x86recomp, a sibling checkout at
-  ../../x86recomp), factored out of DS1-Rebuilt. Generic work (multi-
+  SwARc (github.com/JTM-rootstorm/SwARc, a sibling checkout at
+  ../../SwARc), factored out of DS1-Rebuilt. Generic work (multi-
   module lifting, opengl32 HLE, SDL_GPU/Metal backend) goes there; this
   repo holds CoD's GameConfig, manifests, hooks, replacements and docs.
-  x86recomp/ARCHITECTURE.md has the generic design.
+  SwARc/ARCHITECTURE.md has the generic design.
 - **Graphics through gfx::Device**: the engine's OpenGL 1.x + ARB
   extensions are implemented as an opengl32/wgl HLE that drives
-  x86recomp's backend-neutral device, never host GL. Its SDL_GPU backend
+  SwARc's backend-neutral device, never host GL. Its SDL_GPU backend
   gives Vulkan on Linux and Metal on macOS for DS1 and CoD alike; the
   d3d9 (dxvk-native) backend it was brought up on is an optional
   reference. GL extensions we do not want to implement
@@ -45,12 +45,12 @@ from their code.
   (0x30000000) and uix86 (0x40000000), lifted and loaded at their
   preferred bases. LoadLibrary of `%sx86.dll` maps the lifted module;
   dllEntry/vmMain and the syscall pointer the EXE passes stay guest
-  addresses. Needs x86recomp's multi-module support (its roadmap).
+  addresses. Needs SwARc's multi-module support (its roadmap).
 - GL state machine on gfx::Device: GL matrices -> transforms, texenv /
   multitexture -> texture stage states, client arrays (guest pointers,
   separate strides) repacked into interleaved vertices, depth range and
   clip-space z adjusted. wgl*/pixel format/SwapBuffers map onto SDL3.
-- CPU: x86recomp reports a fixed SSE2-class CPU, so CoD runs its SSE
+- CPU: SwARc reports a fixed SSE2-class CPU, so CoD runs its SSE
   paths as on any real PC: MSVC 7's SSE2 maths library (pow, exp, log,
   sin/cos... in every module) and the EXE's packed-single loops. The
   scaffold lifts them exactly (runtime/sse.cpp). In the native port the
@@ -82,7 +82,7 @@ from their code.
 ## Milestones (provisional)
 - M0 recon: unpack, Ghidra, inventory imports and modules. (done)
 - M1 lifter covers CoDSP.exe and the three DLLs; symbols exported; the
-  three DLLs load as lifted modules (x86recomp multi-module).
+  three DLLs load as lifted modules (SwARc multi-module).
 - M2 boots to the console log: Com_Init, file system on the pk3s, cvars.
 - M3 main menu renders through the opengl32 HLE.
 - M4 single player playable end to end, with sound and RoQ cinematics.

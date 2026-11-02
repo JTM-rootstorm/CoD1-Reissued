@@ -1,6 +1,6 @@
 // The native XAnim evaluation (src/xanim.cpp) against the original
 // functions, lifted from the EXE at build time with `recomp_lift --only`
-// (CMakeLists.txt) and run on x86recomp's exact x87 model (SoftFloat, not
+// (CMakeLists.txt) and run on SwARc's exact x87 model (SoftFloat, not
 // its host-double runs). CoDSP.exe is mapped as the game maps it, for its
 // constants and globals. Each case runs 0x47CD80 (the DObj's poses from its
 // anim tree), 0x4766E0 (its bone matrices), the one then the other, or

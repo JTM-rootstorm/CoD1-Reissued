@@ -19,7 +19,7 @@
 // redone here (NanResult). One NaN operand gives that NaN, quietened; of
 // two, a QNaN beats a memory SNaN, else the larger significand wins and
 // equal ones give the positive NaN (Intel SDM vol. 1, table 4-7, as
-// x86recomp's x87 model has it); an invalid operation gives the real
+// SwARc's x87 model has it); an invalid operation gives the real
 // indefinite, -QNaN. SSE (first operand) and arm64 (first operand, default
 // NaN positive) differ. Loads quieten an SNaN, as FLD m32 does; an SNaN
 // matters only as the memory operand of an operation, so the operators

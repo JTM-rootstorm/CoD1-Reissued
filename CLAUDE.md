@@ -2,7 +2,7 @@
 
 Rules only. Status, findings and next steps go in FINDINGS.md; design in
 ARCHITECTURE.md. The lifter, x87 model, runtime and HLE are the shared
-x86recomp library (../../x86recomp, its own git repo with its own
+SwARc library (../../SwARc, its own git repo with its own
 CLAUDE.md, also used by DS1); this repo holds what is specific to CoD.
 
 ## Layout
@@ -11,9 +11,9 @@ CLAUDE.md, also used by DS1); this repo holds what is specific to CoD.
 - Game (Steam, v1.5b; NEVER commit or copy into the repo):
   $HOME/.local/share/Steam/steamapps/common/Call of Duty/
   (CoDSP.exe, CoDMP.exe, gamex86.dll, cgamex86.dll, uix86.dll, EaxMan.dll, Main/*.pk3)
-- Library: ~/Documents/Programming/Recomp/x86recomp
-  (github.com/JTM-rootstorm/x86recomp; added with add_subdirectory,
-  X86RECOMP_DIR overrides the path). Library changes are committed
+- Library: ~/Documents/Programming/Recomp/SwARc
+  (github.com/JTM-rootstorm/SwARc; added with add_subdirectory,
+  SWARC_DIR overrides the path). Library changes are committed
   there, its rules apply to them, and DS1 must keep building and
   passing its tests after them.
 - Unpacked EXEs: unpacked/ (gitignored, regenerate, see below)
@@ -34,16 +34,16 @@ CLAUDE.md, also used by DS1); this repo holds what is specific to CoD.
 ## Build
 - `cmake --preset release && cmake --build --preset release` (debug:
   `--preset debug`). Output in out/build/<preset>/.
-- Graphics: x86recomp's SDL_GPU backend (Vulkan; Metal on macOS).
+- Graphics: SwARc's SDL_GPU backend (Vulkan; Metal on macOS).
   dxvk-native, the d3d9 reference backend (COD1_GFX=d3d9), is opt-in:
   configure with -DDXVK_NATIVE_DIR="../../Dungeon Siege/tools_ext/dxvk-native"
   (the Dungeon Siege project's build) to include it.
 - Symbols (after any Ghidra change that matters), per module:
-  `python3 -I ../../x86recomp/tools/pe_symbols.py unpacked/CoDSP.exe --out symbols/CoDSP`
-  and `bash /usr/share/ghidra/support/analyzeHeadless "$PWD" cod1_recomp -process CoDSP.exe -noanalysis -readOnly -scriptPath ../../x86recomp/tools/ghidra -postScript ExportFunctions.java symbols/CoDSP/functions.tsv -postScript ExportJumpTables.java symbols/CoDSP/jumptables.tsv`
+  `python3 -I ../../SwARc/tools/pe_symbols.py unpacked/CoDSP.exe --out symbols/CoDSP`
+  and `bash /usr/share/ghidra/support/analyzeHeadless "$PWD" cod1_recomp -process CoDSP.exe -noanalysis -readOnly -scriptPath ../../SwARc/tools/ghidra -postScript ExportFunctions.java symbols/CoDSP/functions.tsv -postScript ExportJumpTables.java symbols/CoDSP/jumptables.tsv`
 - Lift all five modules in one run (then re-run cmake; the generated
   file list is globbed):
-  `G="$HOME/.local/share/Steam/steamapps/common/Call of Duty"; out/build/release/x86recomp/tools/lifter/recomp_lift --exe unpacked/CoDSP.exe --symbols symbols/CoDSP --manifest manifest/CoDSP.manifest --module "$G/gamex86.dll" --symbols symbols/gamex86 --manifest manifest/gamex86.manifest --module "$G/cgamex86.dll" --symbols symbols/cgamex86 --manifest manifest/cgamex86.manifest --module "$G/uix86.dll" --symbols symbols/uix86 --manifest manifest/uix86.manifest --module "$G/EaxMan.dll" --symbols symbols/EaxMan --manifest manifest/EaxMan.manifest --out generated`
+  `G="$HOME/.local/share/Steam/steamapps/common/Call of Duty"; out/build/release/swarc/tools/lifter/recomp_lift --exe unpacked/CoDSP.exe --symbols symbols/CoDSP --manifest manifest/CoDSP.manifest --module "$G/gamex86.dll" --symbols symbols/gamex86 --manifest manifest/gamex86.manifest --module "$G/cgamex86.dll" --symbols symbols/cgamex86 --manifest manifest/cgamex86.manifest --module "$G/uix86.dll" --symbols symbols/uix86 --manifest manifest/uix86.manifest --module "$G/EaxMan.dll" --symbols symbols/EaxMan --manifest manifest/EaxMan.manifest --out generated`
   The DLLs are listed in GameConfig::lifted_dlls (src/main.cpp); a DLL
   given --base must get the same base there.
 - Run: `out/build/release/cod1 --game-dir "$HOME/.local/share/Steam/steamapps/common/Call of Duty" --exe unpacked/CoDSP.exe`
@@ -51,7 +51,7 @@ CLAUDE.md, also used by DS1); this repo holds what is specific to CoD.
   runs).
 
 ## Product constraints
-x86recomp's (its CLAUDE.md): no emulation or Wine in the product, 64-bit
+SwARc's (its CLAUDE.md): no emulation or Wine in the product, 64-bit
 host only, portable to macOS arm64 + Metal (graphics only through
 gfx::Device, never host OpenGL), exact x87.
 
@@ -65,7 +65,7 @@ gfx::Device, never host OpenGL), exact x87.
   this repo.
 - CoD knowledge (paths, registry, engine struct offsets, game patches
   such as widescreen/FOV/frame-rate fixes) goes in src/ here (GameConfig,
-  hooks, replacements), never in x86recomp.
+  hooks, replacements), never in SwARc.
 - Ghidra names need evidence (strings, call-graph position matching
   ioq3/iortcw, data layout); record it in a plate comment. A function
   that merely looks like a Quake 3 one stays unnamed until confirmed.

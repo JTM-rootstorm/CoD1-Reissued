@@ -1,6 +1,6 @@
 // The native collision traces and point contents (src/cm_trace.cpp)
 // against the original functions, lifted from the EXE at build time with
-// `recomp_lift --only` (CMakeLists.txt) and run on x86recomp's exact x87
+// `recomp_lift --only` (CMakeLists.txt) and run on SwARc's exact x87
 // model (SoftFloat, not its host-double runs). CoDSP.exe is mapped as the
 // game maps it, for its constants and globals. Each case runs CM_BoxTrace,
 // CM_TransformedBoxTrace, CM_Trace, 0x41D3B0 or point contents (0x41A730,

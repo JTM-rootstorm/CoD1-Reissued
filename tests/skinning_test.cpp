@@ -1,6 +1,6 @@
 // The native CPU skinning (src/skinning.cpp) against the original
 // functions, lifted from the EXE at build time with `recomp_lift --only`
-// (CMakeLists.txt) and run on x86recomp's exact SSE model. Each case runs
+// (CMakeLists.txt) and run on SwARc's exact SSE model. Each case runs
 // both from the same guest memory and must leave the same bytes
 // everywhere the originals write (tessellator counts, indexes, texture
 // coordinates, positions and normals, the caller's argument slot), the

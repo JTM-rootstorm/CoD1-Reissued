@@ -1,6 +1,6 @@
 // The native renderer functions (src/render.cpp) against the originals,
 // lifted from the EXE at build time with `recomp_lift --only`
-// (CMakeLists.txt) and run on x86recomp's exact x87 model (SoftFloat, not
+// (CMakeLists.txt) and run on SwARc's exact x87 model (SoftFloat, not
 // its host-double runs). CoDSP.exe is mapped as the game maps it, for its
 // constants and globals. The functions they call that src/render.cpp does
 // not replace are stubs (tests/render_stubs.manifest) that record each

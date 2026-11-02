@@ -337,7 +337,7 @@ step is only sketched below.
   differ from each other (the level script follows real time: base vs
   base 46/358 frames fully identical, base vs native 47/358).
 - Training walk ("Run log" 2026-10-19 renderer), base bc7cc8e and native,
-  same x86recomp (98f6a37), interleaved, while another session's runs
+  same SwARc (98f6a37), interleaved, while another session's runs
   and builds loaded the machine at times (load 1.4-3.4):
   - Mean frame 2.33-2.43 ms (six base runs, mean 2.37) -> 2.12-2.31 ms
     (three runs of the final build; 2.16-2.22 for the build before the
@@ -356,7 +356,7 @@ step is only sketched below.
 
 ### Sketch: the stage iterator on gfx::Device
 What the GL HLE does for each glDrawElements of the stage iterator today
-(x86recomp src/runtime/gl/context.cpp, gfx/gpu_device.cpp), and what a
+(SwARc src/runtime/gl/context.cpp, gfx/gpu_device.cpp), and what a
 native iterator replacing 0x4F7C30/0x4F6380/0x4F70F0 would skip:
 - Compaction: the indices are remapped to the vertices they use (an epoch
   table over draw_verts_). The tessellator's vertices are already dense
@@ -486,7 +486,7 @@ update of its times, which passes its notes to script.
   stack. FromInt and Ftol (_ftol2) moved from src/pmove.cpp into
   x87_value.h.
 - Oracle (tests/xanim_test.cpp; configure with -DCOD1_GAME_EXE; the
-  originals lifted with --only and run on x86recomp's exact x87 model):
+  originals lifted with --only and run on SwARc's exact x87 model):
   random DObjs of 1-6 models (attached to a bone of an earlier one or
   not) and up to 127 bones, skeletons with bones posed, set elsewhere and
   done (also all of them), part duplicates, anim trees of up to 24 anims
@@ -626,7 +626,7 @@ update of its times, which passes its notes to script.
   a case of the game's dispatch 0x44A2F0, whose neighbouring cases print
   "trap_Hunk_Alloc can only be called in G_InitGame ...". There is no
   Quake 3 counterpart.
-- Training walk, before (main bc7cc8e) and after, same x86recomp (main
+- Training walk, before (main bc7cc8e) and after, same SwARc (main
   98f6a37), three runs each interleaved, frames 12-88 s; "Run log",
   2026-10-19 (XAnim):
   - Mean frame 2.314 -> 2.234 ms (-3.5%; runs 2.343, 2.259, 2.340 ->
@@ -641,12 +641,12 @@ update of its times, which passes its notes to script.
   NPCs are posed the same in both builds; 30-140 of the 786432 pixels
   differ by more than 24 levels per shot, from the animations' phase
   (frame times differ) and the compass.
-- The update, before (71c1dda) and after, both on x86recomp main
+- The update, before (71c1dda) and after, both on SwARc main
   ad1b16b, three runs each interleaved: mean frame 2.138, 2.133, 2.218
   -> 2.181, 2.157, 2.208 ms, the same within the walk's noise (the
   update was 0.9% of the main thread, ~0.02 ms). Main thread (perf):
   the update 0.85% -> 0.28% (its tree walk 0.20%).
-- The game's update, before (b8017ee) and after, both on x86recomp main
+- The game's update, before (b8017ee) and after, both on SwARc main
   ad1b16b, one perf run each and three timing runs each interleaved:
   main thread (perf, cycles) 0.128% -> 0.017% (the lifted tree 100 of
   78057 samples; natively 13 of 77661). Mean frame 2.210, 2.183, 2.184
@@ -778,7 +778,7 @@ ctest pmove_oracle. CoDSP.exe's point contents are native too
   RtCW's arguments), CM_PointLeafnum_r. CoD's own functions (prone
   check, stance blend, foliage, lean, weapon states) stay unnamed.
 - Training walk, before (origin/collision-traces 741c785) and after,
-  same x86recomp (main 4735305), idle machine, three runs each
+  same SwARc (main 4735305), idle machine, three runs each
   interleaved, frames 12-88 s; "Run log", 2026-10-19 (pmove):
   - pmove_fixed 1 (the same path in both builds: viewpos at 30, 60 and
     88 s agree): mean frame 1.916 -> 1.866 ms (-2.6%), p95 2.2 -> 2.1,
@@ -1036,7 +1036,7 @@ motivated it: "Run log", 2026-10-18.
   (0x14BD64C) and cm_playerCurveClip (0x14C77C0, read by patch
   collision).
 - ctest cm_trace_oracle (configure with -DCOD1_GAME_EXE; the originals
-  lifted with --only and run on x86recomp's exact x87 model, SoftFloat,
+  lifted with --only and run on SwARc's exact x87 model, SoftFloat,
   not its double runs; CoDSP.exe mapped for its constants and globals;
   `--only` needs the leaf callback 0x41A4D0 and the eight cases of
   0x429800, which fills its own jump table, listed): 300 random clip
@@ -1080,7 +1080,7 @@ motivated it: "Run log", 2026-10-18.
   10th and every 200th call, 20000 each, almost all CM_TransformedBox-
   Trace from cgame's entity traces): 0 mismatches, and the lifted
   originals give the game's result for every call from the record.
-- Training walk, before (origin/main dc5a30a) and after, same x86recomp
+- Training walk, before (origin/main dc5a30a) and after, same SwARc
   (main 4735305), three runs each, interleaved, idle machine; "Run log",
   2026-10-19: mean frame 2.85 -> 2.03 ms (-29%), p95 3.7 -> 2.3 ms, p99
   3.8 -> 2.35 ms; the traces from 32.8% of the main thread to 6.6%.
@@ -1281,7 +1281,7 @@ main 8248a19; screenshots in the session's report):
   inside a HUD group shifts by w(1 - k) against its anchor (not visible
   in these screens).
 
-Memory (x86recomp b60f5f1, found here): loading a level peaked at 21 GB
+Memory (SwARc b60f5f1, found here): loading a level peaked at 21 GB
 of shared memory at 1024x768 (the build before the widescreen work too)
 and ran the host out of memory at 2560x1440, then kept about 4 GB:
 SDL_GPU cycled the upload buffer on every flush without bound. Now 249
@@ -1290,7 +1290,7 @@ MB and 329 MB.
 ## Widescreen and frame rate, items 1-4 (2026-10-13, branch widescreen)
 Items 1-4 of "Widescreen, FOV, 2D placement, frame rate: design" below;
 5-10 (the 2D transform, HUD anchors, fps measurements, the prediction
-cache) are still open. The shared parts are x86recomp's (branch
+cache) are still open. The shared parts are SwARc's (branch
 widescreen; ARCHITECTURE.md "Display modes, fullscreen and
 presentation", "Frame pacing"): the mode list with the desktop and wide
 sizes, host fullscreen for a window covering the screen
@@ -1312,7 +1312,7 @@ only 2048").
 - Native resolution (src/video_mode.cpp, `replace` 0x4A5610): `r_mode -1`
   with r_customwidth/height 0 is the desktop's size ("...setting mode -1:
   2560 1440 FS", CDS ok, fullscreen). The desktop is in points: these
-  3840x2160 monitors at scale 1.5 give 2560x1440. Since x86recomp
+  3840x2160 monitors at scale 1.5 give 2560x1440. Since SwARc
   0cadefc the desktop is in pixels; a 5K display (macOS Retina,
   5120x2880) then failed at renderer start with "Hunk_AllocateTempMemory:
   failed on 134217744": the renderer takes a 32-bit texture of the screen
@@ -1372,7 +1372,7 @@ upper left. The main build does the same. Runs that turn use r_fullscreen
 1 (COD1_FULLSCREEN=window keeps a mode-sized window for them).
 
 ## macOS arm64 (2026-10-13, branch macos-metal)
-Builds and starts on an M3 Pro with x86recomp's SDL_GPU backend on Metal
+Builds and starts on an M3 Pro with SwARc's SDL_GPU backend on Metal
 (no dxvk; CMake leaves DXVK_NATIVE_DIR empty on Apple hosts). A fresh
 Ghidra 12.1.4 analysis plus EaxMan.dll lifts to the module counts in the
 table below (CoDSP 5291, gamex86 1996, cgamex86 1214, uix86 769
@@ -1387,19 +1387,19 @@ Killed (scripted) runs leave the __CoDSP safe-mode marker in the overlay,
 take safe mode's default and safemode.cfg's picmip 2 / 11 kHz end up in
 main/config.cfg. Delete the marker before each run (and that config once
 it has them): autoconfigure then picks 2000/512/256 (r_mode 6, picmip 0,
-44 kHz) as on Linux. With the HLE sync barriers (x86recomp 0869565) the
+44 kHz) as on Linux. With the HLE sync barriers (SwARc 0869565) the
 training run is unchanged.
 
 ## Status (2026-10-12)
 M0 (recon) done; M1 under way. Decided: static recompilation on the
-shared x86recomp library (factored out of DS1 the same day), graphics
+shared SwARc library (factored out of DS1 the same day), graphics
 through gfx::Device so macOS/Metal stays open (ARCHITECTURE.md).
 
 - The Steam wrapper on CoDSP.exe and CoDMP.exe is undone statically by
   tools/unpack_steam.py.
 - Ghidra (cod1_recomp.gpr, plain auto-analysis) has the unpacked
   CoDSP.exe and the three SP DLLs; symbols exported per module.
-- All four modules are lifted in one recomp_lift run (x86recomp
+- All four modules are lifted in one recomp_lift run (SwARc
   multi-module support, 56c26cf) and linked into cod1; the three game
   DLLs are GameConfig::lifted_dlls, mapped at startup at their
   preferred bases. Coverage below.
@@ -1414,7 +1414,7 @@ through gfx::Device so macOS/Metal stays open (ARCHITECTURE.md).
   CPU skinning (src/skinning.cpp, bit-exact; "Run log" 2026-10-13).
 
 Training plays through to completion (2026-10-12, played by hand on EAX
-3). Its frame-rate drops were CPU-bound: x86recomp's GL draw path and
+3). Its frame-rate drops were CPU-bound: SwARc's GL draw path and
 native skinning removed them (no frame over 25 ms in a played session;
 "Run log" 2026-10-13).
 
@@ -1426,7 +1426,7 @@ widescreen/FOV, UI scaling and high frame rates (design and order:
 EAX works: with `mss_3d_provider "Creative Labs EAX 3 (TM)"` (a latched
 cvar: takes effect on the next start, or pick it in the sound options)
 the game runs Creative's EAX Manager (EaxMan.dll, lifted as a fifth
-module) on x86recomp's EAX providers. See "Run log".
+module) on SwARc's EAX providers. See "Run log".
 
 ## Widescreen, FOV, 2D placement, frame rate: design (2026-10-13)
 Investigation only (items 1-4 since implemented: "Widescreen and frame
@@ -1443,7 +1443,7 @@ cropped.
   The view is Hor- (fov_x 80 kept, the vertical cut), the HUD is
   stretched (compass and stance icon are ellipses), text glyphs are not.
 - The same with r_fullscreen 1: "calling CDS: failed, bad mode", then
-  "trying next higher resolution: ok": x86recomp's ChangeDisplaySettingsA
+  "trying next higher resolution: ok": SwARc's ChangeDisplaySettingsA
   only knows 640x480-1600x1200 (4:3 and 5:4, up to the desktop size), so
   the virtual display becomes a larger 4:3/5:4 mode and the game opens a
   1280x720 popup in it. The host window is never fullscreen: it is a
@@ -1475,7 +1475,7 @@ cropped.
   0x50), ui 0x401DE750/54 (glconfig 0x401DE6CC, syscall 0x33).
 
 Design:
-- x86recomp, generic Windows behaviour: Modes() also lists the desktop
+- SwARc, generic Windows behaviour: Modes() also lists the desktop
   mode and the common wide sizes up to it (1280x720, 1366x768, 1600x900,
   1920x1080, 1920x1200, 2560x1080, 2560x1440, 3440x1440, 3840x2160). A
   top-level popup covering the whole (virtual) screen after a mode change
@@ -1604,7 +1604,7 @@ script hudelems at the screen edges need anchoring.
   125, 144 gives 166, 240 gives 250). Then 0x430620 (fixedtime,
   timescale, clamp), the server frame 0x44CF10 and the client frame
   0x40DF80. r_swapInterval 1 reaches SDL_GPU as VSYNC, 0 as mailbox
-  (x86recomp 32f0634).
+  (SwARc 32f0634).
 - The server frame runs whole 50 ms game frames (20 Hz) from an
   accumulator (0x14F484C): AI, scripts, entities and snapshots do not
   depend on the frame rate.
@@ -1775,7 +1775,7 @@ Design:
 | # | Item | Where | Size |
 |---|---|---|---|
 | 1 | Hor+: replace 0x30025200, wrap 0x30025C80 (zoom sensitivity); check 4:3 unchanged, 16:9/21:9 screenshots | CoD1 | S, ~60 lines |
-| 2 | Display modes: desktop and wide modes, host fullscreen for full-screen popups, aspect-kept present; desktop-size accessor | x86recomp | M, ~150 lines; DS1 retest |
+| 2 | Display modes: desktop and wide modes, host fullscreen for full-screen popups, aspect-kept present; desktop-size accessor | SwARc | M, ~150 lines; DS1 retest |
 | 3 | Native resolution: replace 0x4A5610 (r_mode -1 with 0x0 = desktop) | CoD1 | S, ~30 lines |
 | 4 | Frame pacing wrapper on 0x430690 | CoD1 | S, ~60 lines |
 | 5 | 2D transform: the renderer 2D entries, mode stack, ui/cgame vmMain, 0x4076F0 | CoD1 | M, ~250 lines |
@@ -1790,7 +1790,7 @@ mode work so widescreen can be fullscreen, pacing (cheap), then the 2D
 placement (the stretched HUD is the most visible remaining fault). The
 measurements decide 9 and 10; 8 is what 240 fps needs in CPU time.
 
-## Lift coverage (x86recomp 5640e2f, before SSE support; no manifest tuning)
+## Lift coverage (SwARc 5640e2f, before SSE support; no manifest tuning)
 Measured with one lift per module; the multi-module lift (56c26cf)
 gives the same function and instruction counts per module (its pointer
 scans only accept targets in the module the pointer is in; without
@@ -1808,7 +1808,7 @@ that, DLL data produced 50 bogus weak entries in the EXE).
   the CPU reports SSE2. CoDSP.exe also has packed-single SSE (addps,
   mulps, shufps, movaps, prefetchnta), presumably engine SIMD paths
   chosen by CPU detection.
-- Since x86recomp e24e849 the CPU is reported as SSE2-class and SSE/SSE2
+- Since SwARc e24e849 the CPU is reported as SSE2-class and SSE/SSE2
   is lifted exactly: all three DLLs lift with no unimplemented sites;
   CoDSP.exe keeps 84, all junk decodes from weak entries that are really
   data (aaa, daa, in/out, iretd, les, ...) plus one SSE3 fisttp (SSE3
@@ -1822,7 +1822,7 @@ that, DLL data produced 50 bogus weak entries in the EXE).
 
 ## Miles 6.5e
 The game ships Miles 6.5e (mss32.dll, miles/msssoft.m3d). Their digital
-master reverb, sample levels and Fast 2D are written up in x86recomp's
+master reverb, sample levels and Fast 2D are written up in SwARc's
 docs/miles.md (addresses, constants) and implemented there bit for bit;
 the oracle tests take the DLLs from -DCOD1_MSS32_DLL. What the game
 does with them:
@@ -1856,7 +1856,7 @@ does with them:
   isolated XDG_DATA_HOME, windowed, r_swapInterval 0, com_maxfps 0,
   MemoryMax=6G, COD1_BACKGROUND=1 and COD1_TEST_FOCUS=1,2, binds in
   walk.cfg), frames 12-88 s from COD1_HITCH. Base: main bc7cc8e; native:
-  this branch; both on x86recomp main 98f6a37. Other sessions were
+  this branch; both on SwARc main 98f6a37. Other sessions were
   building and running games on the machine: each run started only with
   no other game, compiler or oracle running and the load under 3.5; two
   earlier sets taken under load (up to 22) were dropped. Three runs each,
@@ -1874,12 +1874,12 @@ does with them:
 - Frame captures: F12 (screenshotJPEG) from the test input at 12, 13.5,
   15, 17 and 18.5 s, a turn between the third and fourth.
 - The update (0x47CC90), later: the same walk, before 71c1dda and after,
-  both rebuilt on x86recomp main ad1b16b (Ctx's layout changed there:
+  both rebuilt on SwARc main ad1b16b (Ctx's layout changed there:
   objects built before and after it must not be mixed), each run under
   `flock` on a lock shared with the renderer session's runs. Main-thread
   shares as above. Captures with update records are about 1.5 GB each.
 - The game's update (0x47CCD0), later: the same walk, before b8017ee and
-  after, on x86recomp main ad1b16b, under the same lock. The 1M random
+  after, on SwARc main ad1b16b, under the same lock. The 1M random
   cases ran as five seeds in parallel; the mutations each compiled into
   their own object and linked with the oracle's others, 14 at a time
   (66 in 7.5 min). Generator traps found on the way: a mutation script
@@ -1941,7 +1941,7 @@ does with them:
   "Click to Start the Mission", from timestamped console lines;
   uncapped, windowed, isolated XDG_DATA_HOME, systemd-run MemoryMax=6G,
   five runs each, interleaved. Base main 741c785, native this branch,
-  both on x86recomp main 4735305:
+  both on SwARc main 4735305:
   - Load: 2.181 s (2.178-2.184) -> 1.842 s (1.836-1.845), -15.5%.
   - CL_InitCGame: 1.02 -> 0.81 s. Launch to "Server Initialization":
     1.26-1.33 -> 1.20-1.24 s.
@@ -1964,7 +1964,7 @@ does with them:
 - The scripted training walk ("Run log" 2026-10-18), uncapped, windowed,
   isolated XDG_DATA_HOME, systemd-run MemoryMax=6G; frames 12-88 s from
   the COD1_HITCH log. Base: origin/main dc5a30a; native: 8b3f006; both
-  on x86recomp main 4735305. Three runs each, interleaved, idle machine,
+  on SwARc main 4735305. Three runs each, interleaved, idle machine,
   repeatable to 0.01 ms:
   - Mean frame: 2.85 -> 2.03 ms (-29%).
   - p95: 3.7 -> 2.3 ms. p99: 3.8 -> 2.35 ms. Max: 4.4-13.0 -> 3.3 ms.
@@ -1978,7 +1978,7 @@ does with them:
   contents (0x41A730, 2.9%, still lifted).
 
 ### 2026-10-18: collision traces still lead the main thread
-- Profiled before replacing them (x86recomp main 4735305, x87 on host
+- Profiled before replacing them (SwARc main 4735305, x87 on host
   doubles; CoD1 main dc5a30a): the scripted training walk, uncapped,
   windowed, isolated XDG_DATA_HOME, COD1_TEST_INPUT (clicks at 8 and
   10 s, F7 "vstr go" = +forward at 14 s, F8 quit at 90 s), under
@@ -2013,12 +2013,12 @@ does with them:
   runs ran at 270-420 fps (one dropped to 60 fps when it was occluded).
   `fixedtime` is cheat-protected, so it cannot force msec. Piloted run:
   pmove_fixed 1, 500-850 fps, signs read.
-### 2026-10-13: x87 runs on host doubles (x86recomp x87-double 79a8931)
-- Under CW 0x027F, x86recomp runs x87 runs on host doubles where that
+### 2026-10-13: x87 runs on host doubles (SwARc x87-double 79a8931)
+- Under CW 0x027F, SwARc runs x87 runs on host doubles where that
   is proven exact. Values must stay in [2^-511, 2^512); PE and C1 come
   from exact error terms. Anything else leaves for the exact model at
-  that instruction. The proof is in x86recomp ARCHITECTURE.md.
-- Scripted training walk, against x86recomp main 7e0dc70 built from
+  that instruction. The proof is in SwARc ARCHITECTURE.md.
+- Scripted training walk, against SwARc main 7e0dc70 built from
   the same tree. Uncapped, windowed (r_swapInterval 0, r_fullscreen
   0), isolated XDG_DATA_HOME, COD1_TEST_INPUT with F7 bound to
   "vstr go" (+forward) and F8 to quit. In-game frames 12-88 s, three
@@ -2042,7 +2042,7 @@ does with them:
   kernel counts as resident (as file and as shmem). It is not an
   allocation by the port.
 
-### 2026-10-13: faster exact x87 (x86recomp x87-fast 7e0dc70)
+### 2026-10-13: faster exact x87 (SwARc x87-fast 7e0dc70)
 - The game runs its float maths at the CRT's PC=53/RC=nearest (CW
   0x027F). The only _controlfp call, 0x528FE1, sets _PC_53, and the
   GL HLE never touches the CW.
@@ -2050,7 +2050,7 @@ does with them:
   fmul, fcom and rounding fst went out of line. In the scripted
   training walk the out-of-line x87 helpers were 57.7% of the main
   thread: run::ArithF32 alone 33%, run::Arith 8%, compares 9%.
-- x86recomp now has these inline and exact (integer only):
+- SwARc now has these inline and exact (integer only):
   - PC=53 add/sub/mul/div of up to 53-bit significands;
   - zero operands;
   - m32/m64 loads, rounding stores and compares;
@@ -2071,13 +2071,13 @@ does with them:
     plus the helpers was about 77%.
 - What is left is the latency of exact integer arithmetic, about 5 ns
   per dependent operation. Host doubles would be about 5x faster on
-  this code but need a change to x86recomp's rules.
+  this code but need a change to SwARc's rules.
 - ctest 12/12 with COD1_GAME_EXE and COD1_MSS32_DLL. That includes
   lift_x87 (4110 forms, 82.2M checks against the CPU), skinning_oracle,
   digital_reverb_oracle and fast2d_oracle.
 
 ### 2026-10-13: SDL_GPU (Vulkan) is the default backend
-- x86recomp 32f0634: SDL_GPU on Vulkan by default; dxvk-native optional
+- SwARc 32f0634: SDL_GPU on Vulkan by default; dxvk-native optional
   (COD1_GFX=d3d9). ctest 12/12 (oracles included) on it.
 - Same scripted runs on both backends (COD1_SHOT_EVERY): the training
   briefing is identical (0 pixels over 2% fuzz); in-level frames look
@@ -2086,7 +2086,7 @@ does with them:
 
 ### 2026-10-13: native CPU skinning (src/skinning.cpp)
 - Frame drops in training were CPU-bound on the main thread; after
-  x86recomp's GL draw path speed-up (branch gl-draw-perf) the x87/SSE
+  SwARc's GL draw path speed-up (branch gl-draw-perf) the x87/SSE
   model was 72-84% of it, and in the user's heaviest stretch the two SSE
   skinning functions alone were 59%: 0x507D20 (weighted) 43% and
   0x5070E0 (rigid) 16%, packed SSE through the SoftFloat lanes.
@@ -2122,7 +2122,7 @@ does with them:
   order, default NaN sign, add order, argument slot, NaN redo, 12-byte
   store) each fail it. `--only` leaves out noreturn callees, so the
   test lists them too.
-- Scripted training walk (uncapped, gl-draw-perf x86recomp, 3 runs each,
+- Scripted training walk (uncapped, gl-draw-perf SwARc, 3 runs each,
   repeatable to 0.1 ms): skinning was 29.5% of the main thread in the
   15-30 s stretch (12.1% over the walk), now 0.4%; that stretch's
   frame time 7.0-8.5 -> 5.9-6.4 ms, walk mean 5.86 -> 5.45 ms, p95 9.4
@@ -2147,7 +2147,7 @@ does with them:
   and a new one at the same place, without ClipCursor(NULL) first. The
   game then never clips again (its mouse is still "active"), so the new
   window got no grab: mouse look drifted and the pointer escaped. Fixed
-  in x86recomp (a clip outlives its window, as on Windows). Checked
+  in SwARc (a clip outlives its window, as on Windows). Checked
   with a scripted menu snd_restart then training: relative motion turns
   the view as before the restart.
 - From inside a level the restart is "savegame internal\snd_restart"
@@ -2157,7 +2157,7 @@ does with them:
   ("ERROR: Disconnected"), which ends in the CRT's longjmp (jmp at
   0x51CAB1) back to 0x4306A6 in 0x430690: was fatal, unlifted indirect
   target.
-- Fixed with x86recomp b66a6ec (setjmp/longjmp; manifest `setjmp
+- Fixed with SwARc b66a6ec (setjmp/longjmp; manifest `setjmp
   0052E84C` for __setjmp3, `resume 0051CAB1` on _longjmp's jmp): its
   two callers, 0x42FDE0 and 0x430690, catch the drop and continue at
   their setjmp return points 0x42FE16 / 0x4306A6. Checked with a
@@ -2170,8 +2170,8 @@ does with them:
 - cod1 now quotes game arguments with spaces (`-- +set mss_3d_provider
   "Creative Labs EAX 3 (TM)"` reached the game as "Creative").
 
-### 2026-10-12: Miles 6.5e Fast 2D and sample levels (x86recomp 0acb1ee)
-- x86recomp's runtime/audio/miles65 implements docs/miles.md's "Miles
+### 2026-10-12: Miles 6.5e Fast 2D and sample levels (SwARc 0acb1ee)
+- SwARc's runtime/audio/miles65 implements docs/miles.md's "Miles
   6.5e sample levels and Fast 2D" for 2D samples, streams and Fast
   2D 3D samples of a Miles 6.5 game (Voice::miles; Dungeon Siege keeps
   the 6.1c rule, its renders bit-identical; EAX voices keep the 6.1c
@@ -2191,9 +2191,9 @@ does with them:
   original. Fast 2D now refuses ADPCM and stereo 3D data, as msssoft
   does.
 
-### 2026-10-12: Miles-compatible digital reverb (x86recomp 4d0597e)
+### 2026-10-12: Miles-compatible digital reverb (SwARc 4d0597e)
 - The behaviour of mss32 6.5e's digital master reverb is written up in
-  x86recomp's docs/miles.md; its runtime/audio/digital_reverb implements
+  SwARc's docs/miles.md; its runtime/audio/digital_reverb implements
   that description and matches the original bit for bit (ctest digital_reverb_oracle, which lifts the
   routines from the install's mss32.dll at build time; configure with
   -DCOD1_MSS32_DLL="<Call of Duty>/mss32.dll").
@@ -2201,7 +2201,7 @@ does with them:
   The game presets its "EAX3 room LF" probe to 0 (0x4417FA), so with
   the HLE's old "leave unchanged" every provider counted as EAX
   (0x14F47F0 = 1) and the room setter 0x445190 only reached the digital
-  reverb for "underwater". Fixed in the same x86recomp commit.
+  reverb for "underwater". Fixed in the same SwARc commit.
 - In game: rooms reach the reverb from 0x445190 (mss_roomtype /
   mss_wetlevel when modified, via 0x4452E0 in the sound update
   0x445780; the setReverb script call, only in sewer.gsc: "stoneroom",
@@ -2216,7 +2216,7 @@ does with them:
   pathfinder, sewer, menu), so the reverb ran silently; whether the
   original behaves the same is unverified.
 
-### 2026-10-12: EAX (x86recomp 23adb0b)
+### 2026-10-12: EAX (SwARc 23adb0b)
 - Provider choice (0x4417F0): `mss_3d_provider` names one of the
   enumerated providers (fallback Fast 2D). Then
   AIL_3D_provider_attribute(provider, "EAX3 room LF", &v) with v preset
@@ -2239,7 +2239,7 @@ does with them:
 - `mss_roomtype` / `mss_wetlevel` drive Miles 6.5's digital master
   reverb for 2D sounds.
 
-### 2026-10-12: New Game reaches the training level (x86recomp 8afebf1)
+### 2026-10-12: New Game reaches the training level (SwARc 8afebf1)
 - Two switch jump tables Ghidra did not recover (gamex86 0x20034474,
   CoDSP 0x4DBD5A; the second with a `mov` scheduled between cmp and
   ja) were fatal on the way into the level; the lifter now recovers
@@ -2256,7 +2256,7 @@ does with them:
 - Background (automated) runs ignore host mouse/keyboard by design, so
   clicks on those windows do nothing.
 
-### 2026-10-12: cinematics, menu, autoconfigure (x86recomp 7f40262)
+### 2026-10-12: cinematics, menu, autoconfigure (SwARc 7f40262)
 - Cinematic clock (0x407040): with sound, the frame to show is
   (bytes loaded into the streaming sample + AIL_sample_position) in ms
   x fps (0x443CD0), and a cinematic whose frame does not advance for
@@ -2279,7 +2279,7 @@ does with them:
   campaign variants by ui_campaign); there is no slideshow in the menu
   itself, the photo montage is cod_intro.roq. It was invisible because
   the GL HLE swapped the cull modes (2D quads are drawn with
-  glCullFace(GL_FRONT)); fixed in x86recomp.
+  glCullFace(GL_FRONT)); fixed in SwARc.
 - Safe mode: CoDSP writes a marker file (__CoDSP in the install dir,
   in our overlay) at startup and removes it on a clean quit. If it is
   there, "Run In Safe Mode?" (Yes/No/Cancel) appears and Yes runs
@@ -2288,7 +2288,7 @@ does with them:
   mode (the low-quality sound). Message boxes are now real dialogs.
 - Autoconfigure (0x42F5D0) picks the configure.csv row with the highest
   cpu MHz / sys MB / vid MB not above the machine's: CPU MHz is RDTSC
-  timed against QPC (was 1000: x86recomp's TSC ran at 1 GHz, now 3),
+  timed against QPC (was 1000: SwARc's TSC ran at 1 GHz, now 3),
   system memory capped at 1 GB, video memory from DirectDraw (now
   GameConfig::video_memory_mb = 256). The best row is 2000/512/256:
   r_mode 6, picmip 0/0, mss_khz 44. A change in the measured CPU speed
@@ -2296,7 +2296,7 @@ does with them:
 - Still open: two "[mp3float] Header missing" warnings when the menu
   music (MP3 through Miles streams) starts.
 
-### 2026-10-12: renderer up through R_Init (x86recomp OpenGL HLE)
+### 2026-10-12: renderer up through R_Init (SwARc OpenGL HLE)
 opengl32 loads; QGL takes all 336 entry points; mode 4 (800x600
 "fullscreen", a virtual display mode) is set; pixel format 1 and a GL
 context on a gfx::Device (dxvk on the RTX 4080). The renderer picks
@@ -2320,11 +2320,11 @@ limits are converted with AIL_process_digital_audio (0x445A30). A
 streaming voice (0x443D10) feeds a sample through
 AIL_sample_buffer_ready/AIL_load_sample_buffer.
 
-### 2026-10-12: Win32 bring-up up to R_Init (x86recomp after e24e849)
+### 2026-10-12: Win32 bring-up up to R_Init (SwARc after e24e849)
 The engine now starts through to the renderer:
 - Console window (0x4533C0 is its WndProc, Q3 ConWndProc-like: two
   solid brushes and a timer on WM_CREATE, WM_CTLCOLOR colouring): needs
-  the system control classes; x86recomp now provides static/edit/button
+  the system control classes; SwARc now provides static/edit/button
   with host window procedures, and a read-only multi-line edit echoes
   what the game appends to stdout. That is the engine's console log
   (Com_Printf), visible in the terminal from here on.
@@ -2336,7 +2336,7 @@ The engine now starts through to the renderer:
   GlobalSize, LoadImageA (splash bitmap: existence only, nothing drawn),
   GetSystemMetrics 16/17.
 - The game writes `__CoDSP` (hidden, the "did not quit properly" marker)
-  into its install directory. x86recomp now treats the install as
+  into its install directory. SwARc now treats the install as
   read-only with a per-user overlay ($XDG_DATA_HOME/cod1/install/),
   so the Steam folder is never modified. (Earlier runs had left the
   marker in the Steam folder; removed by hand.)
@@ -2356,7 +2356,7 @@ Client Initialization, then `R_Init` -> "Initializing OpenGL subsystem"
 -> LoadLibrary("C:\WINDOWS\system32\opengl32.dll") fails -> "Could
 not load OpenGL" fatal error. Next: the opengl32/wgl HLE on gfx::Device.
 
-### 2026-10-12: four modules lifted (x86recomp 56c26cf)
+### 2026-10-12: four modules lifted (SwARc 56c26cf)
 `cod1 --game-dir ... --exe unpacked/CoDSP.exe`:
 1. CRT start, WinMain; the "did not quit properly, run in safe mode?"
    MessageBox (the HLE returns its default button), as no clean-exit
@@ -2364,7 +2364,7 @@ not load OpenGL" fatal error. Next: the opengl32/wgl HLE on gfx::Device.
 2. 0x44FC60 is a video-memory probe: DirectDrawCreateEx(guid,
    IID_IDirectDraw7) then IDirectDraw7::GetAvailableVidMem(DDSCAPS_
    VIDEOMEMORY) and Release; the caller enumerates adapters with
-   DirectDrawEnumerateExA. x86recomp's ddraw HLE (recomp_d3d7) already
+   DirectDrawEnumerateExA. SwARc's ddraw HLE (recomp_d3d7) already
    does all of it without creating a device, so cod1 links it
    (with dxvk-native, needed for gfx::Device anyway).
 3. Stops: `unimplemented import gdi32.dll!CreateSolidBrush` from
