@@ -29,8 +29,8 @@
 #include <cstdint>
 
 #include "pmove_fixed.h"
-#include "runtime/lifted.h"
-#include "runtime/runtime.h"
+#include "x86/lifted.h"
+#include "x86/runtime.h"
 
 namespace recomp::gen {
 

@@ -137,7 +137,7 @@ in `$REPO`, with SwARc checked out at `$REPO/../../SwARc` (pass
    and build:
 
    ```sh
-   out/build/release/swarc/tools/lifter/recomp_lift \
+   out/build/release/swarc/tools/lifter_x86/recomp_lift \
      --exe unpacked/CoDSP.exe --symbols symbols/CoDSP --manifest manifest/CoDSP.manifest \
      --module "$GAME/gamex86.dll" --symbols symbols/gamex86 --manifest manifest/gamex86.manifest \
      --module "$GAME/cgamex86.dll" --symbols symbols/cgamex86 --manifest manifest/cgamex86.manifest \

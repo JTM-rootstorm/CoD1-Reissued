@@ -36,9 +36,9 @@
 
 #include "cm_trace_capture.h"
 #include "runtime/guest_memory.h"
-#include "runtime/lifted.h"
-#include "runtime/pe_image.h"
-#include "runtime/x87.h"
+#include "win32/pe_image.h"
+#include "x86/lifted.h"
+#include "x86/x87.h"
 
 namespace recomp {
 uint8_t* g_guest_base = nullptr;

@@ -35,7 +35,7 @@ if(TARGET cod1_lifted)
                  src/zlib.cpp src/jpeg_idct.cpp src/crt.cpp src/xanim.cpp
                  src/render.cpp src/render_backend.cpp
                  $<TARGET_OBJECTS:cod1_lifted>)
-  target_link_libraries(cod1 PRIVATE recomp_runtime recomp_mss32 recomp_d3d7
+  target_link_libraries(cod1 PRIVATE recomp_win32 recomp_mss32 recomp_d3d7
                         recomp_opengl ZLIB::ZLIB)
   set_target_properties(cod1 PROPERTIES ENABLE_EXPORTS ON)  # symbol names in fault backtraces
   if(DXVK_NATIVE_DIR)
@@ -162,7 +162,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     COMMENT "Lifting the CPU skinning functions for skinning_oracle_test")
   add_executable(skinning_oracle_test tests/skinning_test.cpp src/skinning.cpp ${_gen})
   target_include_directories(skinning_oracle_test PRIVATE "${SWARC_DIR}/src")
-  target_link_libraries(skinning_oracle_test PRIVATE recomp_x87 recomp_image)
+  target_link_libraries(skinning_oracle_test PRIVATE recomp_x87 recomp_pe)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
   add_test(NAME skinning_oracle COMMAND skinning_oracle_test)
@@ -186,7 +186,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     COMMENT "Lifting the collision traces for cm_trace_oracle_test")
   add_executable(cm_trace_oracle_test tests/cm_trace_test.cpp tests/cm_trace_native.cpp ${_gen})
   target_include_directories(cm_trace_oracle_test PRIVATE "${SWARC_DIR}/src")
-  target_link_libraries(cm_trace_oracle_test PRIVATE recomp_x87 recomp_image)
+  target_link_libraries(cm_trace_oracle_test PRIVATE recomp_x87 recomp_pe)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
   set_source_files_properties(tests/cm_trace_native.cpp PROPERTIES COMPILE_OPTIONS
@@ -216,7 +216,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     COMMENT "Lifting the renderer functions for render_oracle_test")
   add_executable(render_oracle_test tests/render_test.cpp tests/render_native.cpp ${_gen})
   target_include_directories(render_oracle_test PRIVATE "${SWARC_DIR}/src")
-  target_link_libraries(render_oracle_test PRIVATE recomp_x87 recomp_image)
+  target_link_libraries(render_oracle_test PRIVATE recomp_x87 recomp_pe)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
   set_source_files_properties(tests/render_native.cpp PROPERTIES COMPILE_OPTIONS
@@ -247,7 +247,7 @@ if(EXISTS "${COD1_GAME_EXE}")
   add_executable(render_backend_oracle_test tests/render_backend_test.cpp
                  tests/render_backend_native.cpp ${_gen})
   target_include_directories(render_backend_oracle_test PRIVATE "${SWARC_DIR}/src")
-  target_link_libraries(render_backend_oracle_test PRIVATE recomp_x87 recomp_image)
+  target_link_libraries(render_backend_oracle_test PRIVATE recomp_x87 recomp_pe)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
   set_source_files_properties(tests/render_backend_native.cpp PROPERTIES COMPILE_OPTIONS
@@ -278,7 +278,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     COMMENT "Lifting unzip and inflate for unzip_oracle_test")
   add_executable(unzip_oracle_test tests/unzip_test.cpp tests/unzip_native.cpp ${_gen})
   target_include_directories(unzip_oracle_test PRIVATE "${SWARC_DIR}/src")
-  target_link_libraries(unzip_oracle_test PRIVATE recomp_x87 recomp_image ZLIB::ZLIB)
+  target_link_libraries(unzip_oracle_test PRIVATE recomp_x87 recomp_pe ZLIB::ZLIB)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
   set_source_files_properties(tests/unzip_native.cpp PROPERTIES COMPILE_OPTIONS
@@ -307,7 +307,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     COMMENT "Lifting zlib for zlib_oracle_test")
   add_executable(zlib_oracle_test tests/zlib_test.cpp tests/zlib_native.cpp ${_gen})
   target_include_directories(zlib_oracle_test PRIVATE "${SWARC_DIR}/src")
-  target_link_libraries(zlib_oracle_test PRIVATE recomp_x87 recomp_image ZLIB::ZLIB)
+  target_link_libraries(zlib_oracle_test PRIVATE recomp_x87 recomp_pe ZLIB::ZLIB)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
   file(GLOB _pk3s "${COD1_GAME_DIR}/Main/*.pk3")
@@ -328,7 +328,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     COMMENT "Lifting tolower for crt_oracle_test")
   add_executable(crt_oracle_test tests/crt_test.cpp tests/crt_native.cpp ${_gen})
   target_include_directories(crt_oracle_test PRIVATE "${SWARC_DIR}/src")
-  target_link_libraries(crt_oracle_test PRIVATE recomp_x87 recomp_image)
+  target_link_libraries(crt_oracle_test PRIVATE recomp_x87 recomp_pe)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
   add_test(NAME crt_oracle COMMAND crt_oracle_test "${COD1_GAME_EXE}")
@@ -352,7 +352,7 @@ if(EXISTS "${COD1_GAME_EXE}")
   add_executable(jpeg_idct_oracle_test tests/jpeg_idct_test.cpp tests/jpeg_idct_native.cpp
                  ${_gen})
   target_include_directories(jpeg_idct_oracle_test PRIVATE "${SWARC_DIR}/src")
-  target_link_libraries(jpeg_idct_oracle_test PRIVATE recomp_x87 recomp_image JPEG::JPEG
+  target_link_libraries(jpeg_idct_oracle_test PRIVATE recomp_x87 recomp_pe JPEG::JPEG
                         ZLIB::ZLIB)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
@@ -383,7 +383,7 @@ if(EXISTS "${COD1_GAME_EXE}")
     COMMENT "Lifting the XAnim evaluation for xanim_oracle_test")
   add_executable(xanim_oracle_test tests/xanim_test.cpp tests/xanim_native.cpp ${_gen})
   target_include_directories(xanim_oracle_test PRIVATE "${SWARC_DIR}/src")
-  target_link_libraries(xanim_oracle_test PRIVATE recomp_x87 recomp_image)
+  target_link_libraries(xanim_oracle_test PRIVATE recomp_x87 recomp_pe)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
   set_source_files_properties(tests/xanim_native.cpp PROPERTIES COMPILE_OPTIONS
@@ -420,7 +420,7 @@ if(EXISTS "${COD1_GAME_EXE}" AND COD1_MSS32_DLL)
     COMMENT "Lifting Pmove for pmove_oracle_test")
   add_executable(pmove_oracle_test tests/pmove_test.cpp tests/pmove_native.cpp ${_gen})
   target_include_directories(pmove_oracle_test PRIVATE "${SWARC_DIR}/src")
-  target_link_libraries(pmove_oracle_test PRIVATE recomp_x87 recomp_image)
+  target_link_libraries(pmove_oracle_test PRIVATE recomp_x87 recomp_pe)
   set_source_files_properties(${_gen} PROPERTIES COMPILE_OPTIONS
     "-O2;-g0;-fno-strict-aliasing;-fnon-call-exceptions")
   set_source_files_properties(tests/pmove_native.cpp PROPERTIES COMPILE_OPTIONS

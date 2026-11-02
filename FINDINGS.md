@@ -1823,7 +1823,7 @@ that, DLL data produced 50 bogus weak entries in the EXE).
 ## Miles 6.5e
 The game ships Miles 6.5e (mss32.dll, miles/msssoft.m3d). Their digital
 master reverb, sample levels and Fast 2D are written up in SwARc's
-docs/miles.md (addresses, constants) and implemented there bit for bit;
+platforms/win32/docs/miles.md (addresses, constants) and implemented there bit for bit;
 the oracle tests take the DLLs from -DCOD1_MSS32_DLL. What the game
 does with them:
 - It never changes the driver's master volume (1.0), Fast 2D's "Mute at
@@ -2171,7 +2171,7 @@ does with them:
   "Creative Labs EAX 3 (TM)"` reached the game as "Creative").
 
 ### 2026-10-12: Miles 6.5e Fast 2D and sample levels (SwARc 0acb1ee)
-- SwARc's runtime/audio/miles65 implements docs/miles.md's "Miles
+- SwARc's runtime/audio/miles65 implements platforms/win32/docs/miles.md's "Miles
   6.5e sample levels and Fast 2D" for 2D samples, streams and Fast
   2D 3D samples of a Miles 6.5 game (Voice::miles; Dungeon Siege keeps
   the 6.1c rule, its renders bit-identical; EAX voices keep the 6.1c
@@ -2193,7 +2193,7 @@ does with them:
 
 ### 2026-10-12: Miles-compatible digital reverb (SwARc 4d0597e)
 - The behaviour of mss32 6.5e's digital master reverb is written up in
-  SwARc's docs/miles.md; its runtime/audio/digital_reverb implements
+  SwARc's platforms/win32/docs/miles.md; its runtime/audio/digital_reverb implements
   that description and matches the original bit for bit (ctest digital_reverb_oracle, which lifts the
   routines from the install's mss32.dll at build time; configure with
   -DCOD1_MSS32_DLL="<Call of Duty>/mss32.dll").

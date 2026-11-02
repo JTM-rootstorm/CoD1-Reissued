@@ -53,7 +53,7 @@ from their code.
 - CPU: SwARc reports a fixed SSE2-class CPU, so CoD runs its SSE
   paths as on any real PC: MSVC 7's SSE2 maths library (pow, exp, log,
   sin/cos... in every module) and the EXE's packed-single loops. The
-  scaffold lifts them exactly (runtime/sse.cpp). In the native port the
+  scaffold lifts them exactly (x86/sse.cpp). In the native port the
   CRT maths becomes the host libm and the SIMD loops portable C++ (or
   SIMDe/sse2neon where it matters on Apple Silicon), each checked
   against the lifted version.

@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-#include "runtime/lifted.h"
+#include "x86/lifted.h"
 
 namespace recomp::gen {
 

@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "cm_trace_capture.h"
-#include "runtime/lifted.h"
+#include "x86/lifted.h"
 
 namespace {
 

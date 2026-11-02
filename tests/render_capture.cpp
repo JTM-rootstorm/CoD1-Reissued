@@ -13,7 +13,7 @@
 #include <map>
 
 #include "render_capture.h"
-#include "runtime/lifted.h"
+#include "x86/lifted.h"
 
 namespace {
 

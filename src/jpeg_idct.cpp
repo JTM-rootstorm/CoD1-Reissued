@@ -24,7 +24,7 @@
 #include <cmath>
 #include <cstdint>
 
-#include "runtime/lifted.h"
+#include "x86/lifted.h"
 #include "x87_value.h"
 
 namespace recomp::gen {

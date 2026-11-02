@@ -32,8 +32,8 @@
 #include <initializer_list>
 #include <unordered_map>
 
-#include "runtime/lifted.h"
-#include "runtime/runtime.h"
+#include "x86/lifted.h"
+#include "x86/runtime.h"
 
 namespace recomp::gen {
 

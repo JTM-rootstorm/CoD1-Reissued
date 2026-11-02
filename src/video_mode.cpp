@@ -9,8 +9,8 @@
 #include <cstdio>
 
 #include "runtime/display.h"
-#include "runtime/lifted.h"
-#include "runtime/runtime.h"
+#include "x86/lifted.h"
+#include "x86/runtime.h"
 
 namespace recomp::gen {
 

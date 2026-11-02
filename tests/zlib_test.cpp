@@ -32,8 +32,8 @@
 #include <vector>
 
 #include "runtime/guest_memory.h"
-#include "runtime/lifted.h"
-#include "runtime/pe_image.h"
+#include "win32/pe_image.h"
+#include "x86/lifted.h"
 
 namespace recomp {
 uint8_t* g_guest_base = nullptr;

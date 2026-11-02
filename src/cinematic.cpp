@@ -1,8 +1,8 @@
 // Cinematic (RoQ) playback fixes. Replacements of lifted functions named
 // with `replace` in manifest/CoDSP.manifest; FINDINGS.md "Cinematics".
 
-#include "runtime/lifted.h"
-#include "runtime/runtime.h"
+#include "x86/lifted.h"
+#include "x86/runtime.h"
 
 namespace recomp::gen {
 

@@ -15,8 +15,8 @@
 #include <cmath>
 #include <cstdint>
 
-#include "runtime/lifted.h"
-#include "runtime/runtime.h"
+#include "x86/lifted.h"
+#include "x86/runtime.h"
 
 namespace recomp::gen {
 

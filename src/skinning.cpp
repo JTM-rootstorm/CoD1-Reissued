@@ -22,7 +22,7 @@
 #include <cstdint>
 #include <initializer_list>
 
-#include "runtime/lifted.h"
+#include "x86/lifted.h"
 
 namespace recomp::gen {
 

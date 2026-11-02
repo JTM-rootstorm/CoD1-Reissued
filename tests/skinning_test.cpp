@@ -28,7 +28,7 @@
 #include <vector>
 
 #include "runtime/guest_memory.h"
-#include "runtime/lifted.h"
+#include "x86/lifted.h"
 #include "skinning_capture.h"
 
 namespace recomp {
@@ -143,7 +143,7 @@ void RaiseDivideError(Ctx&, uint32_t va) {
 void Cpuid(Ctx&) { std::abort(); }
 uint64_t Rdtsc(Ctx&) { std::abort(); }
 void Probe(Ctx&, uint32_t, const char*) {}
-void FatalF(const char* fmt, ...) {  // runtime/sse.cpp: #XM, misaligned movaps
+void FatalF(const char* fmt, ...) {  // x86/sse.cpp: #XM, misaligned movaps
   va_list ap;
   va_start(ap, fmt);
   std::vprintf(fmt, ap);

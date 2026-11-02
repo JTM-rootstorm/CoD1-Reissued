@@ -31,7 +31,7 @@
 #include <mutex>
 #include <unordered_map>
 
-#include "runtime/lifted.h"
+#include "x86/lifted.h"
 
 namespace recomp::gen {
 

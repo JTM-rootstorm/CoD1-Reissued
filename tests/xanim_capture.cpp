@@ -13,7 +13,7 @@
 #include <map>
 #include <vector>
 
-#include "runtime/lifted.h"
+#include "x86/lifted.h"
 #include "xanim_capture.h"
 
 namespace {

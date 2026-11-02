@@ -17,7 +17,7 @@
 
 #include "pmove_capture.h"
 #include "../src/pmove_fixed.h"
-#include "runtime/lifted.h"
+#include "x86/lifted.h"
 
 namespace {
 
