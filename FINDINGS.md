@@ -49,8 +49,9 @@ on gfx::Device" below).
   the four view-dependent alphas, which rotate the view origin into the
   entity's space with 0x426A60 and normalise per vertex with 0x4268B0, on
   the original's stack locals). The stage's argument slot is the
-  original's scratch for its int and float conversions. The deforms and
-  the colour and alpha generators stay lifted (stubbed in the oracle).
+  original's scratch for its int and float conversions. The deforms stay
+  lifted (stubbed in the oracle); the colour and alpha generators are
+  layer 8.
 - Layer 4, the stages and the flush: a stage's draw 0x4F5DE0 (EAX stage,
   EBX indexes, count on the stack: colours, ComputeTexCoords, the colour
   array, then all units when the second bundle has an image or the first
@@ -168,6 +169,34 @@ on gfx::Device" below).
   world's iterators take their second unit's texture coordinates from
   e-0x20, a local they never write, which lies in 0x5082D0's frame (its
   last triangle's second edge, at either 8-byte alignment).
+- Layer 8, the colour and alpha generators (2026-11-03), which 0x4F4FA0
+  calls by rgbGen and alphaGen: the entity's colour 0x50A030 (+0x6C) and
+  one minus it 0x50A070 (all four bytes), its alpha 0x50A0E0 (+0x6F) and
+  one minus it 0x50A120 (ECX the colours; nothing without an entity); a
+  waveform's colour 0x50A170 (ESI the stage's +0x650, EAX the colours:
+  type 6 the noise 0x4D3AA0(0, 0, 0, (time + phase) x frequency) x
+  amplitude + base, else the table value times tr.identityLight; clamped
+  to 0..1 with a NaN kept, x 255 through FISTP, grey and opaque) and
+  alpha 0x50A270 (EAX the stage's +0x668, the colours on the stack: the
+  clamped value 0x5089E0, x 255 through _ftol). The tables, 1024 floats
+  from 0x1544530 4 KB apart for types 1-5 (0x508940, inlined in both;
+  another type is ri.Error's), are indexed by FISTP of (frequency x time
+  + phase) x 1024 stored as a float, & 0x3FF. The specular alpha 0x50AEC0
+  (EAX): the direction to the fixed light 0x564140 (-960, 1980, 96)
+  normalised by 0x4268B0, reflected about the normal, dotted with the
+  direction to the view 0x1549AB8 over its length by the 0x5F3759DF
+  inverse square root with one Newton step; 0 below 0, else its fourth
+  power x 255 through _ftol, 255 at most. The diffuse lighting 0x50B040
+  (the colours on the stack): the entity's light direction (+0xA4) dotted
+  with the normal, at most 0 the ambient colour +0xBC, else per channel
+  ambient (+0xB0) + directed (+0xC0) x it through FISTP, 255 at most,
+  opaque. The debug colours 0x4F2E60 (EAX the index count, EDI the colour;
+  the cvar 0x15343E8 at 5 and up): above 6 a random direction (rand after
+  srand((shader +0x48 + count) x 31337), normalised by 0x426710, each x
+  255 + 2^-30 through FISTP; rand's state put back), else by the count
+  (30, 150, 450, 1200, 3000) in tr.identityLightByte. The FISTPs go
+  through 0x13F96D8 as in the dlight pass. The specular and its callers
+  use 7 x87 registers: the oracle preloads at most one value for them.
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -220,6 +249,19 @@ on gfx::Device" below).
   stored (equal unless the batch's vertices overlap its own globals),
   hit[0]'s zeroing (never read), and the return address of a call into
   0x507F40 (native in the game). Six more on the frame writes all fail.
+  With layer 8: 200000 cases over 50 entries, 4.41M calls out, 0
+  mismatches (random waveforms, wave tables and noise, entity colours and
+  lights, the view origin; rand and srand stubbed, as their state is the
+  thread's; now and then no entity, an index count on a band's edge, or a
+  negative tr.identityLightByte). Its first run caught a misread jump
+  table (the tables are in type order). Its mutations: 48, 38 fail the
+  oracle; of the 10 that pass, 6 cannot change a result (in the
+  specular, a NaN's test before 0, the shift of a sum of squares' sign
+  bit, x 1.0, a zero's sign; in the debug colours, the arithmetic for a
+  logical shift twice, of which only the low byte is stored) and 4 are
+  rounding mid-points random cases do not reach (in the specular, the
+  order of three sums of x87 stack values; in the debug colours, the
+  2^-30 before FISTP).
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -265,6 +307,14 @@ on gfx::Device" below).
   and the native shadows make the frames faster. Two base walks agreed;
   two layer 7 walks (before and after the frame writes) differed from
   base by 10-20k and 140k px.
+  With layer 8 (2026-11-03): the walk never reaches the generators
+  (0x4F4FA0 141779 times under gdb, the nine generators none), so only
+  the oracle covers them. Standing (base this branch's layer 6 build):
+  all 13 loading and briefing frames shared, 46-47 of 1640 in-level
+  frames identical, the rest in the 2D text, at most 713 px within
+  (0,0)-(355,457), as base against base (713 px, (0,0)-(348,457)); one
+  earlier pair differed by up to 3074 px within (6,176)-(532,471) and
+  did not repeat. Walking differs from that base as layer 7's did.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),
@@ -409,8 +459,8 @@ step is only sketched below.
     frame. qsortFast gains nothing (integer code lifts well: 0.057 vs
     0.055 s on the oracle's sorts).
 - Left lifted, next in line: the portal projection 0x4D6BC0 (1.0%, x87,
-  3.6 KB), the draw surface loop 0x4CC670 (0.7%), the cell walk 0x4D96E0
-  and the colour generators under 0x4F60E0.
+  3.6 KB), the draw surface loop 0x4CC670 (0.7%) and the cell walk
+  0x4D96E0.
 
 ### Sketch: the stage iterator on gfx::Device
 What the GL HLE does for each glDrawElements of the stage iterator today

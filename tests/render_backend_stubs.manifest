@@ -14,15 +14,6 @@ replace 00508800
 replace 005095F0
 replace 005098A0
 replace 00509190
-replace 0050A030
-replace 0050A070
-replace 0050A170
-replace 0050B040
-replace 004F2E60
-replace 0050A0E0
-replace 0050A120
-replace 0050AEC0
-replace 0050A270
 replace 004F5940
 replace 004ADC20
 replace 004F44A0
@@ -33,3 +24,5 @@ replace 00431CF0
 replace 0042E300
 replace 00440940
 replace 0051D45A
+replace 0051B5EC
+replace 0051B5DF

@@ -4,10 +4,11 @@
 // and the element draws), a stage's texture units (each bundle's image,
 // texture, environment and coordinates, also from an ATI vertex array
 // object), what a flush sets up before its stages draw: the fog, the
-// texture units back to one, the vertex deforms and each stage's colours,
-// and the flush itself: a stage's draw, the stage loop, the generic stage
-// iterator with the dlight pass, the optimised iterators and their
-// dispatch, the shadow volumes of shader 0x1535AEC, and RB_EndSurface. Replacements of lifted functions named
+// texture units back to one, the vertex deforms and each stage's colours
+// (with the colour and alpha generators), and the flush itself: a stage's
+// draw, the stage loop, the generic stage iterator with the dlight pass,
+// the optimised iterators and their dispatch, the shadow volumes of shader
+// 0x1535AEC, and RB_EndSurface. Replacements of lifted functions named
 // with `replace` in manifest/CoDSP.manifest; FINDINGS.md "Renderer back
 // end". Names and evidence are in the Ghidra plate comments.
 //
@@ -53,16 +54,11 @@ void f_00508800(Ctx& c);
 void f_005095F0(Ctx& c);
 void f_005098A0(Ctx& c);
 void f_00509190(Ctx& c);
-// The colour and alpha generators (registers: f_004F4FA0).
-void f_0050A030(Ctx& c);
-void f_0050A070(Ctx& c);
-void f_0050A170(Ctx& c);
-void f_0050B040(Ctx& c);
-void f_004F2E60(Ctx& c);
-void f_0050A0E0(Ctx& c);
-void f_0050A120(Ctx& c);
-void f_0050AEC0(Ctx& c);
-void f_0050A270(Ctx& c);
+void f_00508940(Ctx& c);  // a waveform's table (ECX type; ri.Error for another)
+void f_004D3AA0(Ctx& c);  // the noise (x, y, z, t; ST0)
+void f_00426710(Ctx& c);  // VectorNormalize (ESI; the length in ST0)
+void f_0051B5EC(Ctx& c);  // rand
+void f_0051B5DF(Ctx& c);  // srand (seed)
 void f_00426A60(Ctx& c);  // rotates ECX by the axes EAX into EDX
 void f_004268B0(Ctx& c);  // normalises EAX (approximate inverse square root)
 void f_004F5940(Ctx& c);  // ComputeTexCoords (EAX stage; src/render.cpp)
@@ -1245,6 +1241,246 @@ void f_00509F20(Ctx& c) {
   c.esp = e + 4;
 }
 
+// ---- the colour and alpha generators ---------------------------------------------
+
+namespace {
+
+// tess.shaderTime.
+constexpr uint32_t kShaderTime = 0x17F0C78;
+
+// ST0 as a double, popped (a lifted callee's return value).
+St PopSt0(Ctx& c) {
+  St v(std::bit_cast<double>(x87::StoreF64(c.fpu)));
+  x87::Pop(c.fpu);
+  return v;
+}
+
+// A waveform's table (0x508940 inlined; ret: its call's return) for types
+// 1-5, 4 KB apart from 0x1544530; another type goes to the original, which
+// reports it with ri.Error.
+uint32_t WaveTable(Ctx& c, uint32_t type, uint32_t ret) {
+  static constexpr uint32_t kTables[5] = {0x1544530, 0x1545530, 0x1546530, 0x1547530,
+                                          0x1548530};
+  if (type - 1 < 5) return kTables[type - 1];
+  c.ecx = type;
+  Call(c, f_00508940, ret);
+  return c.eax;
+}
+
+// A waveform (type, base, amplitude, phase, frequency) at the shader time,
+// from its table of 1024 (the index through the scratch 0x13F96D8).
+St WaveValue(Ctx& c, uint32_t wave, uint32_t ret) {
+  const uint32_t table = WaveTable(c, U32(wave), ret);
+  const int32_t i =
+      Fistp(St(Fst((St(Ld(wave + 0x10)) * Ld(kShaderTime) + Ld(wave + 0xC)) * 1024.0f)));
+  Put(0x13F96D8, uint32_t(i));
+  return St(Ld(wave + 8)) * Ld(table + 4 * (uint32_t(i) & 0x3FF)) + Ld(wave + 4);
+}
+
+// Clamped to 0..1, a NaN kept.
+St Clamp01(St v) {
+  if (v < 0.0f) return St(0.0f);
+  if (v > 1.0f) return St(1.0f);
+  return v;
+}
+
+}  // namespace
+
+// The entity's colour (+0x6C) for every vertex (ECX colours); nothing
+// without an entity.
+void f_0050A030(Ctx& c) {
+  if (const uint32_t ent = U32(0x1549B3C)) {
+    const uint32_t colour = U32(ent + 0x6C);
+    for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) Put(c.ecx + 4 * i, colour);
+  }
+  c.esp += 4;
+}
+
+// One minus the entity's colour, alpha too (ECX colours).
+void f_0050A070(Ctx& c) {
+  if (const uint32_t ent = U32(0x1549B3C)) {
+    const uint32_t colour = ~U32(ent + 0x6C);
+    for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) Put(c.ecx + 4 * i, colour);
+  }
+  c.esp += 4;
+}
+
+// The entity's alpha (+0x6F) for every vertex (ECX colours).
+void f_0050A0E0(Ctx& c) {
+  if (U32(0x1549B3C))
+    for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++)
+      Wr<uint8_t>(g_guest_base, c.ecx + 4 * i + 3, U8(U32(0x1549B3C) + 0x6F));
+  c.esp += 4;
+}
+
+// One minus the entity's alpha (ECX colours).
+void f_0050A120(Ctx& c) {
+  if (U32(0x1549B3C))
+    for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++)
+      Wr<uint8_t>(g_guest_base, c.ecx + 4 * i + 3, uint8_t(~U8(U32(0x1549B3C) + 0x6F)));
+  c.esp += 4;
+}
+
+// A waveform's colour (ESI the stage's rgbWave, EAX colours): the noise
+// (0x4D3AA0 at the shader time plus the phase, times the frequency) times
+// the amplitude plus the base, or the waveform times tr.identityLight;
+// clamped to 0..1, grey and opaque.
+void f_0050A170(Ctx& c) {
+  const uint32_t e = c.esp, wave = c.esi, colours = c.eax;
+  c.esp = e - 0xC;
+  St v;
+  if (U32(wave) == 6) {
+    Push(c, Fst((St(Ld(kShaderTime)) + Ld(wave + 0xC)) * Ld(wave + 0x10)).bits);
+    for (int k = 0; k < 3; k++) Push(c, 0);
+    Call(c, f_004D3AA0, 0x50A198);
+    c.esp += 0x10;
+    v = PopSt0(c) * Ld(wave + 8) + Ld(wave + 4);
+  } else {
+    v = WaveValue(c, wave, 0x50A1A8) * Ld(kIdentityLight);
+  }
+  const uint32_t grey = uint32_t(Fistp(St(Fst(Clamp01(v) * 255.0f))));
+  Put(0x13F96D8, grey);
+  const uint32_t colour = 0xFF000000u | (grey & 0xFF) * 0x010101u;
+  for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) Put(colours + 4 * i, colour);
+  c.esp = e + 4;
+}
+
+// A waveform's alpha (EAX the stage's alphaWave; stack: colours), clamped
+// to 0..1 (0x5089E0 inlined, its call's depth kept for the table's).
+void f_0050A270(Ctx& c) {
+  const uint32_t e = c.esp, colours = Arg(c, e, 1);
+  c.esp = e - 0xC;
+  const uint32_t a = uint32_t(Ftol(Clamp01(WaveValue(c, c.eax, 0x5089E8)) * 255.0f));
+  for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++)
+    Wr<uint8_t>(g_guest_base, colours + 4 * i + 3, uint8_t(a));
+  c.esp = e + 4;
+}
+
+// The specular alpha (EAX colours): the direction to the fixed light
+// (0x564140) normalised (0x4268B0, on the original's local at e - 0x18),
+// reflected about the vertex normal, against the direction to the view
+// (0x1549AB8) over its length (the inverse square root's approximation);
+// its fourth power, 0 below 0, 255 at most.
+void f_0050AEC0(Ctx& c) {
+  const uint32_t e = c.esp, l = e - 0x18;
+  const int32_t n = I32(kTessVerts);
+  c.esp = e - 0x34;
+  uint32_t xyz = kTessXyz, normal = kTessNormals + 8, alpha = c.eax + 3;
+  for (int32_t i = 0; i < n; i++) {
+    for (uint32_t k = 0; k < 12; k += 4) Put(l + k, Fst(St(Ld(0x564140 + k)) - Ld(xyz + k)));
+    c.eax = l;
+    Call(c, f_004268B0, 0x50AF1F);
+    const St d = St(Ld(l + 8)) * Ld(normal) + St(Ld(l + 4)) * Ld(normal - 4) +
+                 St(Ld(l)) * Ld(normal - 8);
+    St rx = d * Ld(normal - 8), ry = d * Ld(normal - 4), rz = d * Ld(normal);
+    rx = rx + rx - Ld(l);
+    ry = ry + ry - Ld(l + 4);
+    rz = rz + rz - Ld(l + 8);
+    const St vx = St(Ld(0x1549AB8)) - Ld(xyz), vz = St(Ld(0x1549AC0)) - Ld(xyz + 8);
+    const F32 vy = Fst(St(Ld(0x1549ABC)) - Ld(xyz + 4)), vzf = Fst(vz);
+    Put(e - 8, vy);
+    Put(e - 4, vzf);
+    const F32 length2 = Fst(vz * vzf + St(vy) * vy + vx * vx);
+    Put(e - 0x20, length2);
+    Put(e - 0x1C, length2);
+    const F32 y = {0x5F3759DFu - uint32_t(int32_t(length2.bits) >> 1)};
+    Put(e - 0x24, y);
+    const St inverse = (1.5f - St(length2) * 0.5f * y * y) * y;
+    const St dot = St(vzf) * rz + St(vy) * ry + vx * rx;
+    const F32 spec = Fst(inverse * dot);
+    Put(e - 0x20, spec);
+    uint32_t a = 0;
+    if (!(St(spec) < 0.0f)) {
+      const St s2 = St(spec) * spec;
+      a = uint32_t(Ftol(s2 * s2 * 255.0f));
+      if (int32_t(a) > 0xFF) a = 0xFF;
+    }
+    Wr<uint8_t>(g_guest_base, alpha, uint8_t(a));
+    xyz += 4 * U32(kXyzStride);
+    normal += 0xC;
+    alpha += 4;
+  }
+  c.esp = e + 4;
+}
+
+// The diffuse lighting (stack: colours): the entity's light direction
+// (+0xA4) against the vertex normal; at most 0 the ambient light's colour
+// (+0xBC), else per channel the ambient (+0xB0) plus the directed light
+// (+0xC0) times it, 255 at most (through the scratch 0x13F96D8), opaque.
+void f_0050B040(Ctx& c) {
+  const uint32_t e = c.esp, ent = U32(0x1549B3C);
+  const F32 dir[3] = {Ld(ent + 0xA4), Ld(ent + 0xA8), Ld(ent + 0xAC)};
+  const F32 ambient[3] = {Ld(ent + 0xB0), Ld(ent + 0xB4), Ld(ent + 0xB8)};
+  const F32 directed[3] = {Ld(ent + 0xC0), Ld(ent + 0xC4), Ld(ent + 0xC8)};
+  const uint32_t ambient_colour = U32(ent + 0xBC);
+  uint32_t colour = Arg(c, e, 1), normal = kTessNormals + 4;
+  for (int32_t i = 0, n = I32(kTessVerts); i < n; i++) {
+    const St d = St(dir[2]) * Ld(normal + 4) + St(dir[0]) * Ld(normal - 4) +
+                 St(dir[1]) * Ld(normal);
+    const F32 df = Fst(d);
+    if (d <= 0.0f) {
+      Put(colour, ambient_colour);
+    } else {
+      for (uint32_t k = 0; k < 3; k++) {
+        int32_t v = Fistp(St(Fst(St(df) * directed[k] + ambient[k])));
+        Put(0x13F96D8, uint32_t(v));
+        if (v > 0xFF) v = 0xFF;
+        Wr<uint8_t>(g_guest_base, colour + k, uint8_t(v));
+      }
+      Wr<uint8_t>(g_guest_base, colour + 3, 0xFF);
+    }
+    colour += 4;
+    normal += 0xC;
+  }
+  c.esp = e + 4;
+}
+
+// The debug colour of a surface (EAX its index count, EDI the colour) for
+// the cvar 0x15343E8 above 6: a random direction seeded by the shader's
+// sort index (+0x48) and the count (rand's state kept), normalised; else
+// by the count, from grey for 30 or fewer to green above 3000, in
+// tr.identityLightByte.
+void f_004F2E60(Ctx& c) {
+  const uint32_t e = c.esp, n = c.eax, to = c.edi;
+  auto byte = [](uint32_t va, uint32_t v) { Wr<uint8_t>(g_guest_base, va, uint8_t(v)); };
+  if (int32_t(CvarInt(0x15343E8)) > 6) {
+    const uint32_t esi = c.esi, v = e - 0xC;
+    c.esp = e - 0x2C;
+    Call(c, f_0051B5EC, 0x4F2E7B);
+    const uint32_t seed = c.eax;
+    Push(c, (U32(U32(kTessShader) + 0x48) + n) * 0x7A69);
+    Call(c, f_0051B5DF, 0x4F2E94);
+    c.esp += 4;
+    static constexpr uint32_t kRand[3] = {0x4F2E9C, 0x4F2EB3, 0x4F2ECA};
+    for (uint32_t k = 0; k < 3; k++) {
+      Call(c, f_0051B5EC, kRand[k]);
+      Put(v + 4 * k, Fst(FromInt(int32_t(c.eax)) * 0x1p-15f));
+    }
+    c.esi = v;
+    Call(c, f_00426710, 0x4F2EE5);
+    PopSt0(c);
+    for (uint32_t k = 0; k < 3; k++)
+      byte(to + k, uint32_t(Fistp(St(Fst(St(Ld(v + 4 * k)) * 255.0f)) + St(0x1p-30))));
+    Push(c, seed);
+    Call(c, f_0051B5DF, 0x4F2F7F);
+    byte(to + 3, 0xFF);
+    c.esi = esi;
+    c.esp = e + 4;
+    return;
+  }
+  const int32_t light = I32(kIdentityLightByte), m = int32_t(n);
+  int32_t rgb[3];
+  if (m <= 30) rgb[0] = rgb[1] = rgb[2] = light;
+  else if (m <= 150) rgb[0] = light, rgb[1] = rgb[2] = light >> 1;
+  else if (m <= 450) rgb[0] = light, rgb[1] = rgb[2] = 0;
+  else if (m <= 1200) rgb[0] = rgb[1] = light, rgb[2] = 0;
+  else if (m > 3000) rgb[0] = rgb[2] = 0, rgb[1] = light;
+  else rgb[0] = rgb[1] = light >> 2, rgb[2] = light;
+  for (uint32_t k = 0; k < 3; k++) byte(to + k, uint32_t(rgb[k]));
+  byte(to + 3, 0xFF);
+  c.esp = e + 4;
+}
+
 // ---- a stage's colours ----------------------------------------------------------
 
 namespace {
@@ -1291,12 +1527,14 @@ void ViewAlphas(Ctx& c, uint32_t e, uint32_t ret, bool xz, bool negate, F alpha)
 }  // namespace
 
 // A stage's vertex colours (stage on the stack) into the stage colours
-// 0x16E0C40, by its rgbGen (+0x664: 2 white, 3/4 and 8-10 lifted
-// generators, 5 the vertex colours, 6 them shifted down by the overbright
-// bits, 7 one minus them, 12 a constant (+0x680), 13 a constant or the
-// debug colours, otherwise tr.identityLight's byte) and alphaGen (+0x67C:
-// 0 opaque, 2/3/6/7 lifted generators, 4 the vertices', 5 one minus them,
-// 8 the portal distance, 9 a constant (+0x683), 10-13 view-dependent),
+// 0x16E0C40, by its rgbGen (+0x664: 2 white, 3 the entity's, 4 one minus
+// it, 5 the vertex colours, 6 them shifted down by the overbright bits, 7
+// one minus them, 8 a waveform, 9/10 the diffuse lighting, 12 a constant
+// (+0x680), 13 a constant or the debug colours, otherwise
+// tr.identityLight's byte) and alphaGen (+0x67C: 0 opaque, 2 the
+// entity's, 3 one minus it, 4 the vertices', 5 one minus them, 6
+// specular, 7 a waveform, 8 the portal distance, 9 a constant (+0x683),
+// 10-13 view-dependent),
 // from the tessellator's vertices (colours 0x1690C40). The stage's slot is
 // the original's scratch for the values it converts.
 void f_004F4FA0(Ctx& c) {

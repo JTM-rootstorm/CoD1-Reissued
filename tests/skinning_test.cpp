@@ -113,6 +113,8 @@ void f_00507F40_lifted(Ctx& c);
 void f_00507F40(Ctx& c) { f_00507F40_lifted(c); }
 void f_005082D0_lifted(Ctx& c);
 void f_005082D0(Ctx& c) { f_005082D0_lifted(c); }
+void f_004F2E60_lifted(Ctx& c);
+void f_004F2E60(Ctx& c) { f_004F2E60_lifted(c); }
 }  // namespace gen
 
 // Nothing the cases reach calls out: RB_CheckOverflow never overflows.

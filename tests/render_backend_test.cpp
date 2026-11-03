@@ -155,7 +155,8 @@ namespace gen {
 // The stubs: the video generator's update (ECX; time, unit), the register
 // combiners (combiners), the vertex program (ESI), the vertex deforms
 // (every register: the dispatch passes them as the original leaves them),
-// and the colour and alpha generators.
+// and the CRT's rand and srand (the debug colours; its state is the
+// thread's).
 void f_004FCE80(Ctx& c) { Stub(c, 0x4FCE80, kEcx, 2); }
 void f_004F3A70(Ctx& c) { Stub(c, 0x4F3A70, 0, 1); }
 void f_004F3C70(Ctx& c) { Stub(c, 0x4F3C70, kEsi, 0); }
@@ -171,15 +172,8 @@ COD1_STUB(00508800, kAll, 0)
 COD1_STUB(005095F0, kAll, 0)
 COD1_STUB(005098A0, kAll, 0)
 COD1_STUB(00509190, kAll, 0)
-COD1_STUB(0050A030, kEcx, 0)
-COD1_STUB(0050A070, kEcx, 0)
-COD1_STUB(0050A170, kEax | kEsi, 0)
-COD1_STUB(0050B040, 0, 1)
-COD1_STUB(004F2E60, kEax | kEdi, 0)
-COD1_STUB(0050A0E0, kEcx, 0)
-COD1_STUB(0050A120, kEcx, 0)
-COD1_STUB(0050AEC0, kEax, 0)
-COD1_STUB(0050A270, kEax, 1)
+COD1_STUB(0051B5EC, 0, 0)
+COD1_STUB(0051B5DF, 0, 1)
 // Under the stages and the flush: ComputeTexCoords, the
 // immediate-mode batch's begin, the debug lines and normals, setting a cvar,
 // printing, va and fprintf, each with the registers the native code keeps
@@ -252,6 +246,15 @@ void f_004F4BD0_lifted(Ctx& c);
 void f_004F5F50_lifted(Ctx& c);
 void f_00507F40_lifted(Ctx& c);
 void f_005082D0_lifted(Ctx& c);
+void f_0050A030_lifted(Ctx& c);
+void f_0050A070_lifted(Ctx& c);
+void f_0050A0E0_lifted(Ctx& c);
+void f_0050A120_lifted(Ctx& c);
+void f_0050A170_lifted(Ctx& c);
+void f_0050A270_lifted(Ctx& c);
+void f_0050AEC0_lifted(Ctx& c);
+void f_0050B040_lifted(Ctx& c);
+void f_004F2E60_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -295,6 +298,15 @@ void f_004F4BD0(Ctx& c) { f_004F4BD0_lifted(c); }
 void f_004F5F50(Ctx& c) { f_004F5F50_lifted(c); }
 void f_00507F40(Ctx& c) { f_00507F40_lifted(c); }
 void f_005082D0(Ctx& c) { f_005082D0_lifted(c); }
+void f_0050A030(Ctx& c) { f_0050A030_lifted(c); }
+void f_0050A070(Ctx& c) { f_0050A070_lifted(c); }
+void f_0050A0E0(Ctx& c) { f_0050A0E0_lifted(c); }
+void f_0050A120(Ctx& c) { f_0050A120_lifted(c); }
+void f_0050A170(Ctx& c) { f_0050A170_lifted(c); }
+void f_0050A270(Ctx& c) { f_0050A270_lifted(c); }
+void f_0050AEC0(Ctx& c) { f_0050AEC0_lifted(c); }
+void f_0050B040(Ctx& c) { f_0050B040_lifted(c); }
+void f_004F2E60(Ctx& c) { f_004F2E60_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -336,6 +348,15 @@ void n_004F4BD0(Ctx& c);
 void n_004F5F50(Ctx& c);
 void n_00507F40(Ctx& c);
 void n_005082D0(Ctx& c);
+void n_0050A030(Ctx& c);
+void n_0050A070(Ctx& c);
+void n_0050A0E0(Ctx& c);
+void n_0050A120(Ctx& c);
+void n_0050A170(Ctx& c);
+void n_0050A270(Ctx& c);
+void n_0050AEC0(Ctx& c);
+void n_0050B040(Ctx& c);
+void n_004F2E60(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -413,6 +434,9 @@ struct Entry {
   Fn lifted, native;
   const char* name;
   uint32_t frame = 0;  // the bytes below the return address compared
+  // The x87 registers it uses at most: the game calls it with an empty
+  // stack, the cases with up to 2 values below, as many as leave it room.
+  uint32_t x87 = 6;
 };
 #define COD1_ENTRY(va, name, ...) \
   {0x##va, recomp::gen::f_##va##_lifted, recomp::gen::n_##va, name __VA_OPT__(,) __VA_ARGS__}
@@ -427,8 +451,8 @@ const Entry kEntries[] = {
     COD1_ENTRY(004F3D80, "stage textures"), COD1_ENTRY(004C8830, "fog params"),
     COD1_ENTRY(004C89A0, "fog off"),       COD1_ENTRY(004F5D50, "flush fog"),
     COD1_ENTRY(004F4090, "units reset"),   COD1_ENTRY(00509F20, "deforms"),
-    COD1_ENTRY(004F4FA0, "stage colours"), COD1_ENTRY(004F5DE0, "stage draw"),
-    COD1_ENTRY(004F6070, "stage loop"),    COD1_ENTRY(004F60E0, "generic iterator"),
+    COD1_ENTRY(004F4FA0, "stage colours", 0, 7), COD1_ENTRY(004F5DE0, "stage draw", 0, 7),
+    COD1_ENTRY(004F6070, "stage loop", 0, 7),    COD1_ENTRY(004F60E0, "generic iterator", 0, 7),
     COD1_ENTRY(004F7C30, "optimised"),     COD1_ENTRY(004F7D00, "end surface"),
     COD1_ENTRY(004F39B0, "object coords"), COD1_ENTRY(004F3F00, "object textures"),
     COD1_ENTRY(004F6380, "shader memory"), COD1_ENTRY(004F66C0, "shader buffer"),
@@ -436,8 +460,13 @@ const Entry kEntries[] = {
     COD1_ENTRY(004F70F0, "world memory"),  COD1_ENTRY(004F73D0, "world buffer"),
     COD1_ENTRY(004F76B0, "world object"),  COD1_ENTRY(004F7950, "world memory 2"),
     COD1_ENTRY(004F30A0, "axes"),          COD1_ENTRY(004F4BD0, "dlight"),
-    COD1_ENTRY(004F5F50, "dlight pass"),   COD1_ENTRY(00507F40, "silhouette", 0x30),
+    COD1_ENTRY(004F5F50, "dlight pass", 0, 7),   COD1_ENTRY(00507F40, "silhouette", 0x30),
     COD1_ENTRY(005082D0, "shadow volume", 0x60),
+    COD1_ENTRY(0050A030, "entity colour"),  COD1_ENTRY(0050A070, "one minus entity"),
+    COD1_ENTRY(0050A0E0, "entity alpha"),   COD1_ENTRY(0050A120, "one minus alpha"),
+    COD1_ENTRY(0050A170, "wave colour"),    COD1_ENTRY(0050A270, "wave alpha"),
+    COD1_ENTRY(0050AEC0, "specular", 0, 7),      COD1_ENTRY(0050B040, "diffuse"),
+    COD1_ENTRY(004F2E60, "debug colour"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -521,7 +550,7 @@ void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
   c0.esp = esp;
   recomp::x87::Init(c0.fpu);
   recomp::x87::SetControlWord(c0.fpu, 0x027F);
-  for (uint32_t i = g() % 3; i; i--) recomp::x87::LoadF32(c0.fpu, g());
+  for (uint32_t i = g() % (9 - e.x87); i; i--) recomp::x87::LoadF32(c0.fpu, g());
   c0.mxcsr = recomp::sse::kMxcsrDefault;
 
   Ctx cl = c0;
@@ -652,9 +681,18 @@ uint32_t StateBits(std::mt19937& g) {
   return b;
 }
 
+// A waveform: its type (1-5 the tables, 6 the noise, now and then
+// another), base, amplitude, phase and frequency.
+void Wave(std::mt19937& g, uint32_t w) {
+  Wr(w, g() % 16 ? 1 + g() % 6 : g() % 8);
+  for (uint32_t i = 4; i < 0x14; i += 4)
+    Wr(w + i, g() % 4 ? Float(float(int(g() % 4001) - 2000) / 1000.0f) : RandFloat(g));
+}
+
 // A stage: 8 bundles of 200 bytes from +4, then the combiners, vertex
 // program and fragment shader at +0x644..+0x64C, the colour and alpha
-// generators (+0x664, +0x67C, constant +0x680) and the state bits +0x684.
+// waveforms (+0x650, +0x668), the colour and alpha generators (+0x664,
+// +0x67C, constant +0x680) and the state bits +0x684.
 uint32_t Bundle(Arena& a, std::mt19937& g, uint32_t b) {
   // Up to 32 images (+0..+0x7C), from a few distinct ones; the count now
   // and then negative.
@@ -690,6 +728,8 @@ uint32_t Stage(Arena& a, std::mt19937& g) {
   Wr(s + 0x644, g() % 4 ? Rd(0x1534670) : g() % 3);
   Wr(s + 0x648, g() % 8 == 0 ? g() : 0);
   Wr(s + 0x64C, g() % 8 == 0 ? g() : 0);
+  Wave(g, s + 0x650);
+  Wave(g, s + 0x668);
   Wr(s + 0x664, g() % 8 ? g() % 15 : uint32_t(g()));
   Wr(s + 0x67C, g() % 8 ? g() % 15 : uint32_t(g()));
   Wr(s + 0x680, uint32_t(g()));
@@ -765,6 +805,7 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(shader + 0xA4, RandFloat(g));
   Wr(shader + 0xAC, g() % 8 ? g() % 5 : g() % 9);
   for (uint32_t d = 0; d < 8; d++) Wr(shader + 0xB0 + 0x34 * d, g() % 8 ? 1 + g() % 18 : g() % 24);
+  Wr(shader + 0x48, uint32_t(g()));
   Wr(shader + 0x50, uint32_t(g()));
   g_mem.write<uint8_t>(shader + 0x54, uint8_t(g()));
   Wr(shader + 0x58, g() % 4 ? Pick(g, {0x40A00000, 0x40800000, 0x40C00000, 0x41000000, 0x3F800000}) : RandFloat(g));
@@ -865,9 +906,10 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(0x1549B0C, g());
   Wr(0x1549B10, g());
   if (g() % 2) Wr(0x1536290, 0x3F800000);  // tr.identityLight 1
-  Wr(0x1536294, g() & 0xFF);
+  Wr(0x1536294, g() % 8 ? g() & 0xFF : g());
   Wr(0x1536298, g() % 4 ? g() % 3 : uint32_t(g()));  // overbright bits
   for (uint32_t i = 0; i < 12; i += 4) Wr(0x1549828 + i, RandFloat(g));  // view origin
+  for (uint32_t i = 0; i < 12; i += 4) Wr(0x1549AB8 + i, RandFloat(g));  // and the entity's
   if (g() % 2) {
     Wr(0x1549B3C, 0x1535D6C);  // the world entity
   } else {
@@ -885,6 +927,11 @@ void Randomize(Arena& a, std::mt19937& g) {
     Wr(ent + 0xD4 + 8 * i, RandFloat(g));
   }
   for (uint32_t i = 0xA4; i < 0xB0; i += 4) Wr(ent + i, RandFloat(g));  // light direction
+  // Its colour, ambient and directed light (and the ambient's colour).
+  Wr(ent + 0x6C, uint32_t(g()));
+  for (uint32_t i = 0xB0; i < 0xCC; i += 4)
+    Wr(ent + i, g() % 4 ? Float(float(g() % 40000) / 100.0f - 50.0f) : RandFloat(g));
+  Wr(ent + 0xBC, uint32_t(g()));
   Wr(0x154D734, g() % 2);
   Wr(0x15343F0, Cvar(a, g, 0));                  // the far clip
   if (g() % 2) Wr(Rd(0x15343F0) + 0x1C, 0);
@@ -1064,6 +1111,35 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       k.edx = 0x1670C40;
       k.args = {Rd(0x1549804) + 0x88 * uint32_t(g() % 4), a.Alloc(0x80)};
       break;
+    case 0x50A030:
+    case 0x50A070:
+    case 0x50A0E0:
+    case 0x50A120:
+      k.ecx = 0x16E0C40;
+      if (g() % 8 == 0) Wr(0x1549B3C, 0);
+      break;
+    case 0x50A170:
+      k.esi = a.Alloc(0x14);
+      Wave(g, k.esi);
+      k.eax = 0x16E0C40;
+      break;
+    case 0x50A270:
+      k.eax = a.Alloc(0x14);
+      Wave(g, k.eax);
+      k.args = {0x16E0C40};
+      break;
+    case 0x50AEC0:
+      k.eax = 0x16E0C40;
+      break;
+    case 0x50B040:
+      k.args = {0x16E0C40};
+      break;
+    case 0x4F2E60:
+      // The index count, now and then on a colour band's edge.
+      k.eax = g() % 4 ? Pick(g, {30, 31, 150, 151, 450, 451, 1200, 1201, 3000, 3001})
+                      : g() % 8 ? g() % 4000 : g();
+      k.edi = 0x16E0C40;
+      break;
     case 0x4F3D80: {
       const uint32_t coords = a.Alloc(32);
       for (uint32_t u = 0; u < 8; u++) Wr(coords + 4 * u, uint32_t(g()));
@@ -1098,6 +1174,16 @@ int main(int argc, char** argv) {
   recomp::x87::run::g_doubles = false;
 
   std::mt19937 g(20261025);
+  // The waveforms' tables (sin, square, triangle, sawtooth, inverse
+  // sawtooth: 1024 floats each) and the noise's permutation and values, as
+  // the renderer's init fills them, with now and then a special value.
+  for (uint32_t i = 0; i < 5 * 0x1000; i += 4)
+    Wr(0x1544530 + i, g() % 16 ? Float(float(int(g() % 2001) - 1000) / 1000.0f) : RandFloat(g));
+  for (uint32_t i = 0; i < 0x400; i += 4) {
+    Wr(0x1195C38 + i, g() & 0xFF);
+    Wr(0x1196038 + i, g() % 16 ? Float(float(int(g() % 2001) - 1000) / 1000.0f) : RandFloat(g));
+  }
+
   Stats s;
   Arena a;
   for (int i = 0; i < 200000; i++) Cases(a, g, s);
