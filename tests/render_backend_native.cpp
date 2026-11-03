@@ -40,4 +40,6 @@
 #define f_004F30A0 n_004F30A0
 #define f_004F4BD0 n_004F4BD0
 #define f_004F5F50 n_004F5F50
+#define f_00507F40 n_00507F40
+#define f_005082D0 n_005082D0
 #include "../src/render_backend.cpp"

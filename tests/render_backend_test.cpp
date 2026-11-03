@@ -11,7 +11,10 @@
 // same bytes in the renderer's globals, the case's structures and the stack
 // arguments, the same calls, and the same ESP, EBX, ESI, EDI, EBP and x87
 // stack (top, empty registers, control word). Not compared: EAX, ECX, EDX,
-// EFLAGS, the x87 status word and the stack below the return address.
+// EFLAGS, the x87 status word and the stack below the return address
+// (which both runs start from as the last case left it: the optimised
+// iterators pass locals they leave unwritten on some paths), but for the
+// shadow volumes' frames, which the native code leaves as the original.
 //
 //   render_backend_test EXE
 //
@@ -99,6 +102,10 @@ constexpr Gl kGl[] = {
     {0x1535390, "glArrayObjectATI", 6},
     {0x153539C, "glDepthRange", 4},
     {0x1534EB0, "glColor4ubv", 1, false, 0, 1},
+    {0x153501C, "glDrawArrays", 3},
+    {0x1534DF8, "glColorMask", 4},
+    {0x1534E7C, "glStencilFunc", 3},
+    {0x1535428, "glStencilOp", 3},
     {0x1830CA0, "stage iterator", 1, true},
     {0x1549600, "ri.Printf", 2, true},
     {0x1549604, "ri.Error", 2, true},
@@ -174,11 +181,11 @@ COD1_STUB(0050A120, kEcx, 0)
 COD1_STUB(0050AEC0, kEax, 0)
 COD1_STUB(0050A270, kEax, 1)
 // Under the stages and the flush: ComputeTexCoords, the
-// flush of shader 0x1535AEC, the debug lines and normals, setting a cvar,
+// immediate-mode batch's begin, the debug lines and normals, setting a cvar,
 // printing, va and fprintf, each with the registers the native code keeps
 // as the original has them.
 COD1_STUB(004F5940, kEax | kSaved, 0)
-COD1_STUB(005082D0, kSaved, 0)
+COD1_STUB(004ADC20, kSaved, 0)
 COD1_STUB(004F44A0, kEax | kSaved, 0)
 COD1_STUB(004F4560, kSaved, 1)
 COD1_STUB(004F4850, kSaved, 0)
@@ -243,6 +250,8 @@ void f_004F7950_lifted(Ctx& c);
 void f_004F30A0_lifted(Ctx& c);
 void f_004F4BD0_lifted(Ctx& c);
 void f_004F5F50_lifted(Ctx& c);
+void f_00507F40_lifted(Ctx& c);
+void f_005082D0_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -284,6 +293,8 @@ void f_004F7950(Ctx& c) { f_004F7950_lifted(c); }
 void f_004F30A0(Ctx& c) { f_004F30A0_lifted(c); }
 void f_004F4BD0(Ctx& c) { f_004F4BD0_lifted(c); }
 void f_004F5F50(Ctx& c) { f_004F5F50_lifted(c); }
+void f_00507F40(Ctx& c) { f_00507F40_lifted(c); }
+void f_005082D0(Ctx& c) { f_005082D0_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -323,6 +334,8 @@ void n_004F7950(Ctx& c);
 void n_004F30A0(Ctx& c);
 void n_004F4BD0(Ctx& c);
 void n_004F5F50(Ctx& c);
+void n_00507F40(Ctx& c);
+void n_005082D0(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -399,8 +412,10 @@ struct Entry {
   uint32_t va;
   Fn lifted, native;
   const char* name;
+  uint32_t frame = 0;  // the bytes below the return address compared
 };
-#define COD1_ENTRY(va, name) {0x##va, recomp::gen::f_##va##_lifted, recomp::gen::n_##va, name}
+#define COD1_ENTRY(va, name, ...) \
+  {0x##va, recomp::gen::f_##va##_lifted, recomp::gen::n_##va, name __VA_OPT__(,) __VA_ARGS__}
 const Entry kEntries[] = {
     COD1_ENTRY(004C89D0, "fog on"),        COD1_ENTRY(004C8A20, "fog colour"),
     COD1_ENTRY(004CB3B0, "GL_Bind"),       COD1_ENTRY(004CB5D0, "cull"),
@@ -421,7 +436,8 @@ const Entry kEntries[] = {
     COD1_ENTRY(004F70F0, "world memory"),  COD1_ENTRY(004F73D0, "world buffer"),
     COD1_ENTRY(004F76B0, "world object"),  COD1_ENTRY(004F7950, "world memory 2"),
     COD1_ENTRY(004F30A0, "axes"),          COD1_ENTRY(004F4BD0, "dlight"),
-    COD1_ENTRY(004F5F50, "dlight pass"),
+    COD1_ENTRY(004F5F50, "dlight pass"),   COD1_ENTRY(00507F40, "silhouette", 0x30),
+    COD1_ENTRY(005082D0, "shadow volume", 0x60),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -440,11 +456,14 @@ const Window kGlobals[] = {
     {0x1534000, 0x3000}, {0x1549000, 0x1000}, {0x13F9000, 0x1000},
     {0x11E0000, 0x1000}, {0x17F0000, 0x1000}, {0x154D000, 0x1000}, {0x0, 0x100},
     {0x1830C00, 0x100},
-    // The tessellator's positions, vertex colours and normals, and the
-    // stage colours (as many as the cases' vertices use).
-    {0x1630C40, 0x800}, {0x1690C40, 0x100}, {0x1698C40, 0x200}, {0x16E0C40, 0x100},
+    // The tessellator's positions (with the shadow volume's copies),
+    // vertex colours and normals, and the stage colours (as many as the
+    // cases' vertices use).
+    {0x1630C40, 0xA00}, {0x1690C40, 0x100}, {0x1698C40, 0x200}, {0x16E0C40, 0x100},
     // The vertices' two axes and the dlight's texture coordinates.
     {0x16B0C40, 0x200}, {0x16C8C40, 0x200}, {0x1670C40, 0x200},
+    // The triangles' facing, the vertices' edges and their counts.
+    {0x11E16D8, 0x100}, {0x11F16D8, 0x2900}, {0x13F16D8, 0x100},
 };
 
 struct Stats {
@@ -487,7 +506,10 @@ void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
   Wr(esp, 0xDEAD0000);
   for (size_t i = 0; i < k.args.size(); i++) Wr(esp + 4 + 4 * uint32_t(i), k.args[i]);
   w.push_back({esp, 4 + 4 * uint32_t(k.args.size())});
+  if (e.frame) w.push_back({esp - e.frame, e.frame});
   const std::vector<uint8_t> before = Save(w);
+  const std::vector<Window> below = {{esp - 0x20000, 0x20000}};
+  const std::vector<uint8_t> stack = Save(below);
   Ctx c0{};
   c0.eax = k.eax;
   c0.ecx = k.ecx ? k.ecx : uint32_t(g());
@@ -508,6 +530,7 @@ void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
   const std::vector<uint8_t> after = Save(w);
   const std::vector<CallRec> lcalls = g_calls;
   Load(w, before);
+  Load(below, stack);
   Ctx cn = c0;
   g_calls.clear();
   e.native(cn);
@@ -732,7 +755,7 @@ void Randomize(Arena& a, std::mt19937& g) {
   // The tessellator: up to 40 vertices (positions 4 or 8 floats apart).
   Wr(0x17F0C88, g() % 16 ? g() % 41 : 0);
   Wr(0x17F0C60, g() % 4 ? 4 : 8);
-  for (uint32_t i = 0; i < 0x800; i += 4) Wr(0x1630C40 + i, RandFloat(g));
+  for (uint32_t i = 0; i < 0xA00; i += 4) Wr(0x1630C40 + i, RandFloat(g));
   for (uint32_t i = 0; i < 0x200; i += 4) Wr(0x1698C40 + i, RandFloat(g));
   for (uint32_t i = 0; i < 0x100; i += 4) {
     Wr(0x1690C40 + i, uint32_t(g()));
@@ -861,6 +884,7 @@ void Randomize(Arena& a, std::mt19937& g) {
     Wr(ent + 0xD0 + 8 * i, light);
     Wr(ent + 0xD4 + 8 * i, RandFloat(g));
   }
+  for (uint32_t i = 0xA4; i < 0xB0; i += 4) Wr(ent + i, RandFloat(g));  // light direction
   Wr(0x154D734, g() % 2);
   Wr(0x15343F0, Cvar(a, g, 0));                  // the far clip
   if (g() % 2) Wr(Rd(0x15343F0) + 0x1C, 0);
@@ -881,6 +905,39 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(0x1534654, g() % 2 ? Rd(sent + 0x24) : RandFloat(g));
   Wr(0x1534658, g() % 2 ? Rd(sent + 0x2C) : RandFloat(g));
   Wr(0x1549B18, g());
+  // The shadow volume: the stencil bits, now and then too many vertices;
+  // the edges left from before (counts now and then full or past it, the
+  // facings 0 or 1) and the triangles' facings; the immediate-mode batch
+  // (its vertices in the arena, now and then full or nearly).
+  Wr(0x1534768, g() % 4 ? 8 : g() % 8);
+  if (g() % 16 == 0) Wr(0x17F0C88, 0x1000 + g() % 2);
+  // Now and then a first triangle whose facing rests on the order of its
+  // dot product's sum: the normal (1, 1, 1), the light (1e-30, 1, -1).
+  if (g() % 8 == 0) {
+    const uint32_t stride = 4 * Rd(0x17F0C60);
+    const float v[3][3] = {{0, 0, 0}, {1, -1, 0}, {0, 1, -1}};
+    for (uint32_t i = 0; i < 3; i++) {
+      for (uint32_t k = 0; k < 3; k++) Wr(0x1630C40 + stride * i + 4 * k, Float(v[i][k]));
+      g_mem.write<uint16_t>(0x1618C40 + 2 * i, uint16_t(i));
+    }
+    if (Rd(0x17F0C84) < 3) Wr(0x17F0C84, 3);
+    Wr(ent + 0xA4, Float(1e-30f));
+    Wr(ent + 0xA8, Float(1.0f));
+    Wr(ent + 0xAC, Float(-1.0f));
+  }
+  for (uint32_t i = 0; i < 0x100; i += 4) {
+    Wr(0x13F16D8 + i, g() % 4 ? g() % 4 : g() % 8 ? g() % 34 : 0x20);
+    Wr(0x11E16D8 + i, uint32_t(g()));
+  }
+  for (uint32_t i = 0; i < 0x2900; i += 8) {
+    Wr(0x11F16D8 + i, g() % 40);
+    Wr(0x11F16DC + i, g() % 2);
+  }
+  const uint32_t batch = g() % 4 ? 64 : g() % 6;
+  Wr(0x15495EC, batch);
+  Wr(0x15495E8, batch ? g() % batch : 0);
+  Wr(0x15495F0, a.Alloc(32 * 64));
+  for (uint32_t i = 0x15495C4; i < 0x15495DC; i += 4) Wr(i, uint32_t(g()));
 }
 
 // Triangles that continue a strip (the next triangle on the shared edge,

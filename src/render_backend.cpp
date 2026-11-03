@@ -7,7 +7,7 @@
 // texture units back to one, the vertex deforms and each stage's colours,
 // and the flush itself: a stage's draw, the stage loop, the generic stage
 // iterator with the dlight pass, the optimised iterators and their
-// dispatch, and RB_EndSurface. Replacements of lifted functions named
+// dispatch, the shadow volumes of shader 0x1535AEC, and RB_EndSurface. Replacements of lifted functions named
 // with `replace` in manifest/CoDSP.manifest; FINDINGS.md "Renderer back
 // end". Names and evidence are in the Ghidra plate comments.
 //
@@ -19,7 +19,8 @@
 // the originals' (register arguments from whole-program optimisation; see
 // each function). Not reproduced: EAX, ECX and EDX on return (no caller
 // reads them), the saved registers and locals in the original's frame
-// below ESP, EFLAGS and the x87 status word (x87_value.h).
+// below ESP (but for the shadow volumes', f_005082D0), EFLAGS and the x87
+// status word (x87_value.h).
 
 #include <cstdint>
 
@@ -65,7 +66,7 @@ void f_0050A270(Ctx& c);
 void f_00426A60(Ctx& c);  // rotates ECX by the axes EAX into EDX
 void f_004268B0(Ctx& c);  // normalises EAX (approximate inverse square root)
 void f_004F5940(Ctx& c);  // ComputeTexCoords (EAX stage; src/render.cpp)
-void f_005082D0(Ctx& c);  // the flush of shader 0x1535AEC
+void f_004ADC20(Ctx& c);  // begins the immediate-mode batch
 void f_004F44A0(Ctx& c);  // the debug lines of cvar 0x15343E8 (EAX the tessellator)
 void f_004F4560(Ctx& c);  // the white normals (the tessellator)
 void f_004F4850(Ctx& c);  // the coloured normals (EBX the tessellator)
@@ -131,7 +132,9 @@ constexpr uint32_t kglEnable = 0x1534F68, kglDisable = 0x15349E0,
                    kglVertexPointer = 0x15354F0, kglUnlockArraysEXT = 0x1534C2C,
                    kglArrayObjectATI = 0x1535390, kglBindBufferARB = 0x1534DE4,
                    kglDrawRangeElementsEXT = 0x1534DB0, kglDepthRange = 0x153539C,
-                   kglColor4ubv = 0x1534EB0;
+                   kglColor4ubv = 0x1534EB0, kglDrawArrays = 0x153501C,
+                   kglColorMask = 0x1534DF8, kglStencilFunc = 0x1534E7C,
+                   kglStencilOp = 0x1535428;
 // The refimport table's ri.Printf and ri.Error (cdecl).
 constexpr uint32_t kPrintf = 0x1549600, kError = 0x1549604;
 
@@ -1900,6 +1903,213 @@ void f_004F60E0(Ctx& c) {
   c.esi = esi;
   c.edi = edi;
   c.ebp = ebp;
+  c.esp = e + 4;
+}
+
+// ---- the shadow volumes ---------------------------------------------------------
+
+// The tessellator's edges (written by f_005082D0): per vertex a count
+// (32 at most) and 32 edges of 8 bytes, the other vertex and the facing of
+// their triangle (0 or 1); and per triangle its facing.
+constexpr uint32_t kEdgeCounts = 0x13F16D8, kEdges = 0x11F16D8, kFacing = 0x11E16D8;
+
+// The silhouette: each edge of a triangle facing the light that no edge
+// back from its other vertex with a facing triangle pairs, as a strip from
+// both vertices to their copies away from the light (the vertex count on)
+// through the immediate-mode batch: f_004ADC20 begins it (32-byte
+// vertices from 0x15495F0, 0x15495EC of them at most, the texture
+// coordinates 0x15495D0 and colour 0x15495D8 with each), glDrawArrays with
+// its mode 0x15495C8 draws each strip. Then the batch's flag 0x15495C4
+// off, the fog back on (the state bits' fog flag, unless 0x1549B50, as
+// f_004C89D0 has it) and the tessellator's vertex array. The pairing
+// counts are in the original's frame, indexed by the edges' facing; the
+// frame is left as the original leaves it (f_005082D0).
+void f_00507F40(Ctx& c) {
+  const uint32_t e = c.esp, hit = e - 8, edges = e - 0xC, left = e - 0x10;
+  Put(e - 0x14, c.ebx);
+  Put(e - 0x18, c.esi);
+  Put(e - 0x1C, c.edi);
+  c.esp = e - 0x1C;
+  Call(c, f_004ADC20, 0x507F4B);
+  auto vertex = [](uint32_t& count, uint32_t v, bool first) {
+    const uint32_t xyz = kTessXyz + 4 * (U32(kXyzStride) * v);
+    const F32 x = Fst(St(Ld(xyz))), y = Fst(St(Ld(xyz + 4))), z = Fst(St(Ld(xyz + 8)));
+    if (first) Put(0x15495C8, 5);
+    if (int32_t(count) >= I32(0x15495EC)) return;
+    const uint32_t out = U32(0x15495F0) + (count << 5);
+    for (uint32_t k = 0; k < 4; k++) Wr<uint8_t>(g_guest_base, out + 0x1C + k, U8(0x15495D8 + k));
+    Put(out + 0xC, U32(0x15495D0));
+    const uint32_t t = U32(0x15495D4);
+    Put(out, x);
+    Put(out + 0x10, t);
+    Put(out + 4, y);
+    Put(out + 8, z);
+    count = U32(0x15495E8) + 1;
+    Put(0x15495E8, count);
+  };
+  if (I32(kTessVerts) > 0) {
+    Push(c, c.ebp);
+    uint32_t count = U32(0x15495E8), i = 0;
+    for (; int32_t(i) < I32(kTessVerts); i++) {
+      const int32_t n = I32(kEdgeCounts + 4 * i);
+      uint32_t edge = kEdges + 0x100 * i;
+      Put(edges, edge);
+      for (int32_t j = 0; j < n; j++, edge += 8) {
+        Put(left, uint32_t(n - j - 1));
+        if (!U32(edge + 4)) continue;
+        const uint32_t i2 = U32(edge);
+        const int32_t n2 = I32(kEdgeCounts + 4 * i2);
+        Put(hit, 0);
+        Put(hit + 4, 0);
+        for (int32_t k = 0; k < n2; k++) {
+          const uint32_t back = kEdges + 0x100 * i2 + 8 * k;
+          if (U32(back) != i) continue;
+          const uint32_t f = hit + 4 * U32(back + 4);
+          Put(f, U32(f) + 1);
+        }
+        if (U32(hit + 4)) continue;
+        vertex(count, i, true);
+        vertex(count, U32(kTessVerts) + i, false);
+        vertex(count, i2, false);
+        vertex(count, U32(kTessVerts) + i2, false);
+        Push(c, count);
+        Push(c, 0);
+        Push(c, U32(0x15495C8));
+        CallPtr(c, kglDrawArrays, 0x508216);
+        count = 0;
+        Put(0x15495E8, 0);
+        Put(0x15495C8, 0);
+      }
+    }
+    Put(edges, kEdges + 0x100 * i);
+    c.esp = e - 0x1C;
+  }
+  Put(0x15495C4, 0);
+  if (!U32(0x1549B50) && !(U32(kStateBits) & 0x200000) && CvarInt(0x15347F4) &&
+      U32(U8(0x15496EC) & 8 ? 0x1535890 : 0x13F9CF8)) {
+    Enable(c, 0xB60, 0x50829C);
+    Put(kStateBits, U32(kStateBits) | 0x200000);
+  }
+  Push(c, kTessXyz);
+  Push(c, 0);
+  Push(c, 0x1406);
+  Push(c, 3);
+  CallPtr(c, kglVertexPointer, 0x5082B5);
+  c.esp = e + 4;
+}
+
+// The flush of shader 0x1535AEC: the tessellator's shadow volume, with a
+// stencil buffer of 4 bits or more (0x1534768) and fewer than 0x1000
+// vertices. The vertices' copies 512 away along the entity's light
+// direction (0x1549B3C +0xA4) after them; each triangle's facing (its
+// normal towards the light) and its three edges (32 per vertex at most);
+// then the white image, state bits 0x12, a grey colour, colour writes off
+// and the stencil test always passing, and the silhouette (f_00507F40)
+// twice: back faces incrementing, front faces decrementing (the cull type
+// set as f_004CB5D0 sets it); colour writes back on. Its locals stay in
+// the original's frame: the world's optimised iterators (f_004F70F0),
+// which RB_EndSurface calls from the same depth, take their second unit's
+// texture coordinates from a local they never write, in this frame (the
+// last triangle's second edge).
+void f_005082D0(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi;
+  const uint32_t verts = U32(kTessVerts);
+  if (int32_t(verts) >= 0x1000 || I32(0x1534768) < 4) {
+    c.esp = e + 4;
+    return;
+  }
+  const uint32_t ent = U32(0x1549B3C);
+  const F32 light[3] = {Ld(ent + 0xA4), Ld(ent + 0xA8), Ld(ent + 0xAC)};
+  for (uint32_t k = 0; k < 3; k++) Put(e - 0x18 + 4 * k, light[k]);
+  if (int32_t(verts) > 0) {
+    const F32 away[3] = {Fst(St(light[0]) * 512.0f), Fst(St(light[1]) * 512.0f),
+                         Fst(St(light[2]) * 512.0f)};
+    for (uint32_t k = 0; k < 3; k++) Put(e - 0x3C + 4 * k, away[k]);
+    uint32_t from = kTessXyz, to = kTessXyz + 4 * (U32(kXyzStride) * verts);
+    for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++) {
+      for (uint32_t k = 0; k < 3; k++) Put(to + 4 * k, Fst(St(Ld(from + 4 * k)) - away[k]));
+      from += 4 * U32(kXyzStride);
+      to += 4 * U32(kXyzStride);
+    }
+  }
+  for (uint32_t i = 0, n = U32(kTessVerts); i < n; i++) Put(kEdgeCounts + 4 * i, 0);
+  auto edge = [](uint32_t a, uint32_t b, uint32_t t) {
+    const uint32_t n = U32(kEdgeCounts + 4 * a);
+    if (n == 0x20) return;
+    const uint32_t facing = U32(kFacing + 4 * t), at = kEdges + 8 * (32 * a + n);
+    Put(at, b);
+    Put(at + 4, facing);
+    Put(kEdgeCounts + 4 * a, n + 1);
+  };
+  const int32_t tris = I32(kTessIndexCount) / 3;
+  Put(e - 0x38, uint32_t(tris));
+  for (int32_t t = 0; t < tris; t++) {
+    const uint32_t ix = kTessIndexes + 6 * uint32_t(t);
+    const uint32_t i1 = U16(ix), i2 = U16(ix + 2), i3 = U16(ix + 4);
+    const uint32_t stride = U32(kXyzStride);
+    const uint32_t v1 = kTessXyz + 4 * (stride * i1), v2 = kTessXyz + 4 * (stride * i2),
+                   v3 = kTessXyz + 4 * (stride * i3);
+    F32 d1[3], d2[3];
+    for (uint32_t k = 0; k < 3; k++) d1[k] = Fst(St(Ld(v2 + 4 * k)) - Ld(v1 + 4 * k));
+    for (uint32_t k = 0; k < 3; k++) d2[k] = Fst(St(Ld(v3 + 4 * k)) - Ld(v1 + 4 * k));
+    const F32 n0 = Fst(St(d2[2]) * d1[1] - St(d2[1]) * d1[2]);
+    const F32 n1 = Fst(St(d2[0]) * d1[2] - St(d2[2]) * d1[0]);
+    const F32 n2 = Fst(St(d2[1]) * d1[0] - St(d2[0]) * d1[1]);
+    const F32 d = Fst(St(n2) * light[2] + St(n1) * light[1] + St(n0) * light[0]);
+    for (uint32_t k = 0; k < 3; k++) {
+      Put(e - 0x24 + 4 * k, d1[k]);
+      Put(e - 0x30 + 4 * k, d2[k]);
+    }
+    Put(e - 0xC, n0);
+    Put(e - 8, n1);
+    Put(e - 4, n2);
+    Put(e - 0x34, d);
+    Put(kFacing + 4 * uint32_t(t), d > 0.0f ? 1 : 0);
+    edge(i1, i2, uint32_t(t));
+    edge(i2, i3, uint32_t(t));
+    edge(i3, i1, uint32_t(t));
+  }
+  if (tris > 0) Put(e - 0x3C, kTessIndexes + 2 + 6 * uint32_t(tris));
+  c.esp = e - 0x48;
+  c.esi = U32(0x1535AC4);
+  Call(c, f_004CB3B0, 0x50858F);
+  c.eax = 0x12;
+  Call(c, f_004CB710, 0x508599);
+  for (int k = 0; k < 3; k++) Push(c, 0x3E4CCCCD);  // 0.2
+  CallPtr(c, kglColor3f, 0x5085A8);
+  for (int k = 0; k < 4; k++) Push(c, 0);
+  CallPtr(c, kglColorMask, 0x5085B6);
+  Enable(c, 0xB90, 0x5085C1);
+  Push(c, 0xFF);
+  Push(c, 1);
+  Push(c, 0x207);
+  CallPtr(c, kglStencilFunc, 0x5085D3);
+  c.esi = esi;
+  c.esp = e - 0x3C;
+  if (const uint32_t cull = U32(kCullType); cull != 1) {
+    if (cull == 2) Enable(c, 0xB44, 0x5085F0);
+    Push(c, U32(0x1549930) ? 0x404 : 0x405);
+    CallPtr(c, kglCullFace, 0x50860B);
+    Put(kCullType, 1);
+  }
+  Push(c, 0x1E02);
+  Push(c, 0x1E00);
+  Push(c, 0x1E00);
+  CallPtr(c, kglStencilOp, 0x50862A);
+  Call(c, f_00507F40, 0x508635);
+  if (const uint32_t cull = U32(kCullType)) {
+    if (cull == 2) Enable(c, 0xB44, 0x508648);
+    Push(c, U32(0x1549930) ? 0x405 : 0x404);
+    CallPtr(c, kglCullFace, 0x508663);
+    Put(kCullType, 0);
+  }
+  Push(c, 0x1E03);
+  Push(c, 0x1E00);
+  Push(c, 0x1E00);
+  CallPtr(c, kglStencilOp, 0x508682);
+  Call(c, f_00507F40, 0x50868D);
+  for (int k = 0; k < 4; k++) Push(c, 1);
+  CallPtr(c, kglColorMask, 0x508695);
   c.esp = e + 4;
 }
 

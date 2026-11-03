@@ -137,6 +137,37 @@ on gfx::Device" below).
   end in the cookie check (0x523CD9); the native code skips both, since
   the guest stack is committed whole (process.cpp) and a native frame
   has no cookie to check.
+- Layer 7, the shadow volumes (2026-11-02): 0x1535AEC is the shader the
+  entity surfaces get a second time with cg_shadows (0x15343D8) 2 and sort
+  5 (0x506070), and RB_EndSurface hands it to 0x5082D0: with a stencil of
+  4 bits or more (0x1534768) and fewer than 0x1000 vertices, each vertex
+  copied 512 back along the entity's light direction (+0xA4) after the
+  tessellator's (the vertex count on), each triangle's facing (its normal
+  dotted with the light direction above 0: 0x11E16D8) and its three edges
+  into 32 per vertex (0x11F16D8, counts 0x13F16D8); then GL_Bind of the
+  white image, state bits 0x12, glColor3f 0.2, glColorMask off,
+  GL_STENCIL_TEST, glStencilFunc(GL_ALWAYS, 1, 255), and the silhouette
+  0x507F40 twice, back faces with GL_INCR and front faces with GL_DECR
+  (the cull type set inline as 0x4CB5D0 does), glColorMask back on (all
+  four on: no glGetBooleanv as in Q3). 0x507F40 draws an edge of a facing
+  triangle unless an edge back from its other vertex has a facing
+  triangle, through the renderer's immediate-mode batch: 0x4ADC20 (stays
+  lifted) allocates it (32-byte vertices at 0x15495F0, 0x15495EC of them;
+  colour 0x15495D8, texture coordinates 0x15495D0/0x15495D4, mode
+  0x15495C8) and points the arrays at it; each edge is four vertices
+  drawn with glDrawArrays (0x153501C) as a strip (5); at the end the
+  batch flag 0x15495C4 off, the fog back on (0x200000, as 0x4C89D0 with
+  0x1549B50's test) and glVertexPointer back to the tessellator's. qgl
+  slots from QGL_Init's strings: glDrawArrays 0x153501C, glColorMask
+  0x1534DF8, glStencilFunc 0x1534E7C, glStencilOp 0x1535428. cg_shadows
+  is cheat protected: a walk sets it after the level loads, with
+  `+set thereisacow 1337 +set monkeytoy 0` on the command line (devmap
+  and sv_cheats 1 alone leave it protected). The two keep their locals in
+  the original's frame (0x507F40 its saved registers too): RB_EndSurface
+  calls 0x5082D0 and the optimised dispatch from the same depth, and the
+  world's iterators take their second unit's texture coordinates from
+  e-0x20, a local they never write, which lies in 0x5082D0's frame (its
+  last triangle's second edge, at either 8-byte alignment).
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -176,6 +207,19 @@ on gfx::Device" below).
   a t + 0.5 below 2^-150, which a sum with 0.5 never is (t's store
   before its test against 0), and one is a rounding mid-point random
   cases do not reach (the order of t's sum).
+  With layer 7: 200000 cases over 41 entries, 5.34M calls out, 0
+  mismatches (random edges left from before, facings, stencil bits and
+  the immediate-mode batch, now and then full; a first triangle whose
+  facing rests on the order of the dot product's sum; both runs start
+  from the same stack below ESP, as the optimised iterators read a local
+  left unwritten on some paths, which mismatched once 0x5082D0's frame
+  was no longer the original's; the shadow entries' frames compared).
+  Its mutations: 40, 36 fail the oracle (the dot product's order only
+  with that triangle); the 4 that pass cannot change a result: the batch
+  count read back after a vertex and the strip mode pushed as the 5 just
+  stored (equal unless the batch's vertices overlap its own globals),
+  hit[0]'s zeroing (never read), and the return address of a call into
+  0x507F40 (native in the game). Six more on the frame writes all fail.
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -207,6 +251,20 @@ on gfx::Device" below).
   times under gdb, 0x4F5F50 none: no dlight touches a batch on that
   path), so only the oracle covers it; a run with gunfire or explosions
   near lit surfaces would.
+  With layer 7 (2026-11-02; base this branch's layer 6 build): the walk
+  never reaches the shadow volumes with cg_shadows 0 (RB_EndSurface
+  165625 times under gdb, 0x5082D0 none). With the cheat flags and F7
+  setting cg_shadows 2 at 14 s, 0x5082D0 runs 7590 times and 0x507F40
+  15180. Standing (F7 only sets the cvar): all 13 loading and briefing
+  frames shared, 47 of 1640 in-level frames identical, the rest only in
+  the 2D text (at most 344 px, within (8,227)-(353,457); base against
+  base the same). Walking, layer 7 differs from base by up to 178k px a
+  frame from the walk's start until it stops at the wall (+121 to +199),
+  then agrees again; the differences are edges all over the frame, a
+  sub-unit camera offset: the client interpolates the view by real time,
+  and the native shadows make the frames faster. Two base walks agreed;
+  two layer 7 walks (before and after the frame writes) differed from
+  base by 10-20k and 140k px.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),
