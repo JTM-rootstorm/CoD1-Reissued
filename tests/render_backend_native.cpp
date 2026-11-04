@@ -79,4 +79,13 @@
 #define f_0050AE10 n_0050AE10
 #define f_00508A50 n_00508A50
 #define f_0050ABF0 n_0050ABF0
+#define f_004FAAB0 n_004FAAB0
+#define f_004FABD0 n_004FABD0
+#define f_004FACD0 n_004FACD0
+#define f_004FAF60 n_004FAF60
+#define f_004FB1B0 n_004FB1B0
+#define f_004FB660 n_004FB660
+#define f_004FB8C0 n_004FB8C0
+#define f_004FBAF0 n_004FBAF0
+#define f_004FBD50 n_004FBD50
 #include "../src/render_backend.cpp"

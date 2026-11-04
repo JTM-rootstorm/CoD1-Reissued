@@ -51,7 +51,8 @@ on gfx::Device" below).
   the original's stack locals). The stage's argument slot is the
   original's scratch for its int and float conversions. The colour and
   alpha generators are layer 8, the deforms layer 9, the texture
-  coordinate generators and modifiers layer 10.
+  coordinate generators and modifiers layer 10, the static model surfaces
+  that fill or draw the flush layer 11.
 - Layer 4, the stages and the flush: a stage's draw 0x4F5DE0 (EAX stage,
   EBX indexes, count on the stack: colours, ComputeTexCoords, the colour
   array, then all units when the second bundle has an image or the first
@@ -282,6 +283,46 @@ on gfx::Device" below).
   0x50AA30, the speed's argument slot left holding sin x 0.5; 8 0x50A890
   s and t swapped, t then 1 - s; 10 0x50AE10 (EAX) each vector into the
   vertices' axes (its dots with the tangent, binormal and normal).
+- Layer 11, the static model surfaces (2026-11-04): the surface table
+  0x564270 (indexed by a surface's type +0, called by the draw surface
+  loop 0x4CC670 and by 0x4CA8D0 with the surface on the stack), types
+  11-23, named by their log lines ("--- RB_SurfaceStaticModel( %s ) ---" and the
+  like). A surface: +0x10 its index count and +0x12 its vertex count (16
+  bits), +0x14 texture coordinates, +0x18 normals, +0x1C positions, +0x20
+  indexes, +0x24 its vertices (memory, vertex buffer or ATI array
+  object), +0x28 the index buffer or the object's offset, +0x2C the
+  indexes' offset in the object. 11 0x4FAAB0 into the tessellator:
+  positions (12 bytes a vertex, written at the tessellator's position
+  stride), texture coordinates and, for a shader with +0x50 & 0x102,
+  normals (then 0x17F0C64 set) by the memcpy 0x42B0A0; its indexes plus
+  the vertex count so far. 12-15 0x4FABD0 (the draw surface: +4 the
+  surface, +8 its first cached vertex): the optimised batch's vertex
+  range 0x17F0C8C..0x17F0C90 widened (signed), its indexes plus that
+  vertex added two to a dword (the low one's carry reaches the high one),
+  six at a time: an index count not a multiple of 6 loses the rest, and
+  one below 6 runs on for 2^32 sixes, as in the original. The rest draw
+  themselves through the fog, the cull and the client arrays (0x401, or
+  0x601 with normals): T2V3 (texture coordinates, position: 20 bytes) and
+  T2N3V3 (normal between: 32 bytes) in memory (16 0x4FBAF0 and 19
+  0x4FB660, the same code; 20 0x4FB8C0 and 23 0x4FBD50 likewise) or in a
+  vertex buffer with its index buffer (17 0x4FACD0, 21 0x4FAF60): each
+  stage of the batch, none skipped, with T2V3 a constant colour (rgbGen
+  11: tr.identityLight white for the cvar 0x15346C4, else the entity's
+  +0x6C; otherwise the stage's +0x680; before the state bits in memory,
+  after the textures in a buffer), its state bits, textures (f_004F3D80
+  from the vertices) and the triangles; the cvar 0x15343E8's triangles as
+  in the optimised iterators, but with the first bundle's image bound
+  (0x4F3330, GL_Bind) and tr.identityLight with red and green x 0.25
+  (that float left in the argument slot) unless T2V3 in memory (the
+  stage's textures, red x 0.5, green x 0.75). 18 and 22 0x4FB1B0 the ATI
+  array object (type 18 20 bytes with colours, else 32; the stride left
+  in the argument slot; textures by f_004F3F00), with
+  GL_ATI_element_array (0x15347BC, set by the extension loader's
+  "GL_ATI_element_array": glElementPointerATI 0x1534950,
+  glDrawElementArrayATI 0x1534AE0) its indexes from the object too
+  (glArrayObjectATI of GL_ELEMENT_ARRAY_ATI 0x8768, client state on and
+  off around the draws, uncached), else from +0x20. Each counts its
+  indexes and vertices into 0x1549B10/0x1549B0C.
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -388,6 +429,14 @@ on gfx::Device" below).
   whose counts past the vertex count are never read) and 1 is a gap (the
   rotation's sine stored unquietened, which shows only for a NaN in the
   table and in the coordinates at once).
+  With layer 11: 200000 cases over 87 entries, 4.16M calls out, 0
+  mismatches (each surface random in the arena; the ATI one's type 18,
+  22 or another; GL_ATI_element_array on or off; glDrawElementArrayATI
+  recorded; the cached surface's indexes in sixes, now and then a few
+  over, its first vertex now and then past 16 bits or negative). Its
+  mutations: 37, 36 fail the oracle; the other cannot change a result
+  (the stage loop's count compared unsigned: it is tested positive
+  before the loop).
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -454,6 +503,12 @@ on gfx::Device" below).
   loading and briefing frames shared, 46 of 1640 in-level frames
   identical, the rest in the 2D text, at most 713 px within
   (0,0)-(419,457), as base against base.
+  With layer 11 (2026-11-04): the walk reaches only the cached static
+  model surface 0x4FABD0 (275445 times under gdb, on the layer 10 build;
+  the other eight none). Standing, against the layer 10 build: all 13
+  loading and briefing frames shared, 46 of 1640 in-level frames
+  identical, the rest in the 2D text, at most 774 px within
+  (0,0)-(355,471), as base against base.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),

@@ -96,7 +96,8 @@ replace 0042B0A0
 # iterators' dispatch and RB_EndSurface; the eight optimised iterators and
 # a stage's texture units from an ATI vertex array object; the dlight pass;
 # the shadow volumes and their silhouette; the colour and alpha generators;
-# the vertex deforms; the texture coordinate generators and modifiers.
+# the vertex deforms; the texture coordinate generators and modifiers; the
+# static model surfaces.
 replace 004C89D0
 replace 004C8A20
 replace 004CB3B0
@@ -175,6 +176,15 @@ replace 0050AA80
 replace 0050AE10
 replace 00508A50
 replace 0050ABF0
+replace 004FAAB0
+replace 004FABD0
+replace 004FACD0
+replace 004FAF60
+replace 004FB1B0
+replace 004FB660
+replace 004FB8C0
+replace 004FBAF0
+replace 004FBD50
 
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0

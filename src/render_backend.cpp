@@ -8,7 +8,8 @@
 // (with the colour and alpha generators), and the flush itself: a stage's
 // draw, the stage loop, the generic stage iterator with the dlight pass,
 // the optimised iterators and their dispatch, the shadow volumes of shader
-// 0x1535AEC, and RB_EndSurface. Replacements of lifted functions named
+// 0x1535AEC, and RB_EndSurface; and the static model surfaces, which fill
+// the tessellator or the optimised batch or draw themselves. Replacements of lifted functions named
 // with `replace` in manifest/CoDSP.manifest; FINDINGS.md "Renderer back
 // end". Names and evidence are in the Ghidra plate comments.
 //
@@ -66,6 +67,7 @@ void f_00431CF0(Ctx& c);  // sets a cvar (name, value; EAX force)
 void f_0042E300(Ctx& c);  // prints (format, ...)
 void f_00440940(Ctx& c);  // va (format, ...)
 void f_0051D45A(Ctx& c);  // fprintf
+void f_0042B0A0(Ctx& c);  // the memcpy (src/render.cpp)
 
 namespace {
 
@@ -3642,6 +3644,518 @@ void f_004F7D00(Ctx& c) {
     c.esp += 0xC;
   }
   done();
+}
+
+// ---- the static model surfaces ---------------------------------------------------
+
+namespace {
+
+// A static model surface (the draw surface list's argument): +0 its type,
+// +0x10 its index count and +0x12 its vertex count (16 bits), +0x14 its
+// texture coordinates, +0x18 normals, +0x1C positions and +0x20 indexes;
+// +0x24 its vertices (in memory, a vertex buffer or an ATI array object),
+// +0x28 the index buffer or the object's offset, +0x2C the indexes' offset
+// in the object.
+constexpr uint32_t kglDrawElementArrayATI = 0x1534AE0;
+// GL_ATI_element_array is in use.
+constexpr uint32_t kElementArray = 0x15347BC;
+
+// The log line of cvar 0x1534704 (va of the format and the shader, then
+// "%s" to the log file), at the original's ESP; va at va_at, fprintf at
+// print_at.
+void LogShader(Ctx& c, uint32_t format, uint32_t va_at, uint32_t print_at) {
+  if (!CvarInt(0x1534704)) return;
+  Push(c, U32(kTessShader));
+  Push(c, format);
+  Call(c, f_00440940, va_at + 5);
+  c.esp += 8;
+  if (const uint32_t log = U32(0x1830CE4)) {
+    Push(c, c.eax);
+    Push(c, 0x55B2B4);  // "%s"
+    Push(c, log);
+    Call(c, f_0051D45A, print_at + 5);
+    c.esp += 0xC;
+  }
+}
+// A fixed line to the log file, if there is one.
+void LogLine(Ctx& c, uint32_t line, uint32_t va) {
+  if (const uint32_t log = U32(0x1830CE4)) {
+    Push(c, line);
+    Push(c, 0x55B2B4);
+    Push(c, log);
+    Call(c, f_0051D45A, va + 5);
+    c.esp += 0xC;
+  }
+}
+
+// A stage's constant colour for a static model: for rgbGen 11 white
+// (tr.identityLight) with the cvar 0x15346C4, else the entity's colour; for
+// any other its constant +0x680.
+void StaticColour(Ctx& c, uint32_t stage, uint32_t colour3f, uint32_t colour4ubv) {
+  if (U32(stage + 0x664) == 0xB) {
+    if (CvarInt(0x15346C4)) {
+      Push(c, U32(kIdentityLight));
+      Push(c, U32(kIdentityLight));
+      Push(c, U32(kIdentityLight));
+      CallPtr(c, kglColor3f, colour3f);
+      return;
+    }
+    Push(c, U32(kEntity) + 0x6C);
+  } else {
+    Push(c, stage + 0x680);
+  }
+  CallPtr(c, kglColor4ubv, colour4ubv);
+}
+
+// The surface's indexes counted (0x1549B14, 0x1549B18) and drawn; the
+// original leaves the draw count in EDI.
+void StaticDraw(Ctx& c, uint32_t surf, uint32_t indexes, uint32_t va) {
+  const uint32_t n = U16(surf + 0x10);
+  Put(0x1549B14, U32(0x1549B14) + n);
+  c.edi = U32(0x1549B18) + 1;
+  Put(0x1549B18, c.edi);
+  Push(c, indexes);
+  Push(c, 0x1403);
+  Push(c, n);
+  Push(c, 4);
+  CallPtr(c, kglDrawElements, va);
+}
+
+// A static model surface drawn from its own vertices: in memory or in a
+// vertex buffer (with its index buffer), 20 bytes a vertex (texture
+// coordinates and position) or 32 (with the normal between).
+struct StaticModel {
+  bool buffer, normals;
+  uint32_t log, log_at;  // the line and its fprintf
+  uint32_t fog, cull, arrays, bind[2], normal_ptr, vertex_ptr;
+  // Each stage: its colour (20-byte vertices only: in memory before its
+  // state, in a buffer after its textures), its state bits, its textures,
+  // the draw.
+  struct {
+    uint32_t colour3f, colour4ubv, state, units, draw;
+  } stage;
+  // The triangles drawn over it for the cvar 0x15343E8: the shader
+  // 0x1535B5C's first stage's textures (20-byte vertices in memory) or its
+  // first bundle's image bound.
+  struct {
+    uint32_t depth, state, units, image, bind, colour, colour4ubv, colour3f, draw, depth_back;
+  } tris;
+  uint32_t unbind[2], print;
+};
+
+// The static model surfaces (log lines "--- RB_SurfaceStaticModelT2V3_ARB
+// ---" and the like: T2 the texture coordinates, N3 the normal, V3 the
+// position): the line to the log file; the fog, the cull and the client
+// arrays (colours off for the normals'); the vertex buffer and the index
+// buffer bound; the normals and positions; then each stage of the batch
+// (0x1830C9C of 0x1830CA4, none skipped): its colour (for 20-byte
+// vertices, StaticColour), its state bits, its textures from the vertices
+// (f_004F3D80) and the surface's triangles. With the cvar 0x15343E8 they
+// are drawn again in the shader 0x1535B5C's first stage (bit 1: at a depth
+// range of 0 to 0.1f), coloured by f_004F2E60 from 5 up, else
+// tr.identityLight with red and green x 0.25 (their float left in the
+// argument slot) or, with that stage's textures, red x 0.5 and green x
+// 0.75; then the buffers unbound, "----------" to the log file and the
+// surface's indexes and vertices counted (0x1549B10, 0x1549B0C).
+void DrawStaticModel(Ctx& c, const StaticModel& m) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi;
+  c.esp = e - 0x20;
+  LogLine(c, m.log, m.log_at);
+  c.esp = e - 0x2C;
+  Call(c, f_004F5D50, m.fog + 5);
+  c.esi = U32(U32(kTessShader) + 0xA8);
+  Call(c, f_004CB5D0, m.cull + 5);
+  Push(c, m.normals ? 0x601 : 0x401);
+  Call(c, f_004CBBE0, m.arrays + 5);
+  c.esp += 4;
+  const uint32_t surf = Arg(c, e, 1), stride = m.normals ? 0x20 : 0x14;
+  c.ebx = surf;
+  if (m.buffer) {
+    Push(c, U32(surf + 0x24));
+    Push(c, 0x8892);
+    CallPtr(c, kglBindBufferARB, m.bind[0]);
+    Push(c, U32(surf + 0x28));
+    Push(c, 0x8893);
+    CallPtr(c, kglBindBufferARB, m.bind[1]);
+  }
+  const uint32_t base = m.buffer ? 0 : U32(surf + 0x24);
+  if (m.normals) {
+    Push(c, base + 8);
+    Push(c, stride);
+    Push(c, 0x1406);
+    CallPtr(c, kglNormalPointer, m.normal_ptr);
+  }
+  Push(c, base + (m.normals ? 0x14 : 8));
+  Push(c, stride);
+  Push(c, 0x1406);
+  Push(c, 3);
+  CallPtr(c, kglVertexPointer, m.vertex_ptr);
+  const uint32_t coords = e - 0x20, indexes = m.buffer ? 0 : U32(surf + 0x20);
+  Put(coords, base);
+  auto units = [&](uint32_t stage, uint32_t va) {
+    Push(c, stride);
+    Push(c, coords);
+    Push(c, stage);
+    Call(c, f_004F3D80, va + 5);
+    c.esp += 0xC;
+  };
+  c.esi = 0;
+  if (I32(kNumStages) > 0) {
+    do {
+      if (!m.normals && !m.buffer)
+        StaticColour(c, U32(U32(kTessStages) + 4 * c.esi), m.stage.colour3f, m.stage.colour4ubv);
+      c.edi = U32(U32(kTessStages) + 4 * c.esi);
+      c.eax = U32(c.edi + 0x684);
+      Call(c, f_004CB710, m.stage.state + 5);
+      units(c.edi, m.stage.units);
+      if (!m.normals && m.buffer)
+        StaticColour(c, U32(U32(kTessStages) + 4 * c.esi), m.stage.colour3f, m.stage.colour4ubv);
+      StaticDraw(c, surf, indexes, m.stage.draw);
+    } while (int32_t(++c.esi) < I32(kNumStages));
+  }
+  if (const uint32_t tris = CvarInt(0x15343E8)) {
+    if (tris & 1) {
+      Push(c, 0x3FB99999);  // 0.1f as a double
+      Push(c, 0xA0000000);
+      Push(c, 0);
+      Push(c, 0);
+      CallPtr(c, kglDepthRange, m.tris.depth);
+    }
+    c.eax = U32(U32(U32(0x1535B5C) + 0x154) + 0x684);
+    Call(c, f_004CB710, m.tris.state + 5);
+    c.esi = U32(U32(0x1535B5C) + 0x154);
+    if (m.tris.units) {
+      units(c.esi, m.tris.units);
+    } else {
+      c.esi += 4;
+      Push(c, U32(kUnit));
+      Call(c, f_004F3330, m.tris.image + 5);
+      c.esp += 4;
+      c.esi = c.eax;
+      Call(c, f_004CB3B0, m.tris.bind + 5);
+    }
+    if (I32(U32(0x15343E8) + 0x20) >= 5) {
+      c.eax = U16(surf + 0x10);
+      c.edi = e + 4;
+      Call(c, f_004F2E60, m.tris.colour + 5);
+      Push(c, e + 4);
+      CallPtr(c, kglColor4ubv, m.tris.colour4ubv);
+    } else if (m.tris.units) {
+      Push(c, U32(kIdentityLight));
+      Push(c, Fst(St(Ld(kIdentityLight)) * Ld(0x55B834)).bits);  // 0.75
+      Push(c, Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits);  // 0.5
+      CallPtr(c, kglColor3f, m.tris.colour3f);
+    } else {
+      Push(c, U32(kIdentityLight));
+      const F32 quarter = Fst(St(Ld(kIdentityLight)) * Ld(0x55B5EC));  // 0.25
+      Put(e + 4, quarter);
+      Push(c, quarter.bits);
+      Push(c, quarter.bits);
+      CallPtr(c, kglColor3f, m.tris.colour3f);
+    }
+    StaticDraw(c, surf, indexes, m.tris.draw);
+    Push(c, 0x3FF00000);  // 1.0
+    Push(c, 0);
+    Push(c, 0);
+    Push(c, 0);
+    CallPtr(c, kglDepthRange, m.tris.depth_back);
+  }
+  if (m.buffer) {
+    Push(c, 0);
+    Push(c, 0x8892);
+    CallPtr(c, kglBindBufferARB, m.unbind[0]);
+    Push(c, 0);
+    Push(c, 0x8893);
+    CallPtr(c, kglBindBufferARB, m.unbind[1]);
+  }
+  LogLine(c, 0x541D04, m.print);  // "----------\n"
+  Put(0x1549B10, U32(0x1549B10) + U16(surf + 0x10));
+  Put(0x1549B0C, U32(0x1549B0C) + U16(surf + 0x12));
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+}  // namespace
+
+// "--- RB_SurfaceStaticModel( %s ) ---": the surface into the tessellator
+// (stack: surface): its positions (12 bytes a vertex, at the tessellator's
+// position stride), texture coordinates and, for a shader with +0x50 bit
+// 0x102, normals (then 0x17F0C64 set), copied by the memcpy 0x42B0A0; its
+// indexes plus the vertex count so far (16 bits); then both counts.
+void f_004FAAB0(Ctx& c) {
+  const uint32_t e = c.esp;
+  LogShader(c, 0x53BCB0, 0x4FAAC8, 0x4FAAE1);
+  c.esp = e - 4;
+  const uint32_t surf = Arg(c, e, 1), verts = U32(kTessVerts);
+  auto copy = [&](uint32_t dst, uint32_t src, uint32_t n, uint32_t va) {
+    Push(c, n);
+    Push(c, src);
+    Push(c, dst);
+    Call(c, f_0042B0A0, va + 5);
+  };
+  copy(kTessXyz + 4 * U32(kXyzStride) * verts, U32(surf + 0x1C), 12 * U16(surf + 0x12), 0x4FAB12);
+  copy(kTessTexCoords + 8 * U32(kTessVerts), U32(surf + 0x14), 8 * U16(surf + 0x12), 0x4FAB31);
+  c.esp = e - 4;
+  if (U32(U32(kTessShader) + 0x50) & 0x102) {
+    copy(kTessNormals + 12 * U32(kTessVerts), U32(surf + 0x18), 12 * U16(surf + 0x12), 0x4FAB68);
+    c.esp = e - 4;
+    Put(0x17F0C64, 1);
+  }
+  for (uint32_t i = 0; int32_t(i) < int32_t(U16(surf + 0x10)); i++)
+    Wr<uint16_t>(g_guest_base, kTessIndexes + 2 * (U32(kTessIndexCount) + i),
+                 uint16_t(U16(U32(surf + 0x20) + 2 * i) + U16(kTessVerts)));
+  Put(kTessIndexCount, U32(kTessIndexCount) + U16(surf + 0x10));
+  Put(kTessVerts, U32(kTessVerts) + U16(surf + 0x12));
+  c.esp = e + 4;
+}
+
+// "--- RB_SurfaceStaticModelCached( %s ) ---" (stack: the draw surface: +4
+// the model's surface, +8 its first vertex in the cached vertices): the
+// batch's vertex range widened to it (set by the first), and its indexes
+// plus that vertex added to the optimised batch, two to a dword (the low
+// one's carry reaches the high one) and six at a time, as many sixes as
+// it has (none: the original runs on for 2^32 of them).
+void f_004FABD0(Ctx& c) {
+  const uint32_t e = c.esp;
+  LogShader(c, 0x53BC84, 0x4FABE8, 0x4FAC01);
+  const uint32_t draw = Arg(c, e, 1), surf = U32(draw + 4), first = U32(draw + 8);
+  const uint32_t end = U16(surf + 0x12) + first;
+  if (!U32(0x17F0C90)) {
+    Put(0x17F0C8C, first);
+    Put(0x17F0C90, end);
+  } else {
+    if (I32(0x17F0C8C) > int32_t(first)) Put(0x17F0C8C, first);
+    if (I32(0x17F0C90) < int32_t(end)) Put(0x17F0C90, end);
+  }
+  const uint32_t n = U16(surf + 0x10), add = (first << 16) | first;
+  uint32_t dst = 0x17F0C94 + 2 * U32(0x1830C94), src = U32(surf + 0x20), sixes = n / 6;
+  Put(0x1830C94, U32(0x1830C94) + n);
+  do {
+    for (int k = 0; k < 3; k++, dst += 4, src += 4) Put(dst, U32(src) + add);
+  } while (--sixes);
+  c.esp = e + 4;
+}
+
+// RB_SurfaceStaticModelT2V3_ARB: 20-byte vertices in a vertex buffer.
+void f_004FACD0(Ctx& c) {
+  static constexpr StaticModel m = {
+      .buffer = true,
+      .log = 0x53BC5C, .log_at = 0x4FACE7,
+      .fog = 0x4FACF2, .cull = 0x4FAD02, .arrays = 0x4FAD0C,
+      .bind = {0x4FAD21, 0x4FAD30}, .vertex_ptr = 0x4FAD41,
+      .stage = {0x4FADAB, 0x4FADC5, 0x4FAD6E, 0x4FAD7B, 0x4FADF4},
+      .tris = {0x4FAE2B, 0x4FAE42, 0, 0x4FAE5C, 0x4FAE66, 0x4FAE7F, 0x4FAE89, 0x4FAEAD, 0x4FAEDC,
+               0x4FAEED},
+      .unbind = {0x4FAEFA, 0x4FAF07}, .print = 0x4FAF21};
+  DrawStaticModel(c, m);
+}
+// RB_SurfaceStaticModelT2N3V3_ARB: 32-byte vertices in a vertex buffer.
+void f_004FAF60(Ctx& c) {
+  static constexpr StaticModel m = {
+      .buffer = true, .normals = true,
+      .log = 0x53BC30, .log_at = 0x4FAF77,
+      .fog = 0x4FAF82, .cull = 0x4FAF92, .arrays = 0x4FAF9C,
+      .bind = {0x4FAFB1, 0x4FAFC0}, .normal_ptr = 0x4FAFCF, .vertex_ptr = 0x4FAFE0,
+      .stage = {0, 0, 0x4FB00E, 0x4FB01B, 0x4FB04C},
+      .tris = {0x4FB07F, 0x4FB096, 0, 0x4FB0B0, 0x4FB0BA, 0x4FB0D3, 0x4FB0DD, 0x4FB101, 0x4FB130,
+               0x4FB141},
+      .unbind = {0x4FB14E, 0x4FB15B}, .print = 0x4FB175};
+  DrawStaticModel(c, m);
+}
+// RB_SurfaceStaticModelT2V3_NV: 20-byte vertices in memory (0x4FBAF0, the
+// Generic one, is the same code).
+void f_004FB660(Ctx& c) {
+  static constexpr StaticModel m = {
+      .log = 0x53BBE0, .log_at = 0x4FB677,
+      .fog = 0x4FB682, .cull = 0x4FB692, .arrays = 0x4FB69C, .vertex_ptr = 0x4FB6B8,
+      .stage = {0x4FB706, 0x4FB720, 0x4FB734, 0x4FB741, 0x4FB774},
+      .tris = {0x4FB7AB, 0x4FB7C2, 0x4FB7CF, 0, 0, 0x4FB7ED, 0x4FB7F7, 0x4FB828, 0x4FB859, 0x4FB86A},
+      .print = 0x4FB884};
+  DrawStaticModel(c, m);
+}
+// RB_SurfaceStaticModelT2V3_Generic, as f_004FB660.
+void f_004FBAF0(Ctx& c) {
+  static constexpr StaticModel m = {
+      .log = 0x53BB84, .log_at = 0x4FBB07,
+      .fog = 0x4FBB12, .cull = 0x4FBB22, .arrays = 0x4FBB2C, .vertex_ptr = 0x4FBB48,
+      .stage = {0x4FBB96, 0x4FBBB0, 0x4FBBC4, 0x4FBBD1, 0x4FBC04},
+      .tris = {0x4FBC3B, 0x4FBC52, 0x4FBC5F, 0, 0, 0x4FBC7D, 0x4FBC87, 0x4FBCB8, 0x4FBCE9, 0x4FBCFA},
+      .print = 0x4FBD14};
+  DrawStaticModel(c, m);
+}
+// RB_SurfaceStaticModelT2N3V3_Generic: 32-byte vertices in memory (0x4FBD50,
+// the NV one, is the same code).
+void f_004FB8C0(Ctx& c) {
+  static constexpr StaticModel m = {
+      .normals = true,
+      .log = 0x53BBB0, .log_at = 0x4FB8D7,
+      .fog = 0x4FB8E2, .cull = 0x4FB8F2, .arrays = 0x4FB8FC, .normal_ptr = 0x4FB916,
+      .vertex_ptr = 0x4FB92C,
+      .stage = {0, 0, 0x4FB95F, 0x4FB96C, 0x4FB99F},
+      .tris = {0x4FB9D1, 0x4FB9E9, 0, 0x4FBA03, 0x4FBA0D, 0x4FBA26, 0x4FBA30, 0x4FBA55, 0x4FBA86,
+               0x4FBA97},
+      .print = 0x4FBAB1};
+  DrawStaticModel(c, m);
+}
+// RB_SurfaceStaticModelT2N3V3_NV, as f_004FB8C0.
+void f_004FBD50(Ctx& c) {
+  static constexpr StaticModel m = {
+      .normals = true,
+      .log = 0x53BB5C, .log_at = 0x4FBD67,
+      .fog = 0x4FBD72, .cull = 0x4FBD82, .arrays = 0x4FBD8C, .normal_ptr = 0x4FBDA6,
+      .vertex_ptr = 0x4FBDBC,
+      .stage = {0, 0, 0x4FBDEF, 0x4FBDFC, 0x4FBE2F},
+      .tris = {0x4FBE61, 0x4FBE79, 0, 0x4FBE93, 0x4FBE9D, 0x4FBEB6, 0x4FBEC0, 0x4FBEE5, 0x4FBF16,
+               0x4FBF27},
+      .print = 0x4FBF41};
+  DrawStaticModel(c, m);
+}
+
+// "--- RB_SurfaceStaticModelATI( %s ) ---": a static model surface in an
+// ATI vertex array object (+0x24, its offset +0x28), type 18 with 20-byte
+// vertices, else 32 with normals. As DrawStaticModel, but: the log line by
+// the cvar 0x1534704 (LogShader); the vertex stride left in the argument
+// slot; the stages' textures from the object (f_004F3F00), the colours for
+// type 18 only, before the state bits; and with GL_ATI_element_array the
+// indexes from the object too (+0x2C; the element array on and off around
+// the draws, by glDrawElementArrayATI), else from +0x20. Its triangles
+// take that stage's textures, red x 0.5 and green x 0.75.
+void f_004FB1B0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, ebp = c.ebp;
+  c.esp = e - 0x20;
+  LogShader(c, 0x53BC08, 0x4FB1CB, 0x4FB1E4);
+  c.esp = e - 0x28;
+  Call(c, f_004F5D50, 0x4FB1F3);
+  c.esi = U32(U32(kTessShader) + 0xA8);
+  Call(c, f_004CB5D0, 0x4FB204);
+  Push(c, 0x401);
+  Call(c, f_004CBBE0, 0x4FB20E);
+  c.esp += 4;
+  const uint32_t surf = Arg(c, e, 1), object = U32(surf + 0x24), offset = U32(surf + 0x28);
+  const bool coloured = U32(surf) == 0x12;
+  const uint32_t stride = coloured ? 0x14 : 0x20, coords = e - 0x20;
+  c.esi = surf;
+  Put(coords, offset);
+  Put(e + 4, stride);
+  auto array = [&](uint32_t type, uint32_t at, uint32_t va) {
+    Push(c, offset + at);
+    Push(c, object);
+    Push(c, stride);
+    Push(c, 0x1406);
+    Push(c, 3);
+    Push(c, type);
+    CallPtr(c, kglArrayObjectATI, va);
+  };
+  if (!coloured) array(0x8075, 8, 0x4FB255);
+  array(0x8074, coloured ? 8 : 0x14, 0x4FB274);
+  c.esp = e - 0x30;
+  const bool elements = U32(kElementArray);
+  if (elements) {
+    Push(c, 0x8768);
+    CallPtr(c, kglEnableClientState, 0x4FB28E);
+    Push(c, U32(surf + 0x2C));
+    Push(c, object);
+    Push(c, 0);
+    Push(c, 0x1403);
+    Push(c, 1);
+    Push(c, 0x8768);
+    CallPtr(c, kglArrayObjectATI, 0x4FB2AA);
+  }
+  // The call sites, with and without the element array.
+  struct Sites {
+    uint32_t colour3f, colour4ubv, state, units, draw;
+    uint32_t depth, tris_state, tris_units, colour, tris_colour4ubv, tris_colour3f, tris_draw,
+        depth_back;
+  };
+  static constexpr Sites kElements = {0x4FB2EB, 0x4FB305, 0x4FB31C, 0x4FB32D, 0x4FB357,
+                                      0x4FB38D, 0x4FB3A8, 0x4FB3B9, 0x4FB3D7, 0x4FB3E1,
+                                      0x4FB411, 0x4FB439, 0x4FB44A},
+                         kIndexes = {0x4FB49C, 0x4FB4B4, 0x4FB4CC, 0x4FB4DD, 0x4FB510,
+                                     0x4FB547, 0x4FB562, 0x4FB573, 0x4FB591, 0x4FB59B,
+                                     0x4FB5CC, 0x4FB5FD, 0x4FB60E};
+  const Sites& at = elements ? kElements : kIndexes;
+  auto units = [&](uint32_t stage, uint32_t va) {
+    Push(c, U32(e + 4));
+    Push(c, coords);
+    Push(c, object);
+    Push(c, stage);
+    Call(c, f_004F3F00, va + 5);
+    c.esp += 0x10;
+  };
+  auto draw = [&](uint32_t va) {
+    const uint32_t n = U16(surf + 0x10);
+    Put(0x1549B14, U32(0x1549B14) + n);
+    Put(0x1549B18, U32(0x1549B18) + 1);
+    if (elements) {
+      Push(c, n);
+      Push(c, 4);
+      CallPtr(c, kglDrawElementArrayATI, va);
+    } else {
+      Push(c, U32(surf + 0x20));
+      Push(c, 0x1403);
+      Push(c, n);
+      Push(c, 4);
+      CallPtr(c, kglDrawElements, va);
+    }
+  };
+  c.edi = 0;
+  if (I32(kNumStages) > 0) {
+    do {
+      if (U32(surf) == 0x12) StaticColour(c, U32(U32(kTessStages) + 4 * c.edi), at.colour3f, at.colour4ubv);
+      const uint32_t stage = U32(U32(kTessStages) + 4 * c.edi);
+      c.eax = U32(stage + 0x684);
+      Call(c, f_004CB710, at.state + 5);
+      units(stage, at.units);
+      draw(at.draw);
+    } while (int32_t(++c.edi) < I32(kNumStages));
+  }
+  if (const uint32_t tris = CvarInt(0x15343E8)) {
+    if (tris & 1) {
+      Push(c, 0x3FB99999);  // 0.1f as a double
+      Push(c, 0xA0000000);
+      Push(c, 0);
+      Push(c, 0);
+      CallPtr(c, kglDepthRange, at.depth);
+    }
+    c.edi = U32(U32(0x1535B5C) + 0x154);
+    c.eax = U32(c.edi + 0x684);
+    Call(c, f_004CB710, at.tris_state + 5);
+    units(c.edi, at.tris_units);
+    if (I32(U32(0x15343E8) + 0x20) >= 5) {
+      c.eax = U16(surf + 0x10);
+      c.edi = e + 4;
+      Call(c, f_004F2E60, at.colour + 5);
+      Push(c, e + 4);
+      CallPtr(c, kglColor4ubv, at.tris_colour4ubv);
+    } else {
+      Push(c, U32(kIdentityLight));
+      Push(c, Fst(St(Ld(kIdentityLight)) * Ld(0x55B834)).bits);  // 0.75
+      Push(c, Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits);  // 0.5
+      CallPtr(c, kglColor3f, at.tris_colour3f);
+    }
+    draw(at.tris_draw);
+    if (!elements) c.edi = U32(0x1549B18);
+    Push(c, 0x3FF00000);  // 1.0
+    Push(c, 0);
+    Push(c, 0);
+    Push(c, 0);
+    CallPtr(c, kglDepthRange, at.depth_back);
+  }
+  if (elements) {
+    Push(c, 0x8768);
+    CallPtr(c, kglDisableClientState, 0x4FB455);
+  }
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esp = e - 0x28;
+  LogLine(c, 0x541D04, 0x4FB62A);  // "----------\n"
+  Put(0x1549B10, U32(0x1549B10) + U16(surf + 0x10));
+  Put(0x1549B0C, U32(0x1549B0C) + U16(surf + 0x12));
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
 }
 
 }  // namespace recomp::gen

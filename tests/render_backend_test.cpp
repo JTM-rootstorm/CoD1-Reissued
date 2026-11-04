@@ -100,6 +100,7 @@ constexpr Gl kGl[] = {
     {0x1534DB0, "glDrawRangeElementsEXT", 6},
     {0x1534DE4, "glBindBufferARB", 2},
     {0x1535390, "glArrayObjectATI", 6},
+    {0x1534AE0, "glDrawElementArrayATI", 2},
     {0x153539C, "glDepthRange", 4},
     {0x1534EB0, "glColor4ubv", 1, false, 0, 1},
     {0x153501C, "glDrawArrays", 3},
@@ -271,6 +272,15 @@ void f_0050AA80_lifted(Ctx& c);
 void f_0050AE10_lifted(Ctx& c);
 void f_00508A50_lifted(Ctx& c);
 void f_0050ABF0_lifted(Ctx& c);
+void f_004FAAB0_lifted(Ctx& c);
+void f_004FABD0_lifted(Ctx& c);
+void f_004FACD0_lifted(Ctx& c);
+void f_004FAF60_lifted(Ctx& c);
+void f_004FB1B0_lifted(Ctx& c);
+void f_004FB660_lifted(Ctx& c);
+void f_004FB8C0_lifted(Ctx& c);
+void f_004FBAF0_lifted(Ctx& c);
+void f_004FBD50_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -351,6 +361,15 @@ void f_0050AA80(Ctx& c) { f_0050AA80_lifted(c); }
 void f_0050AE10(Ctx& c) { f_0050AE10_lifted(c); }
 void f_00508A50(Ctx& c) { f_00508A50_lifted(c); }
 void f_0050ABF0(Ctx& c) { f_0050ABF0_lifted(c); }
+void f_004FAAB0(Ctx& c) { f_004FAAB0_lifted(c); }
+void f_004FABD0(Ctx& c) { f_004FABD0_lifted(c); }
+void f_004FACD0(Ctx& c) { f_004FACD0_lifted(c); }
+void f_004FAF60(Ctx& c) { f_004FAF60_lifted(c); }
+void f_004FB1B0(Ctx& c) { f_004FB1B0_lifted(c); }
+void f_004FB660(Ctx& c) { f_004FB660_lifted(c); }
+void f_004FB8C0(Ctx& c) { f_004FB8C0_lifted(c); }
+void f_004FBAF0(Ctx& c) { f_004FBAF0_lifted(c); }
+void f_004FBD50(Ctx& c) { f_004FBD50_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -429,6 +448,15 @@ void n_0050AA80(Ctx& c);
 void n_0050AE10(Ctx& c);
 void n_00508A50(Ctx& c);
 void n_0050ABF0(Ctx& c);
+void n_004FAAB0(Ctx& c);
+void n_004FABD0(Ctx& c);
+void n_004FACD0(Ctx& c);
+void n_004FAF60(Ctx& c);
+void n_004FB1B0(Ctx& c);
+void n_004FB660(Ctx& c);
+void n_004FB8C0(Ctx& c);
+void n_004FBAF0(Ctx& c);
+void n_004FBD50(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -553,6 +581,11 @@ const Entry kEntries[] = {
     COD1_ENTRY(0050A9B0, "tm scroll"),       COD1_ENTRY(0050AA30, "tm transform"),
     COD1_ENTRY(0050AA80, "tm rotate"),       COD1_ENTRY(0050AE10, "tm into axes"),
     COD1_ENTRY(00508A50, "tm stretch"),      COD1_ENTRY(0050ABF0, "vertex axes"),
+    COD1_ENTRY(004FAAB0, "static model"),    COD1_ENTRY(004FABD0, "static cached"),
+    COD1_ENTRY(004FACD0, "static T2V3 ARB"), COD1_ENTRY(004FAF60, "static T2N3V3 ARB"),
+    COD1_ENTRY(004FB1B0, "static ATI"),      COD1_ENTRY(004FB660, "static T2V3 NV"),
+    COD1_ENTRY(004FB8C0, "static T2N3V3"),   COD1_ENTRY(004FBAF0, "static T2V3"),
+    COD1_ENTRY(004FBD50, "static T2N3V3 NV"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -891,6 +924,7 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(0x11E0764, g());
   Wr(0x1549B14, g());
   Wr(0x1534758, g() % 8 ? g() % 9 : 0);  // texture units in use
+  Wr(0x15347BC, g() % 2);  // GL_ATI_element_array
   for (uint32_t u = 0; u < 8; u++) Wr(0x1534608 + 4 * u, g() % 3 == 0);
   Wr(0x1534670, g() % 3);
   Wr(0x15343B4, Cvar(a, g, g() % 4 == 0));       // r_lightmap
@@ -1452,6 +1486,55 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       const uint32_t coords = a.Alloc(32);
       for (uint32_t u = 0; u < 8; u++) Wr(coords + 4 * u, uint32_t(g()));
       k.args = {Stage(a, g), coords, uint32_t(g() % 64)};
+      break;
+    }
+    case 0x4FAAB0: {
+      // A surface of at most 40 vertices and 120 indexes into a tessellator
+      // of at most 40 vertices (as the windows hold).
+      if (Rd(0x17F0C88) > 40) Wr(0x17F0C88, g() % 41);
+      const uint32_t surf = a.Alloc(0x30), verts = g() % 41, n = g() % 121;
+      g_mem.write<uint16_t>(surf + 0x10, uint16_t(n));
+      g_mem.write<uint16_t>(surf + 0x12, uint16_t(verts));
+      for (const uint32_t at : {0x14u, 0x18u, 0x1Cu}) {
+        Wr(surf + at, a.Alloc(12 * 40));
+        for (uint32_t i = 0; i < 12 * 40; i += 4) Wr(Rd(surf + at) + i, RandFloat(g));
+      }
+      Wr(surf + 0x20, a.Alloc(2 * 120));
+      for (uint32_t i = 0; i < 2 * 120; i += 4) Wr(Rd(surf + 0x20) + i, uint32_t(g()));
+      k.args = {surf};
+      break;
+    }
+    case 0x4FABD0: {
+      // A draw surface: the model's surface, its first vertex (now and then
+      // past 16 bits or negative); indexes in sixes, now and then with a
+      // few over; a batch of at most 100 indexes so far.
+      const uint32_t draw = a.Alloc(12), surf = a.Alloc(0x30);
+      const uint32_t n = 6 * (1 + g() % 20) + (g() % 4 ? 0 : g() % 6);
+      Wr(draw + 4, surf);
+      Wr(draw + 8, g() % 4 ? g() % 2000 : uint32_t(g()));
+      g_mem.write<uint16_t>(surf + 0x10, uint16_t(n));
+      g_mem.write<uint16_t>(surf + 0x12, uint16_t(g() % 4 ? g() % 500 : g()));
+      Wr(surf + 0x20, a.Alloc(2 * n));
+      for (uint32_t i = 0; i < 2 * n; i += 2) g_mem.write<uint16_t>(Rd(surf + 0x20) + i, uint16_t(g() % 4 ? g() % 500 : g()));
+      Wr(0x1830C94, g() % 101);
+      k.args = {draw};
+      break;
+    }
+    case 0x4FACD0:
+    case 0x4FAF60:
+    case 0x4FB1B0:
+    case 0x4FB660:
+    case 0x4FB8C0:
+    case 0x4FBAF0:
+    case 0x4FBD50: {
+      // A surface drawn from its own vertices (the ATI one's of type 18 or
+      // 22, now and then another).
+      const uint32_t surf = a.Alloc(0x30);
+      Wr(surf, g() % 8 ? Pick(g, {0x12, 0x16}) : g() % 32);
+      for (uint32_t i = 4; i < 0x30; i += 4) Wr(surf + i, uint32_t(g()));
+      k.args = {surf};
+      k.esi = g();
+      k.edi = g();
       break;
     }
   }
