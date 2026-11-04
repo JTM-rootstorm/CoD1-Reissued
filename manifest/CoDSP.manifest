@@ -95,7 +95,8 @@ replace 0042B0A0
 # a stage's draw, the stage loop, RB_StageIteratorGeneric, the optimised
 # iterators' dispatch and RB_EndSurface; the eight optimised iterators and
 # a stage's texture units from an ATI vertex array object; the dlight pass;
-# the shadow volumes and their silhouette; the colour and alpha generators.
+# the shadow volumes and their silhouette; the colour and alpha generators;
+# the vertex deforms.
 replace 004C89D0
 replace 004C8A20
 replace 004CB3B0
@@ -146,6 +147,16 @@ replace 0050A270
 replace 0050AEC0
 replace 0050B040
 replace 004F2E60
+replace 00508AE0
+replace 00508C50
+replace 00508DE0
+replace 00508F00
+replace 00509040
+replace 005090E0
+replace 00508800
+replace 005095F0
+replace 005098A0
+replace 00509190
 
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0

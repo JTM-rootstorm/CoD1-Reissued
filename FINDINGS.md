@@ -49,9 +49,8 @@ on gfx::Device" below).
   the four view-dependent alphas, which rotate the view origin into the
   entity's space with 0x426A60 and normalise per vertex with 0x4268B0, on
   the original's stack locals). The stage's argument slot is the
-  original's scratch for its int and float conversions. The deforms stay
-  lifted (stubbed in the oracle); the colour and alpha generators are
-  layer 8.
+  original's scratch for its int and float conversions. The colour and
+  alpha generators are layer 8, the deforms layer 9.
 - Layer 4, the stages and the flush: a stage's draw 0x4F5DE0 (EAX stage,
   EBX indexes, count on the stack: colours, ComputeTexCoords, the colour
   array, then all units when the second bundle has an image or the first
@@ -197,6 +196,46 @@ on gfx::Device" below).
   (30, 150, 450, 1200, 3000) in tr.identityLightByte. The FISTPs go
   through 0x13F96D8 as in the dlight pass. The specular and its callers
   use 7 x87 registers: the oracle preloads at most one value for them.
+- Layer 9, the vertex deforms (2026-11-03), which 0x509F20 calls by
+  type (a deform's 52 bytes: +4 the move vector, +0x10 the waveform, +0x24
+  the spread, +0x28/+0x2C/+0x30 the bulge's width, height and speed). 1
+  0x508AE0 (EDI): along the normals by the waveform, one value (through
+  its float store) with no frequency, else spread along each vertex (its
+  z + y + x times the spread, plus the phase, plus frequency x time); 2
+  and 3 0x508C50 (EDI, EAX 0 or 1): the same times the texture coordinate
+  s or t (x + z + y). 5 0x508DE0 (EBX): the normals bent by minus the
+  table's step at the spread index x amplitude x 1024 x spread along
+  (1 - n.(nx + ny + nz)), each normalised by 0x4268B0; 4 0x508F00 (EBX):
+  the normals moved by the noise 0x4D3AA0 at the position x 0.98 (x plus
+  0, 100, 200 for the three) and frequency x time, times the amplitude,
+  normalised; both zero 0x17F0C68/0x17F0C6C (the vertices' axes are
+  rebuilt). 6 0x509040 (stack): along the normals by the sine table at
+  (width x s + the refdef's time 0x15496E8 (ms) x speed / 1000) x
+  1024/2pi through _ftol, times the height. 7 0x5090E0 (ESI): every
+  position by the waveform x the move vector. 8 0x508800: the projection
+  shadow, each position onto the plane of the entity's z column
+  (0x1549A9C/AA8/AB4) at 0x1549A90 less the entity's +0x18, along its
+  light direction +0xA4 (tilted by 0.5 less its dot when below 0.5). 9
+  0x5095F0, Autosprite ("Autosprite shader %s had odd vertex count",
+  ri.Printf): each quad added again by 0x500F20 (a quad's four positions,
+  normals, both coordinate sets, colours and six indexes, as ioq3's
+  RB_AddQuadStampExt) about its centre, facing the view (0x1549840 left,
+  0x154984C up, into the entity's space by 0x509580, inlined, but for
+  tr.worldEntity 0x1535D6C), radius 0.707 x the centre to the first
+  vertex, left negated in a mirror (0x1549930), both over the entity's x
+  axis length when its +0x40 is set. 10 0x5098A0, Autosprite2: each
+  quad's two shortest triangle edges below FLT_MAX (without one, the
+  previous quad's ends stay, and for the first the original's frame's at
+  e-0x28..e-0x1C, which the native deforms do not keep) spread either
+  side of their midpoints across the axis between them (its cross
+  product with the view's forward 0x1549834, normalised by 0x426710;
+  half lengths by the CRT's square root 0x52E610, which a NaN takes to
+  errno). 11-18 0x509190 (EBX the text, 32 bytes from 0x15496F4): a quad
+  per character but spaces in the font's 16 x 16 grid, white, from the
+  first vertex's normal and its quad's height. The deforms call the
+  table 0x508940 (ri.Error and 0 for a type outside 1-5); 0x5095F0 and
+  0x509190 pass 0x500F20 vectors in the original's frame, as the native
+  code does.
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -262,6 +301,28 @@ on gfx::Device" below).
   rounding mid-points random cases do not reach (in the specular, the
   order of three sums of x87 stack values; in the debug colours, the
   2^-30 before FISTP).
+  With layer 9: 200000 cases over 60 entries, 3.69M calls out, 0
+  mismatches (the deforms' fields, types, texts and the view's and
+  entity's axes random; now and then positions of mixed magnitudes, a
+  zero entity x axis, or no frequency; the deforms run lifted under the
+  lifted dispatch, with 0x500F20, 0x4268B0, 0x426710, the noise and the
+  CRT's square root lifted in both runs). Autosprite2 only as the first
+  deform and on finite positions and axes: a NaN length takes the CRT's
+  square root to errno through the thread's data, and an edge without a
+  length reads the frame left by the deforms before it. No deforms with
+  the shadow test's 4096 vertices: they reach past the compared windows,
+  which the second run would then start from as the first left them.
+  The oracle's first runs caught its own gaps (indexes past the 64 it
+  filled; the CRT's NaN path). Its mutations: 62, 52 fail the oracle (the
+  projection's sum order and the zero axis only with those cases); of
+  the 10 that pass, 4 cannot change a result (two return addresses into
+  lifted callees and a callee's ESP, below the compared stack; < for <=
+  at a dot of exactly 0.5, which gives the same values) and 6 are orders
+  of sums and products that change a double only where the float store
+  or the table index hides it but for exact cancellations random cases
+  do not reach (the two spread sums, the spread's association, the
+  Autosprite radius, the rotation into the entity's space, the bulge's
+  time product).
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -315,6 +376,12 @@ on gfx::Device" below).
   (0,0)-(355,457), as base against base (713 px, (0,0)-(348,457)); one
   earlier pair differed by up to 3074 px within (6,176)-(532,471) and
   did not repeat. Walking differs from that base as layer 7's did.
+  With layer 9 (2026-11-03): the walk never reaches the deforms
+  (0x509F20 69620 times under gdb, the ten deforms none: training's
+  shaders have none), so only the oracle covers them. Standing, against
+  the layer 8 build: all 13 loading and briefing frames shared, 47 of
+  1640 in-level frames identical, the rest in the 2D text, at most 1165
+  px within (8,226)-(455,471).
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),

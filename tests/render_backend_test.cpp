@@ -153,25 +153,13 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
 namespace recomp {
 namespace gen {
 // The stubs: the video generator's update (ECX; time, unit), the register
-// combiners (combiners), the vertex program (ESI), the vertex deforms
-// (every register: the dispatch passes them as the original leaves them),
-// and the CRT's rand and srand (the debug colours; its state is the
-// thread's).
+// combiners (combiners), the vertex program (ESI), and the CRT's rand
+// and srand (the debug colours; its state is the thread's).
 void f_004FCE80(Ctx& c) { Stub(c, 0x4FCE80, kEcx, 2); }
 void f_004F3A70(Ctx& c) { Stub(c, 0x4F3A70, 0, 1); }
 void f_004F3C70(Ctx& c) { Stub(c, 0x4F3C70, kEsi, 0); }
 #define COD1_STUB(va, regs, args) \
   void f_##va(Ctx& c) { Stub(c, 0x##va, regs, args); }
-COD1_STUB(00508AE0, kAll, 0)
-COD1_STUB(00508C50, kAll, 0)
-COD1_STUB(00508F00, kAll, 0)
-COD1_STUB(00508DE0, kAll, 0)
-COD1_STUB(00509040, kAll, 1)
-COD1_STUB(005090E0, kAll, 0)
-COD1_STUB(00508800, kAll, 0)
-COD1_STUB(005095F0, kAll, 0)
-COD1_STUB(005098A0, kAll, 0)
-COD1_STUB(00509190, kAll, 0)
 COD1_STUB(0051B5EC, 0, 0)
 COD1_STUB(0051B5DF, 0, 1)
 // Under the stages and the flush: ComputeTexCoords, the
@@ -255,6 +243,16 @@ void f_0050A270_lifted(Ctx& c);
 void f_0050AEC0_lifted(Ctx& c);
 void f_0050B040_lifted(Ctx& c);
 void f_004F2E60_lifted(Ctx& c);
+void f_00508AE0_lifted(Ctx& c);
+void f_00508C50_lifted(Ctx& c);
+void f_00508DE0_lifted(Ctx& c);
+void f_00508F00_lifted(Ctx& c);
+void f_00509040_lifted(Ctx& c);
+void f_005090E0_lifted(Ctx& c);
+void f_00508800_lifted(Ctx& c);
+void f_005095F0_lifted(Ctx& c);
+void f_005098A0_lifted(Ctx& c);
+void f_00509190_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -307,6 +305,16 @@ void f_0050A270(Ctx& c) { f_0050A270_lifted(c); }
 void f_0050AEC0(Ctx& c) { f_0050AEC0_lifted(c); }
 void f_0050B040(Ctx& c) { f_0050B040_lifted(c); }
 void f_004F2E60(Ctx& c) { f_004F2E60_lifted(c); }
+void f_00508AE0(Ctx& c) { f_00508AE0_lifted(c); }
+void f_00508C50(Ctx& c) { f_00508C50_lifted(c); }
+void f_00508DE0(Ctx& c) { f_00508DE0_lifted(c); }
+void f_00508F00(Ctx& c) { f_00508F00_lifted(c); }
+void f_00509040(Ctx& c) { f_00509040_lifted(c); }
+void f_005090E0(Ctx& c) { f_005090E0_lifted(c); }
+void f_00508800(Ctx& c) { f_00508800_lifted(c); }
+void f_005095F0(Ctx& c) { f_005095F0_lifted(c); }
+void f_005098A0(Ctx& c) { f_005098A0_lifted(c); }
+void f_00509190(Ctx& c) { f_00509190_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -357,6 +365,16 @@ void n_0050A270(Ctx& c);
 void n_0050AEC0(Ctx& c);
 void n_0050B040(Ctx& c);
 void n_004F2E60(Ctx& c);
+void n_00508AE0(Ctx& c);
+void n_00508C50(Ctx& c);
+void n_00508DE0(Ctx& c);
+void n_00508F00(Ctx& c);
+void n_00509040(Ctx& c);
+void n_005090E0(Ctx& c);
+void n_00508800(Ctx& c);
+void n_005095F0(Ctx& c);
+void n_005098A0(Ctx& c);
+void n_00509190(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -467,6 +485,11 @@ const Entry kEntries[] = {
     COD1_ENTRY(0050A170, "wave colour"),    COD1_ENTRY(0050A270, "wave alpha"),
     COD1_ENTRY(0050AEC0, "specular", 0, 7),      COD1_ENTRY(0050B040, "diffuse"),
     COD1_ENTRY(004F2E60, "debug colour"),
+    COD1_ENTRY(00508AE0, "deform wave"),    COD1_ENTRY(00508C50, "deform wave st"),
+    COD1_ENTRY(00508DE0, "deform normals"), COD1_ENTRY(00508F00, "deform noise"),
+    COD1_ENTRY(00509040, "deform bulge"),   COD1_ENTRY(005090E0, "deform move"),
+    COD1_ENTRY(00508800, "deform shadow"),  COD1_ENTRY(005095F0, "deform sprite"),
+    COD1_ENTRY(005098A0, "deform sprite2"), COD1_ENTRY(00509190, "deform text"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -488,9 +511,12 @@ const Window kGlobals[] = {
     // The tessellator's positions (with the shadow volume's copies),
     // vertex colours and normals, and the stage colours (as many as the
     // cases' vertices use).
-    {0x1630C40, 0xA00}, {0x1690C40, 0x100}, {0x1698C40, 0x200}, {0x16E0C40, 0x100},
-    // The vertices' two axes and the dlight's texture coordinates.
-    {0x16B0C40, 0x200}, {0x16C8C40, 0x200}, {0x1670C40, 0x200},
+    {0x1630C40, 0x1000}, {0x1690C40, 0x200}, {0x1698C40, 0x600}, {0x16E0C40, 0x100},
+    // The vertices' two axes, the dlight's texture coordinates (the second
+    // set's) and the first set's, and the indexes (the texts' quads reach
+    // 124 vertices).
+    {0x16B0C40, 0x200}, {0x16C8C40, 0x200}, {0x1670C40, 0x400}, {0x1650C40, 0x400},
+    {0x1618C40, 0x200},
     // The triangles' facing, the vertices' edges and their counts.
     {0x11E16D8, 0x100}, {0x11F16D8, 0x2900}, {0x13F16D8, 0x100},
 };
@@ -654,6 +680,26 @@ uint32_t RandFloat(std::mt19937& g) {
   }
 }
 
+// A float of about 10^6, 1 or 10^-3, either sign: sums of such values
+// depend on their order.
+uint32_t Mixed(std::mt19937& g) {
+  const float m = std::bit_cast<float>(Pick(g, {Float(1e6f), Float(1.0f), Float(1e-3f)}));
+  return Float(float(int(g() % 2001) - 1000) / 1000.0f * m);
+}
+
+// Positions that give every edge a length (below FLT_MAX): within 1000 of
+// 0, now and then on a grid (equal lengths) or of mixed magnitudes; and
+// finite view and entity axes (a NaN length takes the CRT's square root to
+// errno, which the lifted CRT reaches through the thread's data).
+void Positions(std::mt19937& g) {
+  const uint32_t kind = g() % 4;
+  for (uint32_t i = 0; i < 0x1000; i += 4)
+    Wr(0x1630C40 + i, kind == 0 ? Float(float(int(g() % 5) - 2)) : kind == 1 ? Mixed(g) : Float(float(int(g() % 200001) - 100000) / 100.0f));
+  for (uint32_t i = 0; i < 0xC; i += 4) Wr(0x1549834 + i, Float(float(int(g() % 2001) - 1000) / 1000.0f));
+  const bool mixed = g() % 4 == 0;
+  for (uint32_t i = 0; i < 0x24; i += 4) Wr(0x1549A94 + i, mixed ? Mixed(g) : Float(float(int(g() % 2001) - 1000) / 1000.0f));
+}
+
 uint32_t Cvar(Arena& a, std::mt19937& g, uint32_t value) {
   const uint32_t v = a.Alloc(0x40);
   Wr(v + 0x1C, RandFloat(g));
@@ -795,16 +841,41 @@ void Randomize(Arena& a, std::mt19937& g) {
   // The tessellator: up to 40 vertices (positions 4 or 8 floats apart).
   Wr(0x17F0C88, g() % 16 ? g() % 41 : 0);
   Wr(0x17F0C60, g() % 4 ? 4 : 8);
-  for (uint32_t i = 0; i < 0xA00; i += 4) Wr(0x1630C40 + i, RandFloat(g));
-  for (uint32_t i = 0; i < 0x200; i += 4) Wr(0x1698C40 + i, RandFloat(g));
+  const bool mixed = g() % 4 == 0;  // magnitudes whose sums depend on their order
+  for (uint32_t i = 0; i < 0x1000; i += 4) Wr(0x1630C40 + i, mixed ? Mixed(g) : RandFloat(g));
+  for (uint32_t i = 0; i < 0x600; i += 4) Wr(0x1698C40 + i, RandFloat(g));
+  for (uint32_t i = 0; i < 0x400; i += 4) Wr(0x1650C40 + i, RandFloat(g));
+  for (uint32_t i = 0; i < 0x200; i += 4) Wr(0x1690C40 + i, uint32_t(g()));
   for (uint32_t i = 0; i < 0x100; i += 4) {
-    Wr(0x1690C40 + i, uint32_t(g()));
     Wr(0x16E0C40 + i, uint32_t(g()));
   }
   const uint32_t shader = a.Alloc(0x700);
   Wr(shader + 0xA4, RandFloat(g));
   Wr(shader + 0xAC, g() % 8 ? g() % 5 : g() % 9);
-  for (uint32_t d = 0; d < 8; d++) Wr(shader + 0xB0 + 0x34 * d, g() % 8 ? 1 + g() % 18 : g() % 24);
+  // The deforms: type, move vector, waveform, spread and bulge width,
+  // height and speed; quads facing the view by their long axis (10) only
+  // first, on positions that give every edge a length (below).
+  for (uint32_t d = 0; d < 8; d++) {
+    const uint32_t ds = shader + 0xB0 + 0x34 * d;
+    uint32_t type = g() % 8 ? 1 + g() % 18 : g() % 24;
+    if (d && type == 10) type = 9;
+    Wr(ds, type);
+    for (uint32_t i = 4; i < 0x34; i += 4)
+      Wr(ds + i, g() % 4 ? Float(float(int(g() % 4001) - 2000) / 1000.0f) : RandFloat(g));
+    Wave(g, ds + 0x10);
+    if (g() % 4 == 0) Wr(ds + 0x20, g() % 2 ? 0 : 0x80000000);  // no frequency
+  }
+  // The texts: up to 31 characters (now and then spaces).
+  for (uint32_t t = 0; t < 8; t++) {
+    const uint32_t len = g() % 4 ? g() % 8 : g() % 32;
+    for (uint32_t i = 0; i < 32; i++)
+      g_mem.write<uint8_t>(0x15496F4 + 32 * t + i, i < len ? uint8_t(g() % 4 ? 0x20 + g() % 0x5F : g() % 4 ? 0x20 : 1 + g() % 255) : 0);
+  }
+  Wr(0x15496E8, g() % 8 ? g() % 1000000 : g());  // the refdef's time
+  // The view's axes and the entity's origin and axes.
+  for (uint32_t i = 0; i < 0x24; i += 4) Wr(0x1549834 + i, g() % 4 ? Float(float(int(g() % 2001) - 1000) / 1000.0f) : RandFloat(g));
+  for (uint32_t i = 0; i < 0x30; i += 4) Wr(0x1549A88 + i, g() % 4 ? Float(float(int(g() % 2001) - 1000) / 1000.0f) : RandFloat(g));
+  if (Rd(shader + 0xB0) == 10 || g() % 4 == 0) Positions(g);
   Wr(shader + 0x48, uint32_t(g()));
   Wr(shader + 0x50, uint32_t(g()));
   g_mem.write<uint8_t>(shader + 0x54, uint8_t(g()));
@@ -882,7 +953,7 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(0x17F0C84, g() % 8 ? g() % 64 : 0);
   Wr(0x17F0C80, g() % 2 ? uint32_t(g()) : 0);  // dlight bits
   Wr(0x11E075C, g() % 4 == 0);
-  for (uint32_t i = 0; i < 64; i++) g_mem.write<uint16_t>(0x1618C40 + 2 * i, uint16_t(g() % 40));
+  for (uint32_t i = 0; i < 0x100; i++) g_mem.write<uint16_t>(0x1618C40 + 2 * i, uint16_t(g() % 40));
   g_mem.write<uint16_t>(0x1630C3E, g() % 16 ? 0 : uint16_t(g()));
   Wr(0x1650C30, g() % 16 ? 0 : RandFloat(g));  // the last vertex's x, 4 or
   Wr(0x1670C20, g() % 16 ? 0 : RandFloat(g));  // 8 floats apart
@@ -914,7 +985,10 @@ void Randomize(Arena& a, std::mt19937& g) {
     Wr(0x1549B3C, 0x1535D6C);  // the world entity
   } else {
     const uint32_t ent = a.Alloc(0x120);
-    for (uint32_t i = 0x1C; i < 0x50; i += 4) Wr(ent + i, RandFloat(g));
+    for (uint32_t i = 0x18; i < 0x50; i += 4) Wr(ent + i, RandFloat(g));
+    if (g() % 2) Wr(ent + 0x40, 0);  // axes not to be normalised
+    if (g() % 8 == 0)
+      for (uint32_t i = 0x1C; i < 0x28; i += 4) Wr(ent + i, g() % 2 ? 0 : 0x80000000);  // a zero x axis
     Wr(0x1549B3C, ent);
   }
   // The entity's lights: the light (type 8 skipped) and its scale.
@@ -957,7 +1031,10 @@ void Randomize(Arena& a, std::mt19937& g) {
   // facings 0 or 1) and the triangles' facings; the immediate-mode batch
   // (its vertices in the arena, now and then full or nearly).
   Wr(0x1534768, g() % 4 ? 8 : g() % 8);
-  if (g() % 16 == 0) Wr(0x17F0C88, 0x1000 + g() % 2);
+  if (g() % 16 == 0) {
+    Wr(0x17F0C88, 0x1000 + g() % 2);
+    Wr(shader + 0xAC, 0);  // no deforms: they would reach past the windows
+  }
   // Now and then a first triangle whose facing rests on the order of its
   // dot product's sum: the normal (1, 1, 1), the light (1e-30, 1, -1).
   if (g() % 8 == 0) {
@@ -1139,6 +1216,30 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       k.eax = g() % 4 ? Pick(g, {30, 31, 150, 151, 450, 451, 1200, 1201, 3000, 3001})
                       : g() % 8 ? g() % 4000 : g();
       k.edi = 0x16E0C40;
+      break;
+    case 0x508AE0:
+    case 0x508C50:
+    case 0x508DE0:
+    case 0x508F00:
+    case 0x509040:
+    case 0x5090E0:
+    case 0x508800:
+    case 0x5095F0: {
+      // A deform of the shader's (its fields as Randomize leaves them), on
+      // at most 40 vertices.
+      if (Rd(0x17F0C88) > 40) Wr(0x17F0C88, g() % 41);
+      const uint32_t ds = Rd(0x17F0C70) + 0xB0 + 0x34 * (g() % 8);
+      k.edi = k.ebx = k.esi = ds;
+      k.eax = g() % 2;
+      if (kEntries[k.entry].va == 0x509040) k.args = {ds};
+      break;
+    }
+    case 0x5098A0:
+      if (Rd(0x17F0C88) > 40) Wr(0x17F0C88, g() % 41);
+      Positions(g);
+      break;
+    case 0x509190:
+      k.ebx = 0x15496F4 + 32 * (g() % 8);
       break;
     case 0x4F3D80: {
       const uint32_t coords = a.Alloc(32);

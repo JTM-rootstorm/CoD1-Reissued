@@ -24,6 +24,7 @@
 // status word (x87_value.h).
 
 #include <cstdint>
+#include <initializer_list>
 
 #include "x86/lifted.h"
 #include "x87_value.h"
@@ -43,20 +44,11 @@ void f_004F3A70(Ctx& c);  // sets up NV register combiners (combiners)
 void f_004F3C70(Ctx& c);  // sets up a vertex program (ESI program)
 void f_004C8830(Ctx& c);
 void f_004C89A0(Ctx& c);
-// The vertex deforms (registers: f_00509F20).
-void f_00508AE0(Ctx& c);
-void f_00508C50(Ctx& c);
-void f_00508F00(Ctx& c);
-void f_00508DE0(Ctx& c);
-void f_00509040(Ctx& c);
-void f_005090E0(Ctx& c);
-void f_00508800(Ctx& c);
-void f_005095F0(Ctx& c);
-void f_005098A0(Ctx& c);
-void f_00509190(Ctx& c);
 void f_00508940(Ctx& c);  // a waveform's table (ECX type; ri.Error for another)
 void f_004D3AA0(Ctx& c);  // the noise (x, y, z, t; ST0)
 void f_00426710(Ctx& c);  // VectorNormalize (ESI; the length in ST0)
+void f_00500F20(Ctx& c);  // adds a quad (origin, left, up, colour, s1, t1, s2, t2)
+void f_0052E610(Ctx& c);  // the CRT's square root (ST0)
 void f_0051B5EC(Ctx& c);  // rand
 void f_0051B5DF(Ctx& c);  // srand (seed)
 void f_00426A60(Ctx& c);  // rotates ECX by the axes EAX into EDX
@@ -148,8 +140,9 @@ constexpr uint32_t kNumUnits = 0x1534758;
 // tr.identityLight (float) and its byte.
 constexpr uint32_t kIdentityLight = 0x1536290, kIdentityLightByte = 0x1536294;
 // The tessellator: its shader, vertex count, positions (kXyzStride dwords
-// apart), normals (12 bytes apart) and vertex colours; and the stage
-// colours computed from them.
+// apart), normals (12 bytes apart) and vertex colours, its indexes and
+// index count; and the stage colours computed from them.
+constexpr uint32_t kTessIndexes = 0x1618C40, kTessIndexCount = 0x17F0C84;
 constexpr uint32_t kTessShader = 0x17F0C70, kTessVerts = 0x17F0C88,
                    kTessXyz = 0x1630C40, kXyzStride = 0x17F0C60,
                    kTessNormals = 0x1698C40, kVertColors = 0x1690C40,
@@ -1195,6 +1188,443 @@ void f_004F4090(Ctx& c) {
   c.esp = e + 4;
 }
 
+// ---- the vertex deforms ----------------------------------------------------------
+
+namespace {
+
+// tess.shaderTime.
+constexpr uint32_t kShaderTime = 0x17F0C78;
+// tess.texCoords (8 bytes a vertex) and the frame's first-vertex flags of
+// the vertices' axes (0x4F30A0), which a change of normals clears.
+constexpr uint32_t kTessTexCoords = 0x1650C40, kAxesSet = 0x17F0C68, kAxesSet2 = 0x17F0C6C;
+// The entity drawn (tr.worldEntity 0x1535D6C for the world's surfaces),
+// the axes it is drawn with (three rows of three) and the view's axes.
+constexpr uint32_t kEntity = 0x1549B3C, kWorldEntity = 0x1535D6C, kEntityAxes = 0x1549A94,
+                   kViewAxes = 0x1549834;
+
+// ST0 as a double, popped (a lifted callee's return value).
+St PopSt0(Ctx& c) {
+  St v(std::bit_cast<double>(x87::StoreF64(c.fpu)));
+  x87::Pop(c.fpu);
+  return v;
+}
+
+// A waveform's table (0x508940, ECX the type; ri.Error and 0 for another
+// than 1-5), called (ret: its call's return).
+uint32_t CallWaveTable(Ctx& c, uint32_t type, uint32_t ret) {
+  c.ecx = type;
+  Call(c, f_00508940, ret);
+  return c.eax;
+}
+
+// A waveform (type, base, amplitude, phase, frequency) at the shader time,
+// from its table of 1024 (the index through the scratch 0x13F96D8).
+St WaveAt(uint32_t wave, uint32_t table) {
+  const int32_t i =
+      Fistp(St(Fst((St(Ld(wave + 0x10)) * Ld(kShaderTime) + Ld(wave + 0xC)) * 1024.0f)));
+  Put(0x13F96D8, uint32_t(i));
+  return St(Ld(wave + 8)) * Ld(table + 4 * (uint32_t(i) & 0x3FF)) + Ld(wave + 4);
+}
+
+// The waveform spread along a vertex: its phase plus the sum of the
+// position's coordinates (in the order sum) times the spread, at the shader
+// time; the index through the scratch.
+uint32_t SpreadIndex(uint32_t ds, St sum) {
+  const int32_t i = Fistp(St(Fst(
+      (sum * Ld(ds + 0x24) + Ld(ds + 0x1C) + St(Ld(kShaderTime)) * Ld(ds + 0x20)) * 1024.0f)));
+  Put(0x13F96D8, uint32_t(i));
+  return uint32_t(i);
+}
+
+// The next position (kXyzStride dwords on).
+uint32_t NextXyz(uint32_t p) { return p + 4 * U32(kXyzStride); }
+
+// Each position (p) moved along its normal by v(vertex, p): x by the
+// unrounded product, y and z through their stores where the original
+// stores them.
+template <bool kStoreY, bool kStoreZ, typename Scale>
+void AlongNormals(Scale v) {
+  uint32_t p = kTessXyz, n = kTessNormals;
+  for (uint32_t i = 0; int32_t(i) < I32(kTessVerts); i++, p = NextXyz(p), n += 0xC) {
+    const St s = v(i, p);
+    const St x = s * Ld(n);
+    const St y = kStoreY ? St(Fst(s * Ld(n + 4))) : s * Ld(n + 4);
+    const St z = kStoreZ ? St(Fst(s * Ld(n + 8))) : s * Ld(n + 8);
+    Put(p, Fst(x + Ld(p)));
+    Put(p + 4, Fst(y + Ld(p + 4)));
+    Put(p + 8, Fst(z + Ld(p + 8)));
+  }
+}
+
+// The vector at va in the entity's space (0x509580 inlined): its dot
+// products with the entity's axes into out.
+void ToEntity(uint32_t va, uint32_t out) {
+  for (uint32_t k = 0; k < 12; k += 4) {
+    const uint32_t row = kEntityAxes + 3 * k;
+    Put(out + k, Fst(St(Ld(row)) * Ld(va) + St(Ld(row + 8)) * Ld(va + 8) +
+                     St(Ld(row + 4)) * Ld(va + 4)));
+  }
+}
+
+// ri.Printf(PRINT_WARNING, format, the shader) from the call at va.
+void Warn(Ctx& c, uint32_t format, uint32_t va) {
+  Push(c, U32(kTessShader));
+  Push(c, format);
+  Push(c, 2);
+  CallPtr(c, kPrintf, va);
+  c.esp += 0xC;
+}
+
+// The CRT's square root (0x52E610) of a float (ret: its call's return).
+St CrtSqrt(Ctx& c, F32 v, uint32_t ret) {
+  x87::LoadF32(c.fpu, v.bits);
+  Call(c, f_0052E610, ret);
+  return PopSt0(c);
+}
+
+}  // namespace
+
+// The deform's waveform (+0x10) along the normals (EDI the deform): with
+// no frequency (+0x20) the one value for every vertex, else spread along
+// each by +0x24.
+void f_00508AE0(Ctx& c) {
+  const uint32_t e = c.esp, ds = c.edi, wave = ds + 0x10;
+  if (St(Ld(ds + 0x20)) == 0.0f) {
+    c.esp = e - 0x14;
+    const F32 s = Fst(WaveAt(wave, CallWaveTable(c, U32(wave), 0x508B05)));
+    AlongNormals<false, true>([&](uint32_t, uint32_t) { return St(s); });
+  } else {
+    c.esp = e - 0x18;
+    const uint32_t table = CallWaveTable(c, U32(wave), 0x508BA1);
+    AlongNormals<true, true>([&](uint32_t, uint32_t p) {
+      const uint32_t i = SpreadIndex(ds, St(Ld(p + 8)) + Ld(p + 4) + Ld(p));
+      return St(Ld(table + 4 * (i & 0x3FF))) * Ld(ds + 0x18) + Ld(ds + 0x14);
+    });
+  }
+  c.esp = e + 4;
+}
+
+// The same scaled by each vertex's texture coordinate s (EAX 0) or t
+// (EAX 1).
+void f_00508C50(Ctx& c) {
+  const uint32_t e = c.esp, ds = c.edi, wave = ds + 0x10, coord = kTessTexCoords + 4 * c.eax;
+  if (St(Ld(ds + 0x20)) == 0.0f) {
+    c.esp = e - 0x18;
+    const F32 s = Fst(WaveAt(wave, CallWaveTable(c, U32(wave), 0x508C7F)));
+    AlongNormals<true, true>([&](uint32_t i, uint32_t) { return St(s) * Ld(coord + 8 * i); });
+  } else {
+    c.esp = e - 0x1C;
+    const uint32_t table = CallWaveTable(c, U32(wave), 0x508D29);
+    AlongNormals<true, true>([&](uint32_t v, uint32_t p) {
+      const uint32_t i = SpreadIndex(ds, St(Ld(p)) + Ld(p + 8) + Ld(p + 4));
+      return (St(Ld(table + 4 * (i & 0x3FF))) * Ld(ds + 0x18) + Ld(ds + 0x14)) *
+             Ld(coord + 8 * v);
+    });
+  }
+  c.esp = e + 4;
+}
+
+// The normals bent by the waveform's slope (EBX the deform): each by
+// minus the table's step at its spread index times the amplitude, 1024
+// and the spread, along (1 - n.sum(n) * n), then normalised by 0x4268B0;
+// the vertices' axes then rebuilt.
+void f_00508DE0(Ctx& c) {
+  const uint32_t e = c.esp, ds = c.ebx;
+  c.esp = e - 0x1C;
+  const uint32_t table = CallWaveTable(c, U32(ds + 0x10), 0x508DF2);
+  uint32_t p = kTessXyz, n = kTessNormals;
+  for (uint32_t v = 0; int32_t(v) < I32(kTessVerts); v++, p = NextXyz(p), n += 0xC) {
+    const St sum = St(Ld(n + 4)) + Ld(n + 8) + Ld(n);
+    F32 a[3];
+    for (uint32_t k = 0; k < 3; k++) a[k] = Fst(1.0f - sum * Ld(n + 4 * k));
+    const uint32_t i = SpreadIndex(ds, St(Ld(p + 8)) + Ld(p + 4) + Ld(p));
+    const St d = -((St(Ld(table + 4 * ((i + 1) & 0x3FF))) - Ld(table + 4 * (i & 0x3FF))) *
+                   Ld(ds + 0x18) * 1024.0f * Ld(ds + 0x24));
+    Put(n, Fst(St(a[0]) * d + Ld(n)));
+    Put(n + 4, Fst(St(a[1]) * d + Ld(n + 4)));
+    Put(n + 8, Fst(d * a[2] + Ld(n + 8)));
+    c.eax = n;
+    c.esp = e - 0x20;
+    Call(c, f_004268B0, 0x508EBE);
+  }
+  Put(kAxesSet, 0u);
+  Put(kAxesSet2, 0u);
+  c.esp = e + 4;
+}
+
+// The normals moved by noise (EBX the deform): each coordinate by the
+// noise 0x4D3AA0 at the position x 0.98 (x offset 0, 100 and 200 for the
+// three) and the frequency (+0x20) x the shader time, times the amplitude
+// (+0x18), then normalised; the vertices' axes then rebuilt.
+void f_00508F00(Ctx& c) {
+  const uint32_t e = c.esp, ds = c.ebx;
+  static constexpr uint32_t kRet[3] = {0x508F5C, 0x508FA9, 0x508FF3};
+  uint32_t p = kTessXyz, n = kTessNormals;
+  for (uint32_t v = 0; int32_t(v) < I32(kTessVerts); v++, p = NextXyz(p), n += 0xC) {
+    for (uint32_t k = 0; k < 3; k++) {
+      c.esp = e - 0x14;
+      Push(c, Fst(St(Ld(kShaderTime)) * Ld(ds + 0x20)).bits);
+      Push(c, Fst(St(Ld(p + 8)) * 0.98f).bits);
+      Push(c, Fst(St(Ld(p + 4)) * 0.98f).bits);
+      const St x = St(Ld(p)) * 0.98f;
+      Push(c, Fst(k == 0 ? x : x + (k == 1 ? 100.0f : 200.0f)).bits);
+      Call(c, f_004D3AA0, kRet[k]);
+      c.esp += 0x10;
+      Put(n + 4 * k, Fst(PopSt0(c) * Ld(ds + 0x18) + Ld(n + 4 * k)));
+    }
+    c.eax = n;
+    Call(c, f_004268B0, 0x509004);
+  }
+  Put(kAxesSet, 0u);
+  Put(kAxesSet2, 0u);
+  c.esp = e + 4;
+}
+
+// The bulge (stack: the deform): along the normals by the sine table at
+// (the width +0x28 x s + now) x 1024 / 2pi through _ftol, times the height
+// +0x2C; now the refdef's time (ms, 0x15496E8) x the speed +0x30 / 1000.
+void f_00509040(Ctx& c) {
+  const uint32_t e = c.esp, ds = Arg(c, e, 1);
+  const F32 now = Fst(FromInt(I32(0x15496E8)) * Ld(ds + 0x30) * 0.001f);
+  AlongNormals<false, false>([&](uint32_t v, uint32_t) {
+    const int32_t i =
+        Ftol((St(Ld(ds + 0x28)) * Ld(kTessTexCoords + 8 * v) + now) * 0x1.45f306p+7f);
+    return St(Ld(0x1544530 + 4 * (uint32_t(i) & 0x3FF))) * Ld(ds + 0x2C);
+  });
+  c.esp = e + 4;
+}
+
+// The move (ESI the deform): every position by the waveform times the
+// vector +4.
+void f_005090E0(Ctx& c) {
+  const uint32_t e = c.esp, ds = c.esi;
+  c.esp = e - 0x10;
+  const St v = WaveAt(ds + 0x10, CallWaveTable(c, U32(ds + 0x10), 0x5090EB));
+  F32 m[3];
+  for (uint32_t k = 0; k < 3; k++) m[k] = Fst(v * Ld(ds + 4 + 4 * k));
+  for (uint32_t i = 0, p = kTessXyz; int32_t(i) < I32(kTessVerts); i++, p = NextXyz(p))
+    for (uint32_t k = 0; k < 3; k++) Put(p + 4 * k, Fst(St(m[k]) + Ld(p + 4 * k)));
+  c.esp = e + 4;
+}
+
+// The projection shadow: each position onto the ground plane (the
+// entity's z axis column 0x1549A9C/AA8/AB4, at its origin's z 0x1549A90
+// less the entity's shadow plane +0x18) along the entity's light direction
+// (+0xA4; tilted by 0.5 less its dot when that is below 0.5).
+void f_00508800(Ctx& c) {
+  const uint32_t e = c.esp, ent = U32(kEntity);
+  const F32 dist = Fst(St(Ld(0x1549A90)) - Ld(ent + 0x18));
+  const F32 g[3] = {Ld(0x1549A9C), Ld(0x1549AA8), Ld(0x1549AB4)};
+  St lx = St(Ld(ent + 0xA4)), ly = St(Ld(ent + 0xA8));
+  F32 lz = Ld(ent + 0xAC);
+  St d = St(lz) * g[2] + ly * g[1] + lx * g[0];
+  if (d < 0.5f) {
+    const St t = 0.5f - d;
+    lx = St(g[0]) * t + lx;
+    ly = St(g[1]) * t + ly;
+    const St z = t * g[2] + lz;
+    lz = Fst(z);
+    d = z * g[2] + ly * g[1] + lx * g[0];
+  }
+  const F32 inv = Fst(1.0f / d);
+  const F32 kx = Fst(St(inv) * lx), ky = Fst(St(inv) * ly), kz = Fst(St(inv) * lz);
+  for (uint32_t i = 0, p = kTessXyz; int32_t(i) < I32(kTessVerts); i++, p = NextXyz(p)) {
+    const St h = St(g[2]) * Ld(p + 8) + St(g[1]) * Ld(p + 4) + St(g[0]) * Ld(p) + dist;
+    Put(p, Fst(Ld(p) - St(kx) * h));
+    Put(p + 4, Fst(Ld(p + 4) - St(ky) * h));
+    Put(p + 8, Fst(Ld(p + 8) - h * kz));
+  }
+  c.esp = e + 4;
+}
+
+// Autosprite (its warnings' name): each quad added again by 0x500F20
+// about its centre, facing the view (its axes in the entity's space, but
+// for the world), its radius the centre's distance to the first vertex x
+// 0.707 (left negated in a mirror; both over the entity's x axis length
+// when +0x40 is set), with the quad's first colour; the counts restarted
+// (ri.Printf warnings for counts not of quads).
+void f_005095F0(Ctx& c) {
+  const uint32_t e = c.esp, b = e - 0x4C;
+  c.esp = b;
+  if (U32(kTessVerts) & 3) Warn(c, 0x5390DC, 0x50960D);
+  if (U32(kTessIndexCount) != uint32_t(I32(kTessVerts) >> 2) * 6) Warn(c, 0x5390B0, 0x50963A);
+  uint32_t ent = U32(kEntity);
+  const int32_t old = I32(kTessVerts);
+  Put(kTessVerts, 0u);
+  Put(kTessIndexCount, 0u);
+  // In the original's frame, as 0x500F20 reads them: the centre, the left
+  // and up vectors scaled, and the view's left and up.
+  const uint32_t mid = b + 0x40, left = b + 0x10, up = b + 0x1C, axes = b + 0x28;
+  if (ent != kWorldEntity) {
+    ToEntity(kViewAxes + 0xC, axes);
+    ToEntity(kViewAxes + 0x18, axes + 0xC);
+  } else {
+    for (uint32_t k = 0; k < 0x18; k += 4) Put(axes + k, U32(kViewAxes + 0xC + k));
+  }
+  if (old > 0) {
+    uint32_t quads = ((uint32_t(old) - 1) >> 2) + 1, p = kTessXyz, colour = kVertColors;
+    uint32_t s = 4 * U32(kXyzStride);
+    for (;;) {
+      Put(mid, Fst((St(Ld(p + 2 * s)) + Ld(p + s) + Ld(p) + Ld(p + 3 * s)) * 0.25f));
+      for (uint32_t k = 4; k < 12; k += 4)
+        Put(mid + k,
+            Fst((St(Ld(p + s + k)) + Ld(p + 2 * s + k) + Ld(p + 3 * s + k) + Ld(p + k)) * 0.25f));
+      const St dx = St(Ld(p)) - Ld(mid), dy = St(Ld(p + 4)) - Ld(mid + 4),
+               dz = St(Ld(p + 8)) - Ld(mid + 8);
+      const St r = Sqrt(dz * dz + dy * dy + dx * dx) * 0.707f;
+      for (uint32_t k = 0; k < 0x14; k += 4) Put(left + k, Fst(St(Ld(axes + k)) * r));
+      Put(left + 0x14, Fst(r * Ld(axes + 0x14)));
+      if (U32(0x1549930))
+        for (uint32_t k = 0; k < 12; k += 4)
+          Put(left + k, Fst(St(Ld(0x537E54 + k)) - Ld(left + k)));
+      if (!(St(Ld(ent + 0x40)) == 0.0f)) {
+        const St ax = St(Ld(ent + 0x1C)), ay = St(Ld(ent + 0x20)), az = St(Ld(ent + 0x24));
+        const St length = Sqrt(ax * ax + ay * ay + az * az);
+        const St scale = length == 0.0f ? St(0.0f) : 1.0f / length;
+        for (uint32_t k = 0; k < 0x14; k += 4) Put(left + k, Fst(St(Ld(left + k)) * scale));
+        Put(left + 0x14, Fst(scale * Ld(left + 0x14)));
+      }
+      for (uint32_t v : {0x3F800000u, 0x3F800000u, 0u, 0u, colour, up, left, mid}) Push(c, v);
+      Call(c, f_00500F20, 0x509876);
+      c.esp += 0x20;
+      s = 4 * U32(kXyzStride);
+      colour += 0x10;
+      p += 4 * s;
+      if (--quads == 0) break;
+      ent = U32(kEntity);
+    }
+  }
+  c.esp = e + 4;
+}
+
+// Autosprite2 (its warnings' name): quads turned about their long axis to
+// face the view (its forward axis in the entity's space, but for the
+// world): of each quad's 6 indexes, the two shortest of its triangles' six
+// edges (the first shorter; an edge never shorter than FLT_MAX leaves the
+// last quad's, or at first the original's frame's, which the native
+// deforms do not keep), their midpoints as the axis, and each edge's ends
+// put half its length either side of its midpoint across it (the axis x
+// forward, normalised by 0x426710; lengths by the CRT's square root).
+void f_005098A0(Ctx& c) {
+  const uint32_t e = c.esp, b = e - 0x6C, esi = c.esi;
+  c.esp = b;
+  if (U32(kTessVerts) & 3) Warn(c, 0x539084, 0x5098B9);
+  if (U32(kTessIndexCount) != uint32_t(I32(kTessVerts) >> 2) * 6) Warn(c, 0x539058, 0x5098E6);
+  F32 fwd[3];
+  if (U32(kEntity) != kWorldEntity) {
+    ToEntity(kViewAxes, b + 0x2C);
+    for (uint32_t k = 0; k < 3; k++) fwd[k] = Ld(b + 0x2C + 4 * k);
+  } else {
+    for (uint32_t k = 0; k < 3; k++) fwd[k] = Ld(kViewAxes + 4 * k);
+  }
+  if (I32(kTessIndexCount) <= 0) {
+    c.esp = e + 4;
+    return;
+  }
+  // The shortest edge's ends (a0, b0) and the second's (a1, b1).
+  uint32_t a0 = U32(b + 0x44), b0 = U32(b + 0x48), a1 = U32(b + 0x4C), b1 = U32(b + 0x50);
+  const uint32_t left = b + 0x20;
+  for (uint32_t i = 0; int32_t(i) < I32(kTessIndexCount); i += 6) {
+    uint32_t v[6];
+    for (uint32_t k = 0; k < 6; k++)
+      v[k] = kTessXyz + 4 * U16(kTessIndexes + 2 * (i + k)) * U32(kXyzStride);
+    const uint32_t edges[6][2] = {{v[0], v[1]}, {v[1], v[2]}, {v[2], v[0]},
+                                  {v[3], v[4]}, {v[4], v[5]}, {v[5], v[3]}};
+    F32 s0{0x7F7FFFFF}, s1{0x7F7FFFFF};
+    for (const auto& [from, to] : edges) {
+      F32 d[3];
+      for (uint32_t k = 0; k < 3; k++) d[k] = Fst(St(Ld(to + 4 * k)) - Ld(from + 4 * k));
+      const F32 length = Fst(St(d[2]) * d[2] + St(d[1]) * d[1] + St(d[0]) * d[0]);
+      if (St(length) < s0) {
+        s1 = s0, s0 = length;
+        a1 = a0, b1 = b0, a0 = from, b0 = to;
+      } else if (St(length) < s1) {
+        s1 = length;
+        a1 = from, b1 = to;
+      }
+    }
+    F32 m0[3], m1[3], axis[3];
+    m0[0] = Fst((St(Ld(b0)) + Ld(a0)) * 0.5f);
+    for (uint32_t k = 1; k < 3; k++) m0[k] = Fst((St(Ld(a0 + 4 * k)) + Ld(b0 + 4 * k)) * 0.5f);
+    for (uint32_t k = 0; k < 3; k++) m1[k] = Fst((St(Ld(b1 + 4 * k)) + Ld(a1 + 4 * k)) * 0.5f);
+    for (uint32_t k = 0; k < 3; k++) axis[k] = Fst(St(m1[k]) - m0[k]);
+    Put(left, Fst(St(axis[1]) * fwd[2] - St(axis[2]) * fwd[1]));
+    Put(left + 4, Fst(St(axis[2]) * fwd[0] - St(axis[0]) * fwd[2]));
+    Put(left + 8, Fst(St(axis[0]) * fwd[1] - St(axis[1]) * fwd[0]));
+    c.esp = b - 0x10;
+    c.esi = left;
+    Call(c, f_00426710, 0x509E00);
+    PopSt0(c);
+    const F32 l0 = Fst(CrtSqrt(c, s0, 0x509E0B) * St(0.5)), n0 = Fst(-St(l0));
+    for (uint32_t k = 0; k < 12; k += 4) Put(a0 + k, Fst(St(n0) * Ld(left + k) + m0[k / 4]));
+    for (uint32_t k = 0; k < 12; k += 4) Put(b0 + k, Fst(St(Ld(left + k)) * l0 + m0[k / 4]));
+    const F32 l1 = Fst(CrtSqrt(c, s1, 0x509E80) * St(0.5)), n1 = Fst(-St(l1));
+    for (uint32_t k = 0; k < 12; k += 4) Put(a1 + k, Fst(St(Ld(left + k)) * l1 + m1[k / 4]));
+    for (uint32_t k = 0; k < 12; k += 4) Put(b1 + k, Fst(St(n1) * Ld(left + k) + m1[k / 4]));
+  }
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// A text (EBX its string): a quad per character but spaces, from the
+// first vertex's normal and its four positions' extent (height 0.75 of it
+// across), added by 0x500F20 in the font's 16 x 16 grid, white; the counts
+// restarted.
+void f_00509190(Ctx& c) {
+  const uint32_t e = c.esp, b = e - 0x3C, text = c.ebx;
+  const F32 h = Fst(St(Ld(kTessNormals + 8)) * 0.0f);
+  F32 width[3] = {Fst(St(Ld(kTessNormals + 4)) * -1.0f - h),
+                  Fst(h - St(Ld(kTessNormals)) * -1.0f),
+                  Fst(St(Ld(kTessNormals)) * 0.0f - St(Ld(kTessNormals + 4)) * 0.0f)};
+  F32 sum[3] = {Ld(kTessXyz), Ld(kTessXyz + 4), Ld(kTessXyz + 8)};
+  F32 top{0x497423F0}, bottom{0xC97423F0};
+  if (St(Ld(kTessXyz + 8)) < 999999.0f) top = Ld(kTessXyz + 8);
+  if (St(Ld(kTessXyz + 8)) > -999999.0f) bottom = Ld(kTessXyz + 8);
+  const uint32_t s = 4 * U32(kXyzStride);
+  for (uint32_t k = 1, p = kTessXyz + s; k < 4; k++, p += s) {
+    for (uint32_t j = 0; j < 3; j++) sum[j] = Fst(St(sum[j]) + Ld(p + 4 * j));
+    if (St(Ld(p + 8)) < top) top = Ld(p + 8);
+    if (St(Ld(p + 8)) > bottom) bottom = Ld(p + 8);
+  }
+  // In the original's frame, as 0x500F20 reads them: the origin, the width
+  // and height vectors and the colour.
+  const uint32_t origin = b + 0x30, across = b + 0x24, height = b + 0x18, colour = b + 4;
+  for (uint32_t j = 0; j < 3; j++) Put(origin + 4 * j, Fst(St(sum[j]) * 0.25f));
+  const F32 tall = Fst((St(bottom) - top) * 0.5f), half = Fst(St(tall) * -0.75f);
+  for (F32& w : width) w = Fst(St(half) * w);
+  Put(height, 0u);
+  Put(height + 4, 0u);
+  Put(height + 8, tall);
+  uint32_t len = 0;
+  while (U8(text + len)) len++;
+  const int32_t n = int32_t(len);
+  const F32 first = Fst(FromInt(n - 1));
+  Put(kTessIndexCount, 0u);
+  Put(kTessVerts, 0u);
+  for (uint32_t j = 0; j < 3; j++)
+    Put(origin + 4 * j, Fst(St(first) * width[j] + Ld(origin + 4 * j)));
+  Put(colour, 0xFFFFFFFFu);
+  for (uint32_t j = 0; j < 3; j++) Put(across + 4 * j, width[j]);
+  if (n > 0) {
+    F32 step[3];
+    for (uint32_t j = 0; j < 3; j++) step[j] = Fst(St(width[j]) + St(width[j]));
+    for (int32_t i = 0; i < n; i++) {
+      const uint32_t ch = U8(text + uint32_t(i));
+      if (ch != 0x20) {
+        const F32 row = Fst(St(Fst(FromInt(int32_t(ch >> 4)))) * 0.0625f);
+        const F32 col = Fst(St(Fst(FromInt(int32_t(ch & 0xF)))) * 0.0625f);
+        c.esp = b - 8;
+        for (uint32_t v : {Fst(St(row) + 0.0625f).bits, Fst(St(col) + 0.0625f).bits, row.bits,
+                           col.bits, colour, height, across, origin})
+          Push(c, v);
+        Call(c, f_00500F20, 0x5094C8);
+      }
+      for (uint32_t j = 0; j < 3; j++) Put(origin + 4 * j, Fst(St(Ld(origin + 4 * j)) - step[j]));
+    }
+  }
+  c.esp = e + 4;
+}
+
 // The shader's vertex deforms (tess.shader 0x17F0C70: count +0xAC, 52-byte
 // deforms from +0xB0, type first), each by its function with the
 // original's registers: EDI the deform, EBP its offset, EAX its type (0 or
@@ -1245,16 +1675,6 @@ void f_00509F20(Ctx& c) {
 
 namespace {
 
-// tess.shaderTime.
-constexpr uint32_t kShaderTime = 0x17F0C78;
-
-// ST0 as a double, popped (a lifted callee's return value).
-St PopSt0(Ctx& c) {
-  St v(std::bit_cast<double>(x87::StoreF64(c.fpu)));
-  x87::Pop(c.fpu);
-  return v;
-}
-
 // A waveform's table (0x508940 inlined; ret: its call's return) for types
 // 1-5, 4 KB apart from 0x1544530; another type goes to the original, which
 // reports it with ri.Error.
@@ -1262,19 +1682,12 @@ uint32_t WaveTable(Ctx& c, uint32_t type, uint32_t ret) {
   static constexpr uint32_t kTables[5] = {0x1544530, 0x1545530, 0x1546530, 0x1547530,
                                           0x1548530};
   if (type - 1 < 5) return kTables[type - 1];
-  c.ecx = type;
-  Call(c, f_00508940, ret);
-  return c.eax;
+  return CallWaveTable(c, type, ret);
 }
 
-// A waveform (type, base, amplitude, phase, frequency) at the shader time,
-// from its table of 1024 (the index through the scratch 0x13F96D8).
+// A waveform at the shader time.
 St WaveValue(Ctx& c, uint32_t wave, uint32_t ret) {
-  const uint32_t table = WaveTable(c, U32(wave), ret);
-  const int32_t i =
-      Fistp(St(Fst((St(Ld(wave + 0x10)) * Ld(kShaderTime) + Ld(wave + 0xC)) * 1024.0f)));
-  Put(0x13F96D8, uint32_t(i));
-  return St(Ld(wave + 8)) * Ld(table + 4 * (uint32_t(i) & 0x3FF)) + Ld(wave + 4);
+  return WaveAt(wave, WaveTable(c, U32(wave), ret));
 }
 
 // Clamped to 0..1, a NaN kept.
@@ -1712,8 +2125,6 @@ void f_004F4FA0(Ctx& c) {
 
 // ---- the stages and the flush ------------------------------------------------
 
-// The tessellator's indexes and index count.
-constexpr uint32_t kTessIndexes = 0x1618C40, kTessIndexCount = 0x17F0C84;
 // The flush's stages (eight pointers, null-terminated), how many there are,
 // and whether the generic iterator has set the arrays up for a single stage
 // (then a stage leaves them).
