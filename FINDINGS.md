@@ -50,7 +50,8 @@ on gfx::Device" below).
   entity's space with 0x426A60 and normalise per vertex with 0x4268B0, on
   the original's stack locals). The stage's argument slot is the
   original's scratch for its int and float conversions. The colour and
-  alpha generators are layer 8, the deforms layer 9.
+  alpha generators are layer 8, the deforms layer 9, the texture
+  coordinate generators and modifiers layer 10.
 - Layer 4, the stages and the flush: a stage's draw 0x4F5DE0 (EAX stage,
   EBX indexes, count on the stack: colours, ComputeTexCoords, the colour
   array, then all units when the second bundle has an image or the first
@@ -236,6 +237,51 @@ on gfx::Device" below).
   table 0x508940 (ri.Error and 0 for a type outside 1-5); 0x5095F0 and
   0x509190 pass 0x500F20 vectors in the original's frame, as the native
   code does.
+- Layer 10, the texture coordinate generators and modifiers
+  (2026-11-04), which ComputeTexCoords (0x4F5940, src/render.cpp) calls
+  by tcGen and texmod. Generators, each into its buffer, 3 floats a
+  vertex unless said: 4 0x50A2B0 (EAX, 2 floats): the direction to the
+  view (0x1549AB8, the view's origin in the entity's space) normalised by
+  0x4268B0 on the original's locals, reflected about the normal, s from
+  (1 + y) / 2 and t 0.5 - z / 2 (z through its float store); 14 0x50A380
+  (ECX) each position less the view's origin, 13 0x50A3D0 the reverse; 15
+  0x50A420 (EDX) the direction to the view (z through its store)
+  reflected about the normal; 16 0x50A4D0 (ECX) the light 0x1549B40's
+  origin +0x44 (less the entity's origin 0x1549A88 unless its w +0x50 is
+  0; a NaN w counts as not 0) in the entity's axes 0x1549A94, less each
+  position; 17 0x50A5C0 (EAX) the normalised directions to the view and
+  to that light, summed; 18 0x50A720 (EAX) the normalised direction to
+  the view plus the vector 0x15364B0 (0.45, 0.3, 0.9 until the map sets
+  it, 0x4D35D0); 10-12 0x50A7C0 (EAX, k on the stack) coordinate k of
+  each vertex's tangent 0x16C8C40, binormal 0x16B0C40 and normal; 19-21
+  0x50A820 (EAX k, ECX, 4 floats) the same and the view origin
+  0x1549828's coordinate k less the position's, read 12 bytes apart
+  whatever the positions' stride. Those two build the vertices' axes
+  first (0x50ABF0) unless both 0x17F0C68 and 0x17F0C6C are set, as do
+  the texmod into them and tcGens 8 and 9: tangents and binormals
+  zeroed; per triangle (0x50AB40, inlined) the positions weighted by the
+  differences of the texture coordinate t (t1 - t2, t2 - t0, t0 - t1),
+  normalised by 0x4268B0 on the original's stack and added to its three
+  vertices' tangents; the triangles per vertex counted in the locals of
+  an 8-aligned 0x8010-byte _chkstk frame (an index past the vertex count
+  reads and writes whatever its slot holds, as in the original); a
+  tangent of more than one triangle normalised (0x426710), each binormal
+  the tangent x the normal, normalised; then both flags 1. Texmods: 1
+  0x50AA30 (EAX the texmod, ECX) the transform s' = t x +0x20 + s x +0x18
+  + +0x28, t' = t x +0x24 + s x +0x1C + +0x2C; 2 0x50A8D0 (EBX the
+  waveform +4) the turbulence: the sine table at ((z + x) / 1024 + now) x
+  1024 for s, (y / 1024 + now) x 1024 for t (now the phase plus frequency
+  x time, as a float), through _ftol, times the amplitude, added; 3
+  0x50A9B0 (EAX +0x38, ECX) the scroll: time x speed less its floor (the
+  CRT's 0x51AB30, a double on the stack), added; 7 the same by the
+  entity's +0x70; 4 0x50A980 (EDX +0x30) the scale; 5 0x508A50 (ESI the
+  waveform) the stretch: 1 over the waveform, as a transform about (0.5,
+  0.5) built in the original's frame for 0x50AA30; 6 0x50AA80 (stack:
+  +0x40, the coordinates) the rotation: the sine table at -(time x speed)
+  x 1024/360 through _ftol and a quarter turn on, likewise through
+  0x50AA30, the speed's argument slot left holding sin x 0.5; 8 0x50A890
+  s and t swapped, t then 1 - s; 10 0x50AE10 (EAX) each vector into the
+  vertices' axes (its dots with the tangent, binormal and normal).
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -323,6 +369,25 @@ on gfx::Device" below).
   do not reach (the two spread sums, the spread's association, the
   Autosprite radius, the rotation into the entity's space, the bulge's
   time product).
+  With layer 10: 200000 cases over 78 entries, 2.82M calls out, 0
+  mismatches (each generator's and texmod's buffer, texmod, waveform and
+  light random, as are the world's vector 0x15364B0 and the vertices'
+  axes; 0x4268B0, 0x426710, the waveform table and the CRT's floor and
+  square root lifted in both runs). The axes are built only on finite
+  positions, normals and coordinates (VectorNormalize takes a NaN length
+  to the CRT's error path), the scroll only at a finite time and speeds
+  (the floor's NaN takes the same path). Its mutations: 51, 43 fail the
+  oracle (four only with the cases added for them: powers of 2 of 2^30,
+  1 and 2^-30 for the light, the entity's axes, the vectors into the axes
+  and the normals, on a grid of positions and view origins, whose
+  products cancel exactly and show a sum's order); of the 8 that pass, 7
+  cannot change a result (two operands of one addition swapped; (r + 1) x
+  0.5 for r x 0.5 + 0.5; the light's w test written with !=, the same for
+  a NaN; operand orders against 1.0 and of a stored, quiet tangent; 0.5 -
+  (a + b) of two floats, exact in double; the axes' frame unaligned,
+  whose counts past the vertex count are never read) and 1 is a gap (the
+  rotation's sine stored unquietened, which shows only for a NaN in the
+  table and in the coordinates at once).
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -382,6 +447,13 @@ on gfx::Device" below).
   the layer 8 build: all 13 loading and briefing frames shared, 47 of
   1640 in-level frames identical, the rest in the 2D text, at most 1165
   px within (8,226)-(455,471).
+  With layer 10 (2026-11-04): the walk reaches only the vertices' axes
+  0x50ABF0 (2503 times under gdb, from the lifted code; training's
+  shaders have none of the other generators and texmods), so the oracle
+  alone covers those. Standing, against the layer 9 build: all 13
+  loading and briefing frames shared, 46 of 1640 in-level frames
+  identical, the rest in the 2D text, at most 713 px within
+  (0,0)-(419,457), as base against base.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),

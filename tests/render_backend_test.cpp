@@ -253,6 +253,24 @@ void f_00508800_lifted(Ctx& c);
 void f_005095F0_lifted(Ctx& c);
 void f_005098A0_lifted(Ctx& c);
 void f_00509190_lifted(Ctx& c);
+void f_0050A2B0_lifted(Ctx& c);
+void f_0050A380_lifted(Ctx& c);
+void f_0050A3D0_lifted(Ctx& c);
+void f_0050A420_lifted(Ctx& c);
+void f_0050A4D0_lifted(Ctx& c);
+void f_0050A5C0_lifted(Ctx& c);
+void f_0050A720_lifted(Ctx& c);
+void f_0050A7C0_lifted(Ctx& c);
+void f_0050A820_lifted(Ctx& c);
+void f_0050A890_lifted(Ctx& c);
+void f_0050A8D0_lifted(Ctx& c);
+void f_0050A980_lifted(Ctx& c);
+void f_0050A9B0_lifted(Ctx& c);
+void f_0050AA30_lifted(Ctx& c);
+void f_0050AA80_lifted(Ctx& c);
+void f_0050AE10_lifted(Ctx& c);
+void f_00508A50_lifted(Ctx& c);
+void f_0050ABF0_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -315,6 +333,24 @@ void f_00508800(Ctx& c) { f_00508800_lifted(c); }
 void f_005095F0(Ctx& c) { f_005095F0_lifted(c); }
 void f_005098A0(Ctx& c) { f_005098A0_lifted(c); }
 void f_00509190(Ctx& c) { f_00509190_lifted(c); }
+void f_0050A2B0(Ctx& c) { f_0050A2B0_lifted(c); }
+void f_0050A380(Ctx& c) { f_0050A380_lifted(c); }
+void f_0050A3D0(Ctx& c) { f_0050A3D0_lifted(c); }
+void f_0050A420(Ctx& c) { f_0050A420_lifted(c); }
+void f_0050A4D0(Ctx& c) { f_0050A4D0_lifted(c); }
+void f_0050A5C0(Ctx& c) { f_0050A5C0_lifted(c); }
+void f_0050A720(Ctx& c) { f_0050A720_lifted(c); }
+void f_0050A7C0(Ctx& c) { f_0050A7C0_lifted(c); }
+void f_0050A820(Ctx& c) { f_0050A820_lifted(c); }
+void f_0050A890(Ctx& c) { f_0050A890_lifted(c); }
+void f_0050A8D0(Ctx& c) { f_0050A8D0_lifted(c); }
+void f_0050A980(Ctx& c) { f_0050A980_lifted(c); }
+void f_0050A9B0(Ctx& c) { f_0050A9B0_lifted(c); }
+void f_0050AA30(Ctx& c) { f_0050AA30_lifted(c); }
+void f_0050AA80(Ctx& c) { f_0050AA80_lifted(c); }
+void f_0050AE10(Ctx& c) { f_0050AE10_lifted(c); }
+void f_00508A50(Ctx& c) { f_00508A50_lifted(c); }
+void f_0050ABF0(Ctx& c) { f_0050ABF0_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -375,6 +411,24 @@ void n_00508800(Ctx& c);
 void n_005095F0(Ctx& c);
 void n_005098A0(Ctx& c);
 void n_00509190(Ctx& c);
+void n_0050A2B0(Ctx& c);
+void n_0050A380(Ctx& c);
+void n_0050A3D0(Ctx& c);
+void n_0050A420(Ctx& c);
+void n_0050A4D0(Ctx& c);
+void n_0050A5C0(Ctx& c);
+void n_0050A720(Ctx& c);
+void n_0050A7C0(Ctx& c);
+void n_0050A820(Ctx& c);
+void n_0050A890(Ctx& c);
+void n_0050A8D0(Ctx& c);
+void n_0050A980(Ctx& c);
+void n_0050A9B0(Ctx& c);
+void n_0050AA30(Ctx& c);
+void n_0050AA80(Ctx& c);
+void n_0050AE10(Ctx& c);
+void n_00508A50(Ctx& c);
+void n_0050ABF0(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -490,6 +544,15 @@ const Entry kEntries[] = {
     COD1_ENTRY(00509040, "deform bulge"),   COD1_ENTRY(005090E0, "deform move"),
     COD1_ENTRY(00508800, "deform shadow"),  COD1_ENTRY(005095F0, "deform sprite"),
     COD1_ENTRY(005098A0, "deform sprite2"), COD1_ENTRY(00509190, "deform text"),
+    COD1_ENTRY(0050A2B0, "tc environment"),  COD1_ENTRY(0050A380, "tc from view"),
+    COD1_ENTRY(0050A3D0, "tc to view"),      COD1_ENTRY(0050A420, "tc reflect"),
+    COD1_ENTRY(0050A4D0, "tc light"),        COD1_ENTRY(0050A5C0, "tc half"),
+    COD1_ENTRY(0050A720, "tc view plus"),    COD1_ENTRY(0050A7C0, "tc axes"),
+    COD1_ENTRY(0050A820, "tc axes view"),    COD1_ENTRY(0050A890, "tm swap"),
+    COD1_ENTRY(0050A8D0, "tm turbulence"),   COD1_ENTRY(0050A980, "tm scale"),
+    COD1_ENTRY(0050A9B0, "tm scroll"),       COD1_ENTRY(0050AA30, "tm transform"),
+    COD1_ENTRY(0050AA80, "tm rotate"),       COD1_ENTRY(0050AE10, "tm into axes"),
+    COD1_ENTRY(00508A50, "tm stretch"),      COD1_ENTRY(0050ABF0, "vertex axes"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -981,6 +1044,7 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(0x1536298, g() % 4 ? g() % 3 : uint32_t(g()));  // overbright bits
   for (uint32_t i = 0; i < 12; i += 4) Wr(0x1549828 + i, RandFloat(g));  // view origin
   for (uint32_t i = 0; i < 12; i += 4) Wr(0x1549AB8 + i, RandFloat(g));  // and the entity's
+  for (uint32_t i = 0; i < 12; i += 4) Wr(0x15364B0 + i, RandFloat(g));  // the world's vector
   if (g() % 2) {
     Wr(0x1549B3C, 0x1535D6C);  // the world entity
   } else {
@@ -1085,6 +1149,61 @@ uint32_t Indexes(Arena& a, std::mt19937& g, int tris) {
   }
   for (size_t i = 0; i < v.size(); i++) g_mem.write<uint16_t>(p + 2 * uint32_t(i), v[i]);
   return p;
+}
+
+// A vertex buffer of n floats a vertex (for the most vertices, 40), of
+// ordinary and special values, now and then of mixed magnitudes.
+uint32_t Coords(Arena& a, std::mt19937& g, uint32_t n) {
+  const uint32_t p = a.Alloc(40 * 4 * n);
+  const bool mixed = g() % 4 == 0;
+  for (uint32_t i = 0; i < 40 * 4 * n; i += 4) Wr(p + i, mixed ? Mixed(g) : RandFloat(g));
+  return p;
+}
+
+// Finite positions, normals and texture coordinates t when the vertices'
+// axes are built (the lifted VectorNormalize takes a NaN length to the
+// CRT's error path, as the square root above).
+void AxesInputs(std::mt19937& g) {
+  if (Rd(0x17F0C68) && Rd(0x17F0C6C)) return;
+  Positions(g);
+  const bool mixed = g() % 4 == 0;
+  for (uint32_t i = 0; i < 0x600; i += 4)
+    Wr(0x1698C40 + i, mixed ? Mixed(g) : Float(float(int(g() % 2001) - 1000) / 1000.0f));
+  for (uint32_t i = 0; i < 0x400; i += 4)
+    Wr(0x1650C40 + i, mixed ? Mixed(g) : Float(float(int(g() % 2001) - 1000) / 1000.0f));
+}
+
+// A float of 2^30, 1 or 2^-30, either sign: of three products of such
+// values two often cancel and the third is below the other two's ulp, so
+// the order of their sum shows.
+uint32_t Power(std::mt19937& g) {
+  return Pick(g, {Float(0x1p30f), Float(1.0f), Float(0x1p-30f)}) | (g() % 2 ? 0x80000000u : 0);
+}
+
+// Now and then the view's origin (in the entity's space) and the
+// positions on a grid (directions to the view of equal coordinates) and
+// normals of powers of 2.
+void ViewGrid(std::mt19937& g) {
+  if (g() % 4) return;
+  for (uint32_t i = 0; i < 12; i += 4) Wr(0x1549AB8 + i, Float(float(int(g() % 5) - 2)));
+  for (uint32_t i = 0; i < 0x1000; i += 4) Wr(0x1630C40 + i, Float(float(int(g() % 5) - 2)));
+  for (uint32_t i = 0; i < 0x600; i += 4) Wr(0x1698C40 + i, Power(g));
+}
+
+// The light drawn for (its origin +0x44, w +0x50: now and then 0, a
+// direction), or none (the first page).
+void Light(Arena& a, std::mt19937& g) {
+  if (g() % 8 == 0) {
+    Wr(0x1549B40, 0);
+    return;
+  }
+  const uint32_t l = a.Alloc(0x54);
+  const bool powers = g() % 4 == 0;
+  for (uint32_t i = 0x44; i < 0x54; i += 4) Wr(l + i, powers ? Power(g) : g() % 2 ? Mixed(g) : RandFloat(g));
+  if (powers)
+    for (uint32_t i = 0; i < 0x30; i += 4) Wr(0x1549A88 + i, Power(g));  // the entity's origin and axes
+  if (g() % 2) Wr(l + 0x50, g() % 2 ? 0 : 0x80000000);
+  Wr(0x1549B40, l);
 }
 
 void Cases(Arena& a, std::mt19937& g, Stats& s) {
@@ -1240,6 +1359,94 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       break;
     case 0x509190:
       k.ebx = 0x15496F4 + 32 * (g() % 8);
+      break;
+    case 0x50A2B0:
+    case 0x50A720:
+      ViewGrid(g);
+      k.eax = Coords(a, g, 3);
+      break;
+    case 0x50A890:
+      k.eax = Coords(a, g, 3);
+      break;
+    case 0x50A380:
+    case 0x50A3D0:
+    case 0x50A4D0:
+      if (kEntries[k.entry].va == 0x50A4D0) Light(a, g);
+      k.ecx = Coords(a, g, 3);
+      break;
+    case 0x50A5C0:
+      ViewGrid(g);
+      Light(a, g);
+      k.eax = Coords(a, g, 3);
+      break;
+    case 0x50A420:
+      ViewGrid(g);
+      k.edx = Coords(a, g, 3);
+      break;
+    case 0x50A7C0:
+      AxesInputs(g);
+      k.eax = Coords(a, g, 3);
+      k.args = {uint32_t(g() % 3)};
+      break;
+    case 0x50A820:
+      AxesInputs(g);
+      k.eax = g() % 3;
+      k.ecx = Coords(a, g, 4);
+      break;
+    case 0x50A8D0:
+      k.ebx = a.Alloc(0x14);
+      Wave(g, k.ebx);
+      k.eax = Coords(a, g, 2);
+      break;
+    case 0x50A980:
+      k.edx = Coords(a, g, 2);
+      k.eax = Coords(a, g, 2);
+      break;
+    case 0x50A9B0: {
+      // Finite speeds and time (the CRT's floor takes a NaN to its error
+      // path, which the lifted CRT reaches through the thread's data).
+      k.eax = a.Alloc(8);
+      for (uint32_t i = 0; i < 8; i += 4)
+        Wr(k.eax + i, g() % 4 ? Float(float(int(g() % 4001) - 2000) / 1000.0f) : Mixed(g));
+      if (!std::isfinite(std::bit_cast<float>(Rd(0x17F0C78)))) Wr(0x17F0C78, Float(1.5f));
+      k.ecx = Coords(a, g, 2);
+      break;
+    }
+    case 0x50AA30:
+      // A texmod's matrix (+0x18) and translation (+0x28).
+      k.eax = a.Alloc(0x30);
+      for (uint32_t i = 0x18; i < 0x30; i += 4) Wr(k.eax + i, g() % 2 ? Mixed(g) : RandFloat(g));
+      k.ecx = Coords(a, g, 2);
+      break;
+    case 0x50AA80:
+      k.args = {g() % 4 ? Float(float(int(g() % 4001) - 2000) / 10.0f) : RandFloat(g), Coords(a, g, 2)};
+      break;
+    case 0x50AE10:
+      AxesInputs(g);
+      k.eax = Coords(a, g, 3);
+      if (g() % 4 == 0) {
+        // Vectors and axes of powers of 2, the axes as they are.
+        Wr(0x17F0C68, 1);
+        Wr(0x17F0C6C, 1);
+        for (uint32_t i = 0; i < 40 * 12; i += 4) {
+          Wr(k.eax + i, Power(g));
+          for (const uint32_t axes : {0x1698C40u, 0x16B0C40u, 0x16C8C40u}) Wr(axes + i, Power(g));
+        }
+      }
+      break;
+    case 0x50ABF0: {
+      Wr(0x17F0C68, 0);
+      AxesInputs(g);
+      // Stale counts where its frame keeps them (read for an index past
+      // the vertex count).
+      const uint32_t esp = kStack + kStackSize - 0x1000;
+      for (uint32_t i = esp - 0x8040; i < esp; i += 4) Wr(i, g() % 3);
+      break;
+    }
+    case 0x508A50:
+      k.esi = a.Alloc(0x14);
+      Wave(g, k.esi);
+      k.args = {Coords(a, g, 2)};
       break;
     case 0x4F3D80: {
       const uint32_t coords = a.Alloc(32);
