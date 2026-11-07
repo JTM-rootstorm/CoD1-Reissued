@@ -1,9 +1,6 @@
 # Added to manifest/CoDSP.manifest for render_backend_oracle_test: the
 # lifted functions the native back end calls, stubbed (recording each call)
 # in tests/render_backend_test.cpp.
-replace 004FCE80
-replace 004F3A70
-replace 004F3C70
 replace 004F5940
 replace 0052AB6F
 replace 00431CF0
@@ -13,4 +10,6 @@ replace 0051D45A
 replace 0051B5EC
 replace 0051B5DF
 replace 0042A480
-replace 004F4260
+replace 004A5440
+replace 0051A70E
+replace 004230E0

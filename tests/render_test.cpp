@@ -163,6 +163,10 @@ void f_0049EAA0_lifted(Ctx& c);
 void f_0049EAA0(Ctx& c) { f_0049EAA0_lifted(c); }
 void f_0051B3DD_lifted(Ctx& c);
 void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
+// TableForFunc, native in the game (src/render_backend.cpp): ComputeTexCoords
+// reaches it.
+void f_00508940_lifted(Ctx& c);
+void f_00508940(Ctx& c) { f_00508940_lifted(c); }
 void n_004D68E0(Ctx& c);
 void n_004D6970(Ctx& c);
 void n_004D8280(Ctx& c);

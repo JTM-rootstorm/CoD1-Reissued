@@ -13,9 +13,13 @@
 // table's other surfaces: bad, skipped, a polygon, an entity's (by its
 // type) and the two of 24 and 25 that fill the tessellator and the
 // optimised batch; and an entity's surfaces by its type, with the quads
-// they add. Replacements of lifted functions named with `replace`
-// in manifest/CoDSP.manifest; FINDINGS.md "Renderer back end". Names and
-// evidence are in the Ghidra plate comments.
+// they add; the tessellator's begin and RB_CheckOverflow, the
+// immediate-mode batch and the debug draws; and the leaves below: the
+// register combiners, the vertex program, TableForFunc, the noise, the
+// water texture and the debug draws' DXF file. Replacements of lifted
+// functions named with `replace` in manifest/CoDSP.manifest; FINDINGS.md
+// "Renderer back end". Names and evidence are in the Ghidra plate
+// comments.
 //
 // The GL calls go through the renderer's qgl function pointers (set by
 // its QGL_Init from opengl32's exports and wglGetProcAddress; the names
@@ -44,15 +48,15 @@ void f_004F3410(Ctx& c);
 void f_004F3810(Ctx& c);
 void f_004F38B0(Ctx& c);
 void f_004F3920(Ctx& c);
-void f_004FCE80(Ctx& c);  // updates a video generator's texture (ECX; time, unit)
-void f_004F3A70(Ctx& c);  // sets up NV register combiners (combiners)
-void f_004F3C70(Ctx& c);  // sets up a vertex program (ESI program)
+void f_004FCE80(Ctx& c);
+void f_004F3A70(Ctx& c);
+void f_004F3C70(Ctx& c);
 void f_004C8830(Ctx& c);
 void f_004C89A0(Ctx& c);
 void f_0050ABF0(Ctx& c);
 void f_0050AA30(Ctx& c);
-void f_00508940(Ctx& c);  // a waveform's table (ECX type; ri.Error for another)
-void f_004D3AA0(Ctx& c);  // the noise (x, y, z, t; ST0)
+void f_00508940(Ctx& c);
+void f_004D3AA0(Ctx& c);
 void f_00426710(Ctx& c);  // VectorNormalize (ESI; the length in ST0)
 void f_00500F20(Ctx& c);  // adds a quad (origin, left, up, colour, s1, t1, s2, t2)
 void f_0052E610(Ctx& c);  // the CRT's square root (ST0)
@@ -72,7 +76,19 @@ void f_00426D30(Ctx& c);  // two axes across EDI into EAX and EBX
 void f_00426AB0(Ctx& c);  // rotates a point about EAX (out, point, degrees)
 void f_004273C0(Ctx& c);  // a vector across EBX into EDX
 void f_0042A480(Ctx& c);  // allocates zeroed memory (size; EAX), exits when out of it
-void f_004F4260(Ctx& c);  // writes the tessellator's triangles to a DXF file (EBX)
+void f_004F4260(Ctx& c);
+void f_004A5440(Ctx& c);  // GL_CheckErrors (the caller's name)
+void f_00427E80(Ctx& c);  // inverts the 4x4 matrix ECX into EAX
+void f_0051A70E(Ctx& c);  // sprintf
+void f_004230E0(Ctx& c);  // FS_Write (buffer, length, file)
+// The leaves: the entity's frame, the water's spectrum, transform, FFT
+// and texels, a point through a matrix.
+void f_00509500(Ctx& c);
+void f_004FC960(Ctx& c);
+void f_004FCA50(Ctx& c);
+void f_004FC4E0(Ctx& c);
+void f_004FCAE0(Ctx& c);
+void f_004F41C0(Ctx& c);
 // The tessellator's begin and overflow, the immediate-mode batch and the
 // debug draws.
 void f_004F4AB0(Ctx& c);
@@ -5557,6 +5573,532 @@ void f_004F4850(Ctx& c) {
   c.ebp = ebp;
   c.esi = esi;
   c.edi = edi;
+  c.esp = e + 4;
+}
+
+// ---- the leaves: combiners, vertex programs, waveforms, noise, the water, the DXF -----
+
+namespace {
+
+// The NV register combiners' and the ARB vertex program's entry points.
+constexpr uint32_t kglCombinerParameterfvNV = 0x1534A58, kglCombinerParameteriNV = 0x15352A0,
+                   kglCombinerInputNV = 0x1535580, kglCombinerOutputNV = 0x1534810,
+                   kglCombinerStageParameterfvNV = 0x1534954,
+                   kglFinalCombinerInputNV = 0x1534AD0, kglBindProgramARB = 0x1534CA4,
+                   kglProgramLocalParameter4fvARB = 0x1534AA4,
+                   kglProgramLocalParameter4fARB = 0x1534D24, kglTexSubImage2D = 0x1534E4C;
+
+// The noise's permutation (256 dwords) and its values by permutation.
+uint32_t NoisePerm(uint32_t k) { return U32(0x1195C38 + 4 * (k & 0xFF)); }
+F32 NoiseValue(uint32_t k) { return Fst(St(Ld(0x1196038 + 4 * NoisePerm(k)))); }
+
+}  // namespace
+
+// RB_SetupRegisterCombiners (the combiners on the stack; the name is the
+// one it passes GL_CheckErrors): the two constant colours (+0, +0x10), the
+// number of general combiners (+0x5F8) and, with more than one texture
+// unit (0x15347A4), per-stage constants on or off (+0x5FC); each general
+// combiner (0xB0 bytes from +0x20: its two constants, then the RGB and
+// alpha portions, 0x48 bytes each: four inputs of input, mapping and
+// component usage, then the AB, CD and sum outputs, scale and bias and
+// the three flags as bytes), its stage constants with per-stage
+// constants; the final combiner's seven inputs (+0x5A0); then
+// GL_CheckErrors (0x4A5440) as a tail call, the argument's slot holding
+// the name.
+void f_004F3A70(Ctx& c) {
+  const uint32_t e = c.esp, cb = Arg(c, e, 1);
+  c.esp = e - 0x1C;
+  Push(c, cb);
+  Push(c, 0x852A);
+  CallPtr(c, kglCombinerParameterfvNV, 0x4F3A80);
+  Push(c, cb + 0x10);
+  Push(c, 0x852B);
+  CallPtr(c, kglCombinerParameterfvNV, 0x4F3A8F);
+  Push(c, U32(cb + 0x5F8));
+  Push(c, 0x854E);
+  CallPtr(c, kglCombinerParameteriNV, 0x4F3AA1);
+  if (I32(0x15347A4) >= 2) {
+    if (U32(cb + 0x5FC)) Enable(c, 0x8535, 0x4F3ABF);
+    else Disable(c, 0x8535, 0x4F3AC7);
+  }
+  if (I32(cb + 0x5F8) > 0) {
+    c.esp = e - 0x20;
+    auto input = [&](uint32_t stage, uint32_t portion, uint32_t var, uint32_t in, uint32_t va) {
+      Push(c, U32(in + 8));
+      Push(c, U32(in + 4));
+      Push(c, U32(in));
+      Push(c, var);
+      Push(c, portion);
+      Push(c, stage);
+      CallPtr(c, kglCombinerInputNV, va);
+    };
+    auto output = [&](uint32_t stage, uint32_t portion, uint32_t out, uint32_t va) {
+      for (uint32_t k = 3; k-- > 0;) Push(c, U8(out + 0x14 + k));
+      for (uint32_t k = 5; k-- > 0;) Push(c, U32(out + 4 * k));
+      Push(c, portion);
+      Push(c, stage);
+      CallPtr(c, kglCombinerOutputNV, va);
+    };
+    uint32_t i = 0;
+    do {
+      const uint32_t stage = 0x8550 + i, rgb = cb + 0x40 + 0xB0 * i, alpha = rgb + 0x48;
+      for (uint32_t k = 0; k < 4; k++) {
+        input(stage, 0x1907, 0x8523 + k, rgb + 0xC * k, 0x4F3B2A);
+        input(stage, 0x1906, 0x8523 + k, alpha + 0xC * k, 0x4F3B4F);
+      }
+      output(stage, 0x1907, rgb + 0x30, 0x4F3B9F);
+      output(stage, 0x1906, alpha + 0x30, 0x4F3BD1);
+      if (U32(cb + 0x5FC)) {
+        Push(c, rgb - 0x20);
+        Push(c, 0x852A);
+        Push(c, stage);
+        CallPtr(c, kglCombinerStageParameterfvNV, 0x4F3BEF);
+        Push(c, rgb - 0x10);
+        Push(c, 0x852B);
+        Push(c, stage);
+        CallPtr(c, kglCombinerStageParameterfvNV, 0x4F3BFF);
+      }
+    } while (int32_t(++i) < I32(cb + 0x5F8));
+    c.esp = e - 0x1C;
+  }
+  for (uint32_t j = 0; j < 7; j++) {
+    const uint32_t in = cb + 0x5A0 + 0xC * j;
+    Push(c, U32(in + 8));
+    Push(c, U32(in + 4));
+    Push(c, U32(in));
+    Push(c, 0x8523 + j);
+    CallPtr(c, kglFinalCombinerInputNV, 0x4F3C43);
+  }
+  Put(e + 4, 0x53C0C4);
+  c.esp = e;
+  f_004A5440(c);
+}
+
+// A point (ECX) into the entity's frame (EAX out): its offset from the
+// entity's origin (0x1549A88) along each of the entity's axes, z first.
+void f_00509500(Ctx& c) {
+  const uint32_t p = c.ecx, out = c.eax;
+  const St dx = St(Ld(p)) - Ld(0x1549A88), dy = St(Ld(p + 4)) - Ld(0x1549A8C),
+           dz = St(Ld(p + 8)) - Ld(0x1549A90);
+  for (uint32_t k = 0; k < 3; k++) {
+    const uint32_t axis = kEntityAxes + 0xC * k;
+    Put(out + 4 * k, Fst(St(Ld(axis + 8)) * dz + St(Ld(axis + 4)) * dy + St(Ld(axis)) * dx));
+  }
+  c.esp += 4;
+}
+
+// The vertex program (ESI; its ARB program +0x40, bound unless it is the
+// last, 0x1534674): local parameter 0 the view's origin (0x1549828) in
+// the entity's frame, and with a light (0x1549B40) 1 the light's origin
+// (+0x44) in it, 2 the light's four floats from +0x24 (the scaled copies
+// it makes of them by 0x1549B44 go unused) and 3 its colour (+0x60).
+// The parameters' w is 1.
+void f_004F3C70(Ctx& c) {
+  const uint32_t e = c.esp, prog = c.esi, local = e - 0x10;
+  c.esp = local;
+  if (prog != U32(0x1534674)) {
+    Push(c, U32(prog + 0x40));
+    Push(c, 0x8620);
+    CallPtr(c, kglBindProgramARB, 0x4F3C85);
+    Put(0x1534674, prog);
+  }
+  auto param = [&](uint32_t index, uint32_t point, uint32_t ret, uint32_t va) {
+    c.eax = local;
+    c.ecx = point;
+    Call(c, f_00509500, ret);
+    Push(c, local);
+    Push(c, index);
+    Push(c, 0x8620);
+    Put(local + 0xC, 0x3F800000u);
+    CallPtr(c, kglProgramLocalParameter4fvARB, va);
+  };
+  param(0, 0x1549828, 0x4F3C9F, 0x4F3CB3);
+  const uint32_t light = U32(0x1549B40);
+  if (light) {
+    param(1, light + 0x44, 0x4F3CD2, 0x4F3CE6);
+    Push(c, light + 0x24);
+    Push(c, 2);
+    Push(c, 0x8620);
+    CallPtr(c, kglProgramLocalParameter4fvARB, 0x4F3D30);
+    Push(c, 0x3F800000);
+    Push(c, U32(light + 0x68));
+    Push(c, U32(light + 0x64));
+    Push(c, U32(light + 0x60));
+    Push(c, 3);
+    Push(c, 0x8620);
+    CallPtr(c, kglProgramLocalParameter4fARB, 0x4F3D53);
+  }
+  c.esp = e + 4;
+}
+
+// TableForFunc (ECX the waveform's type; EAX): the table of 1024 floats
+// for types 1-5 (sin, square, triangle, sawtooth, inverse sawtooth), else
+// ri.Error with the tessellator's shader and 0.
+void f_00508940(Ctx& c) {
+  const uint32_t type = c.ecx;
+  if (type - 1 <= 4) {
+    c.eax = 0x1544530 + 0x1000 * (type - 1);
+  } else {
+    Push(c, U32(kTessShader));
+    Push(c, type);
+    Push(c, 0x539108);
+    Push(c, 1);
+    CallPtr(c, kError, 0x50897B);
+    c.esp += 0x10;
+    c.eax = 0;
+  }
+  c.esp += 4;
+}
+
+// The noise (cdecl x, y, z, t; ST0): each coordinate's lattice point by
+// FISTP of it less 0.5 - 2^-30 (round to nearest: its floor but at
+// halves) and the fraction left, stored over x, y and z's slots; the
+// values at the 16 corners by the permutation 0x1195C38 (t, z, y, then x
+// added at each level) from 0x1196038, interpolated linearly in x, y and
+// z at t's lattice point and the next, and between them by t's fraction.
+void f_004D3AA0(Ctx& c) {
+  const uint32_t e = c.esp;
+  const St kHalf(std::bit_cast<double>(uint64_t(0x3FDFFFFFFF000000)));
+  int32_t lat[4];
+  for (uint32_t k = 0; k < 4; k++) lat[k] = Fistp(St(Ld(e + 4 + 4 * k)) - kHalf);
+  for (uint32_t k = 0; k < 3; k++) Put(e + 4 + 4 * k, Fst(Ld(e + 4 + 4 * k) - FromInt(lat[k])));
+  const St t = Ld(e + 0x10) - FromInt(lat[3]);
+  const uint32_t ix = uint32_t(lat[0]), iy = uint32_t(lat[1]), iz = uint32_t(lat[2]),
+                 it = uint32_t(lat[3]);
+  const F32 fx = Ld(e + 4), fy = Ld(e + 8), fz = Ld(e + 0xC);
+  const St x1 = St(1.0f) - fx, y1 = St(1.0f) - fy, z1 = St(1.0f) - fz;
+  // The trilinear value at t's lattice point it: the corners' values at
+  // the x pairs (a: y and z, b: y + 1, c: z + 1, d: both), each pair x then x + 1.
+  auto cube = [&](uint32_t it) {
+    const uint32_t z0 = NoisePerm(it) + iz, y0 = NoisePerm(z0) + iy, y2 = NoisePerm(z0 + 1) + iy;
+    const uint32_t a = NoisePerm(y0) + ix, b = NoisePerm(y0 + 1) + ix, cc = NoisePerm(y2) + ix,
+                   d = NoisePerm(y2 + 1) + ix;
+    const F32 a0 = NoiseValue(a), a1 = NoiseValue(a + 1), b0 = NoiseValue(b),
+              b1 = NoiseValue(b + 1), c0 = NoiseValue(cc), c1 = NoiseValue(cc + 1),
+              d0 = NoiseValue(d), d1 = NoiseValue(d + 1);
+    const St far = (x1 * d0 + St(d1) * fx) * fy + (x1 * c0 + St(c1) * fx) * y1;
+    const St near = (x1 * b0 + St(b1) * fx) * fy + (x1 * a0 + St(a1) * fx) * y1;
+    return Fst(far * fz + near * z1);
+  };
+  const F32 n0 = cube(it), n1 = cube(it + 1);
+  const St r = (St(1.0f) - t) * n0 + St(n1) * t;
+  x87::LoadF64(c.fpu, std::bit_cast<uint64_t>(r.v));
+  c.esp = e + 4;
+}
+
+// The water's spectrum at a time (ESI the generator, EDI the complex
+// buffer; time on the stack): for each of its width x height
+// frequencies (+0xC, floats) not 0, its amplitude (+8, complex) turned
+// by the sine table at FISTP of time x frequency x 1024 / 2pi (stored as a
+// float, through the scratch 0x13F96D8), the real part by the table a
+// quarter turn on (255); 0 for a frequency of 0. The loops count from
+// minus half to half the height and width.
+void f_004FC960(Ctx& c) {
+  const uint32_t e = c.esp, gen = c.esi, out = c.edi;
+  uint32_t i = 0;
+  for (int32_t y = -(I32(gen + 0x14) / 2); y < I32(gen + 0x14) / 2; y++) {
+    for (int32_t x = -(I32(gen + 0x10) / 2); x < I32(gen + 0x10) / 2; x++, i++) {
+      const uint32_t f = U32(gen + 0xC) + 4 * i, o = out + 8 * i;
+      if (St(Ld(f)) == St(0.0f)) {
+        Put(o, 0u);
+        Put(o + 4, 0u);
+        continue;
+      }
+      const int32_t a = Fistp(St(Fst(St(Ld(e + 4)) * Ld(f) * Ld(0x55B588))));
+      Put(0x13F96D8, uint32_t(a));
+      const uint32_t s = uint32_t(a) & 0x3FF, cs = (s + 0xFF) & 0x3FF;
+      Put(o, Fst(St(Ld(0x1544530 + 4 * cs)) * Ld(U32(gen + 8) + 8 * i)));
+      Put(o + 4, Fst(St(Ld(0x1544530 + 4 * s)) * Ld(U32(gen + 8) + 8 * i + 4)));
+    }
+  }
+  c.esp = e + 4;
+}
+
+// The water's 2D transform (ESI the generator; the buffer on the stack):
+// the FFT (0x4FC4E0) of each row, then of each column (its log2 size
+// found by shifts, the sizes powers of two).
+void f_004FCA50(Ctx& c) {
+  const uint32_t e = c.esp, gen = c.esi, buf = Arg(c, e, 1);
+  const uint32_t ebx = c.ebx, ebp = c.ebp, edi = c.edi;
+  auto log2 = [](uint32_t n) {
+    uint32_t l = 0;
+    while (n != 1 && n != 1u << (++l & 31)) {}
+    return l;
+  };
+  const uint32_t lh = log2(U32(gen + 0x14)), lw = log2(U32(gen + 0x10));
+  c.esp = e - 0xC;
+  for (uint32_t r = 0; int32_t(r) < I32(gen + 0x14); r++) {
+    Push(c, 1);
+    Push(c, buf + 8 * (U32(gen + 0x10) * r));
+    c.ecx = lw;
+    Call(c, f_004FC4E0, 0x4FCAA7);
+    c.esp += 8;
+  }
+  for (uint32_t k = 0; int32_t(k) < I32(gen + 0x10); k++) {
+    Push(c, U32(gen + 0x10));
+    Push(c, buf + 8 * k);
+    c.ecx = lh;
+    Call(c, f_004FC4E0, 0x4FCAC9);
+    c.esp += 8;
+  }
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// An in-place FFT (ECX log2 n; stack: the complex floats, their stride):
+// the bit reversal by the table 0x11E12B0 (8-bit reversals, shifted to
+// log2 n bits), a radix-4 first pass, then radix-2 passes from groups of
+// 4 with the twiddles 0x11E0AA8 (cos, sin pairs over 256) at a shift of
+// 5 less one each pass. n is at least 4.
+void f_004FC4E0(Ctx& c) {
+  const uint32_t e = c.esp, data = Arg(c, e, 1), stride = Arg(c, e, 2), lg = c.ecx;
+  const uint32_t n = 1u << (lg & 31);
+  for (uint32_t i = 0; int32_t(i) < int32_t(n); i++) {
+    const int32_t r = I32(0x11E12B0 + 4 * i) >> ((8 - lg) & 31);
+    if (r < int32_t(i)) {
+      const uint32_t a = data + 8 * stride * i, b = data + 8 * (uint32_t(r) * stride);
+      const uint32_t re = U32(a), im = U32(a + 4);
+      Put(a, U32(b));
+      Put(a + 4, U32(b + 4));
+      Put(b, re);
+      Put(b + 4, im);
+    }
+  }
+  const uint32_t s = 8 * stride;
+  uint32_t x0 = data, x1 = data + s, count = n >> 2;
+  do {
+    const uint32_t x2 = x0 + 2 * s, x3 = x1 + 2 * s;
+    const St a0i = Ld(x0 + 4), a2r = Ld(x2), a2i = Ld(x2 + 4), a0r = Ld(x0);
+    const St p = St(Ld(x0)) + Ld(x1), q = a2r + Ld(x3);
+    Put(x0, Fst(p + q));
+    Put(x2, Fst(p - q));
+    const St pi = St(Ld(x0 + 4)) + Ld(x1 + 4), qi = St(Ld(x2 + 4)) + Ld(x3 + 4);
+    Put(x0 + 4, Fst(pi + qi));
+    Put(x2 + 4, Fst(pi - qi));
+    const St d = Ld(x1) - a0r, ei = Ld(x3 + 4) - a2i;
+    Put(x1, Fst(d - ei));
+    const St f = Ld(x3) - a2r;
+    Put(x3, Fst(ei + d));
+    const St h = Ld(x1 + 4) - a0i;
+    Put(x1 + 4, Fst(f + h));
+    Put(x3 + 4, Fst(h - f));
+    x0 += 4 * s;
+    x1 += 4 * s;
+  } while (--count);
+  uint32_t m = 4, sh = 5;
+  while (int32_t(m) < int32_t(n)) {
+    const uint32_t total = n * stride, step = 2 * m * stride;
+    for (uint32_t j = 0, a = 0; int32_t(j) < int32_t(m); j++, a += stride) {
+      const uint32_t t = j << (sh & 31);
+      const F32 wr = Ld(0x11E0AA8 + 8 * t), wi = Ld(0x11E0AAC + 8 * t);
+      uint32_t b = data + 8 * (m * stride + a);
+      for (uint32_t k = a; k < total; k += step, b += 8 * step) {
+        const uint32_t pk = data + 8 * k;
+        const St tr = St(wr) * Ld(b) - St(wi) * Ld(b + 4);
+        const St ti = St(wr) * Ld(b + 4) + St(wi) * Ld(b);
+        Put(b, Fst(St(Ld(pk)) - tr));
+        Put(b + 4, Fst(St(Ld(pk + 4)) - ti));
+        Put(pk, Fst(tr + Ld(pk)));
+        Put(pk + 4, Fst(ti + Ld(pk + 4)));
+      }
+    }
+    sh--;
+    m *= 2;
+  }
+  c.esp = e + 4;
+}
+
+// The water's texels (cdecl: texels, the complex buffer, the generator):
+// each value's magnitude over its real part, then per texel the normal
+// from the differences to the texel on its left (wrapping in the row) and
+// the one above (wrapping to the last row), (dx, dy, 1) x 127 / its length
+// with N^2 for the 1 (N the texel count), as x, y and z bytes about 127
+// over 0xFF alpha; the texels' slot left past the last row.
+void f_004FCAE0(Ctx& c) {
+  const uint32_t e = c.esp, buf = Arg(c, e, 2), gen = Arg(c, e, 3);
+  const uint32_t w = U32(gen + 0x10), num = w * U32(gen + 0x14);
+  const F32 n2 = Fst(FromInt(int32_t(num * num))), k127{0x42FE0000};
+  for (uint32_t i = 0; int32_t(i) < int32_t(num); i++) {
+    const uint32_t v = buf + 8 * i;
+    const St im = Ld(v + 4), re = Ld(v);
+    Put(v, Fst(Sqrt(im * im + re * re)));
+  }
+  uint32_t up = num - w, left = w - 1, row = 0;
+  for (int32_t y = 0; y < I32(gen + 0x14); y++) {
+    uint32_t l = buf + 8 * left, u = buf + 8 * up, cur = buf + 8 * row, out = Arg(c, e, 1);
+    uint32_t count = w;
+    do {
+      const St dx = St(Ld(l)) - Ld(cur), dy = St(Ld(u)) - Ld(cur);
+      const St len = Sqrt(dy * dy + (dx * dx + n2));
+      const St k = St(k127) / len;
+      l = cur;
+      u += 8;
+      cur += 8;
+      uint32_t px = 0xFF7Fu + uint32_t(Fistp(FromInt(int32_t(num)) * k));
+      px = (px << 8) + 0x7F + uint32_t(Fistp(dy * k));
+      px = (px << 8) + 0x7F + uint32_t(Fistp(dx * k));
+      Put(out, px);
+      out += 4;
+    } while (--count);
+    Put(e + 4, out);
+    const uint32_t ww = U32(gen + 0x10);
+    left += ww;
+    up = (row + num) & (num - 1);
+    row += ww;
+  }
+  c.esp = e + 4;
+}
+
+// A video generator's (here the water's) texture (ECX the generator;
+// stack: the time in ms, the unit), once a frame (its stamp +4 against
+// 0x1535A24): the spectrum at the time in seconds, its transform and the
+// texels on the stack (the buffer of 256 x 256 values at most and the
+// texels below it), then on the unit its image (+0) bound and its texels
+// sent by glTexSubImage2D at its width and height (+0x40, +0x42).
+void f_004FCE80(Ctx& c) {
+  const uint32_t e = c.esp, gen = c.ecx, unit = Arg(c, e, 2);
+  if (U32(gen + 4) != U32(0x1535A24)) {
+    const uint32_t ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+    const uint32_t texels = e - 0xC0004, buf = e - 0x80004;
+    c.esp = e - 0xC0018;
+    Put(c.esp, Fst(FromInt(I32(e + 4)) * Ld(0x55B58C)));
+    Put(gen + 4, U32(0x1535A24));
+    c.esi = gen;
+    c.edi = buf;
+    Call(c, f_004FC960, 0x4FCEDC);
+    Push(c, buf);
+    Call(c, f_004FCA50, 0x4FCEE9);
+    Push(c, gen);
+    Push(c, buf);
+    Push(c, texels);
+    Call(c, f_004FCAE0, 0x4FCEFC);
+    c.esp += 0x14;
+    if (U32(kUnit) != unit) {
+      Push(c, unit + 0x84C0);
+      CallPtr(c, kglActiveTextureARB, 0x4FCF0F);
+      Put(kUnit, unit);
+    }
+    if (U32(kClientUnit) != unit) {
+      Push(c, unit + 0x84C0);
+      CallPtr(c, kglClientActiveTextureARB, 0x4FCF2A);
+      Put(kClientUnit, unit);
+    }
+    c.esi = U32(gen);
+    Call(c, f_004CB3B0, 0x4FCF3D);
+    const uint32_t image = U32(gen);
+    Push(c, texels);
+    Push(c, 0x1401);
+    Push(c, 0x1908);
+    Push(c, U16(image + 0x42));
+    Push(c, U16(image + 0x40));
+    Push(c, 0);
+    Push(c, 0);
+    Push(c, 0);
+    Push(c, 0xDE1);
+    CallPtr(c, kglTexSubImage2D, 0x4FCF63);
+    c.ebx = ebx;
+    c.ebp = ebp;
+    c.esi = esi;
+    c.edi = edi;
+  }
+  c.esp = e + 4;
+}
+
+// A point (ECX) through a 4x4 matrix (EAX, columns of four) with the
+// divide by w, into EDX: x, y and z each times the reciprocal of w (z
+// stored as a float first).
+void f_004F41C0(Ctx& c) {
+  const uint32_t m = c.eax, p = c.ecx, out = c.edx;
+  const St x = St(Ld(m + 0x10)) * Ld(p + 4) + St(Ld(m + 0x20)) * Ld(p + 8) + St(Ld(p)) * Ld(m) +
+               Ld(m + 0x30);
+  auto row = [&](uint32_t k) {
+    return St(Ld(m + 4 * k)) * Ld(p) + St(Ld(m + 0x10 + 4 * k)) * Ld(p + 4) +
+           St(Ld(m + 0x20 + 4 * k)) * Ld(p + 8) + Ld(m + 0x30 + 4 * k);
+  };
+  const St y = row(1);
+  const F32 z = Fst(row(2));
+  const F32 r = Fst(St(1.0f) / row(3));
+  Put(out, Fst(St(r) * x));
+  Put(out + 4, Fst(St(r) * y));
+  Put(out + 8, Fst(St(r) * z));
+  c.esp += 4;
+}
+
+// The tessellator's triangles as 3DFACEs into the DXF file (0x13F9D04;
+// EBX the tessellator), but for the two entities 0x1549B5C and
+// 0x1549E14, a shader with +0x4C bit 3, an entity with +4 bits 0x1C or
+// of types 3-10, and positions 4 floats apart: each face's layer colour
+// the entity's number (0 the world, else its index in 0x15497F8 + 1), its
+// four corners the triangle's vertices 2, 1, 0, 2, each read 12 bytes
+// apart, through the view's matrix 0x1549AC4 and back through the
+// inverse (0x427E80) of 0x15498E0. On an 8-aligned frame: sprintf
+// 0x51A70E into a local buffer, FS_Write 0x4230E0 of its length.
+void f_004F4260(Ctx& c) {
+  const uint32_t e = c.esp, t = c.ebx;
+  const uint32_t ent = U32(t + 0x1D803C);
+  if (ent == 0x1549B5C || ent == 0x1549E14 || (U8(U32(t + 0x1D8030) + 0x4C) & 8) ||
+      (U8(ent + 4) & 0x1C) || (U32(ent) - 3 <= 7) || U32(t + 0x1D8020) == 4) {
+    c.esp = e + 4;
+    return;
+  }
+  const uint32_t esi = c.esi, edi = c.edi, ebp = c.ebp;
+  const uint32_t f = ((e - 4) & ~7u) - 0x480;  // ESP after the saves
+  const uint32_t point = f + 0x10, order = f + 0x1C, tmp = f + 0x2C, inverse = f + 0x38,
+                 text = f + 0x78;
+  Put(f + 0xC, ent == 0x1535D6C ? 0u : uint32_t(int32_t(ent - U32(0x15497F8)) / 0x2B8 + 1));
+  Put(order, 2u);
+  Put(order + 0xC, 2u);
+  Put(order + 4, 1u);
+  Put(order + 8, 0u);
+  c.esp = f;
+  c.eax = inverse;
+  c.ecx = 0x15498E0;
+  Call(c, f_00427E80, 0x4F4363);
+  auto write = [&](uint32_t ret) {
+    uint32_t len = 0;
+    while (U8(text + len)) len++;
+    Push(c, U32(0x13F9D04));
+    Push(c, len);
+    Push(c, text);
+    Call(c, f_004230E0, ret);
+    c.esp += 0xC;
+  };
+  for (uint32_t tri = 0; int32_t(tri) < I32(t + 0x1D8044); tri += 3) {
+    Push(c, U32(f + 0xC));
+    Push(c, 0x53C0B0);
+    Push(c, text);
+    Call(c, f_0051A70E, 0x4F4384);
+    c.esp += 0xC;
+    write(0x4F43AF);
+    for (uint32_t k = 0; k < 4; k++) {
+      const uint32_t v = kTessXyz + 0xC * U16(t + 2 * (U32(order + 4 * k) + tri));
+      for (uint32_t i = 0; i < 0xC; i += 4) Put(point + i, U32(v + i));
+      c.edx = tmp;
+      c.eax = 0x1549AC4;
+      c.ecx = point;
+      Call(c, f_004F41C0, 0x4F43F4);
+      c.edx = point;
+      c.eax = inverse;
+      c.ecx = tmp;
+      Call(c, f_004F41C0, 0x4F4405);
+      for (uint32_t i = 3; i-- > 0;) {
+        const uint64_t d = std::bit_cast<uint64_t>(St(Ld(point + 4 * i)).v);
+        Push(c, uint32_t(d >> 32));
+        Push(c, uint32_t(d));
+        Push(c, k);
+      }
+      Push(c, 0x53C098);
+      Push(c, text);
+      Call(c, f_0051A70E, 0x4F4438);
+      c.esp += 0x2C;
+      write(0x4F4463);
+    }
+  }
+  c.esi = esi;
+  c.edi = edi;
+  c.ebp = ebp;
   c.esp = e + 4;
 }
 

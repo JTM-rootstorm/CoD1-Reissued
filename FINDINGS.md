@@ -54,7 +54,8 @@ on gfx::Device" below).
   coordinate generators and modifiers layer 10, the static model surfaces
   that fill or draw the flush layer 11, the surface table's others layer
   12, an entity's surfaces by its type layer 13, the tessellator's begin,
-  RB_CheckOverflow, the immediate-mode batch and the debug draws layer 14.
+  RB_CheckOverflow, the immediate-mode batch and the debug draws layer 14,
+  the leaves those layers still called lifted layer 15.
 - Layer 4, the stages and the flush: a stage's draw 0x4F5DE0 (EAX stage,
   EBX indexes, count on the stack: colours, ComputeTexCoords, the colour
   array, then all units when the second bundle has an image or the first
@@ -422,7 +423,7 @@ on gfx::Device" below).
   above 2, or the entity not 0x1549B5C or 0x1549E14) the triangles again
   through 0x1549570 with the shader 0x1535B5C swapped in (depth range 0 to
   0.1 for an odd value), and for a negative 0x14E43FC written as 3DFACEs
-  to a DXF file by 0x4F4260 (left lifted); 0x4F4560 ("white"; stack: the
+  to a DXF file by 0x4F4260 (layer 15); 0x4F4560 ("white"; stack: the
   tessellator) the normals and, with both axes, the two axes as lines twice
   their length (blue, red, green; the axes computed by 0x50ABF0 when either
   is missing), depth range 0 to 0.999 (0 to 0 for r_shownormals
@@ -430,6 +431,58 @@ on gfx::Device" below).
   ("color"; EBX the tessellator) the normals coloured (x + 1) x 0.5 x 255
   by _ftol2 from the normal's x and the next two vertices' normals' x, as
   the original reads them. Both end the batch as 0x501900 does.
+- Layer 15, the leaves the layers above still called lifted (2026-11-07):
+  RB_SetupRegisterCombiners 0x4F3A70 (the name it passes GL_CheckErrors
+  0x4A5440, its tail call, in its argument's slot; the combiners on the
+  stack: glCombinerParameterfvNV of the two constant colours +0, +0x10,
+  glCombinerParameteriNV of the count +0x5F8, per-stage constants
+  (0x8535) on or off by +0x5FC with more than one texture unit 0x15347A4;
+  per general combiner, 0xB0 bytes from +0x20: its RGB and alpha
+  portions, 0x48 bytes each from +0x40, four glCombinerInputNV of input,
+  mapping and usage, a glCombinerOutputNV of three outputs, scale, bias
+  and three byte flags, and with per-stage constants its two constants
+  by glCombinerStageParameterfvNV; the final combiner's seven inputs
+  from +0x5A0). The vertex program 0x4F3C70 (ESI; glBindProgramARB of
+  +0x40 unless it is 0x1534674; local parameters of 0x8620: 0 the view's
+  origin 0x1549828 and, with the light 0x1549B40, 1 its origin +0x44, both
+  into the entity's frame by 0x509500 (the offset from 0x1549A88 along
+  the entity's axes 0x1549A94, z first), w 1; 2 the light's four floats
+  from +0x24, though it first stores them scaled by 0x1549B44 into a
+  local it never passes; 3 its colour +0x60 with 1). The entry points'
+  names are the strings the extension loader passes wglGetProcAddress
+  for each pointer. TableForFunc 0x508940 (its error string; ECX the
+  type, EAX the table, ri.Error and 0 outside 1-5). The noise 0x4D3AA0
+  (cdecl x, y, z, t; ST0): lattice points by FISTP of each less
+  0.5 - 2^-30 (a double), the fractions stored over x, y and z's slots,
+  the corners' values through the permutation 0x1195C38 (t, then z, y and
+  x added at each level, & 0xFF) from 0x1196038, each copied through a
+  float local, trilinear at t's lattice point and the next (each stored as
+  a float), then linear in t. The video generator 0x4FCE80 (ECX; stack:
+  the time in ms, the unit; once a frame by its stamp +4 against
+  0x1535A24) is a water surface: on a frame of 0xC0004 bytes (_chkstk), the
+  spectrum 0x4FC960 (ESI the generator, EDI the buffer; the amplitudes +8
+  turned by the sine table at FISTP of time x frequency (+0xC) x 1024/2pi
+  through 0x13F96D8, the cosine a quarter of the table on; 0 for a
+  frequency of 0), its 2D transform 0x4FCA50 (the FFT 0x4FC4E0 of each row,
+  then each column: ECX log2 n, stack: values and stride; bit reversal by
+  0x11E12B0, a radix-4 pass, radix-2 passes with the twiddles 0x11E0AA8),
+  the texels 0x4FCAE0 (cdecl: texels, buffer, generator; the magnitudes,
+  then per texel the normal from the differences to its left and upper
+  neighbours, wrapping, with N^2 for z (N the texel count), x 127 / its
+  length, FISTP into bytes about 127 under 0xFF; it leaves the texels'
+  slot past the last row), then the unit, GL_Bind of its image +0 and
+  glTexSubImage2D at the image's width and height +0x40, +0x42. The sine
+  table is TableForFunc's first; the FFT's tables come from 0x4FC410. The debug draws' DXF
+  file 0x4F4260 (EBX the tessellator; on an 8-aligned frame; skipped for
+  the entities 0x1549B5C, 0x1549E14, shader +0x4C bit 3, entity +4 bits
+  0x1C or types 3-10, positions 4 floats apart): per triangle a 3DFACE by
+  sprintf 0x51A70E and FS_Write 0x4230E0 to 0x13F9D04, layer colour the
+  entity's number (0 the world, else its index from 0x15497F8 + 1), its
+  corners vertices 2, 1, 0, 2 read 12 bytes apart whatever the stride,
+  each through the view's matrix 0x1549AC4 and the inverse (0x427E80, left
+  lifted) of 0x15498E0 with 0x4F41C0 (a point through a 4x4 matrix with the
+  divide by w, z stored as a float first). Not reproduced: the stack
+  cookies' checks (0x523CD9), which only fail on a corrupted frame.
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -578,6 +631,27 @@ on gfx::Device" below).
   through TlsGetValue, so its square root of a NaN runs as in the game;
   surfaces 24 and 25 get the x87 headroom of the flush RB_CheckOverflow
   may run, and near the limits no case has the shader with its own flush).
+  With layer 15: 200000 cases over 128 entries, 4.31M calls out, 0
+  mismatches (the combiners, vertex program, video generator and DXF file
+  no longer stubbed: GL_CheckErrors, sprintf and FS_Write are, sprintf
+  writing a hash of the arguments its format takes; the NV combiner,
+  ARB program and glTexSubImage2D entry points recorded, with ten
+  arguments and the texels hashed; the oracle now also compares EAX of
+  TableForFunc and the x87 registers in use. The noise and the FFT use all
+  eight x87 registers, as the game calls them at an empty stack: a case
+  with values below its entry gets no noise waveform or deform and no
+  water. Stages get real combiners, programs and small waters (4 to 16 a
+  side), the stages' light a real one, the tessellator's entity one of
+  the entities at 0x15497F8; the water's image is its size, as past it
+  glTexSubImage2D reads the stack under the texels).
+  Its mutations: 57, 53 fail the oracle (the entity frame's sum order
+  after cases whose products cancel, the DXF file's signed index after
+  bases past the entity); 3 cannot change a result: the combiners'
+  count compared unsigned inside the loop it only enters positive, the
+  bit reversal's swap of an index with itself, the texels' upper row as
+  the row before for sizes that are powers of two (the FFT needs them);
+  1 is a gap that needs a value at a rounding midpoint: the texel
+  normal's length summed in another order.
   Its mutations: 45, 41 fail the oracle (one, the batch vertex's signed
   test, after a negative capacity was added); 4 cannot change a result:
   the clamp's >= for > and against the unrounded time (where they differ
@@ -675,6 +749,10 @@ on gfx::Device" below).
   the debug draws. Standing, against the layer 13 build: all 13 loading
   and briefing frames shared, 46 of 1640 in-level frames identical, as two
   runs of the layer 13 build (46).
+  With layer 15 (2026-11-07): the walk reaches none of the twelve (under
+  gdb, on the layer 15 build); only the oracle covers them. Standing,
+  against the layer 14 build: all loading and briefing frames shared, 46
+  of 1640 in-level frames identical, as layer 14 against 13.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),

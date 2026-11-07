@@ -131,6 +131,26 @@ void f_004F4560_lifted(Ctx& c);
 void f_004F4560(Ctx& c) { f_004F4560_lifted(c); }
 void f_004F4850_lifted(Ctx& c);
 void f_004F4850(Ctx& c) { f_004F4850_lifted(c); }
+void f_004F3A70_lifted(Ctx& c);
+void f_004F3A70(Ctx& c) { f_004F3A70_lifted(c); }
+void f_004F3C70_lifted(Ctx& c);
+void f_004F3C70(Ctx& c) { f_004F3C70_lifted(c); }
+void f_00509500_lifted(Ctx& c);
+void f_00509500(Ctx& c) { f_00509500_lifted(c); }
+void f_004FCE80_lifted(Ctx& c);
+void f_004FCE80(Ctx& c) { f_004FCE80_lifted(c); }
+void f_004FC960_lifted(Ctx& c);
+void f_004FC960(Ctx& c) { f_004FC960_lifted(c); }
+void f_004FCA50_lifted(Ctx& c);
+void f_004FCA50(Ctx& c) { f_004FCA50_lifted(c); }
+void f_004FC4E0_lifted(Ctx& c);
+void f_004FC4E0(Ctx& c) { f_004FC4E0_lifted(c); }
+void f_004FCAE0_lifted(Ctx& c);
+void f_004FCAE0(Ctx& c) { f_004FCAE0_lifted(c); }
+void f_004F4260_lifted(Ctx& c);
+void f_004F4260(Ctx& c) { f_004F4260_lifted(c); }
+void f_004F41C0_lifted(Ctx& c);
+void f_004F41C0(Ctx& c) { f_004F41C0_lifted(c); }
 }  // namespace gen
 
 // Nothing the cases reach calls out: RB_CheckOverflow never overflows.

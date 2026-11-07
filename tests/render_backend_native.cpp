@@ -117,4 +117,16 @@
 #define f_004F44A0 n_004F44A0
 #define f_004F4560 n_004F4560
 #define f_004F4850 n_004F4850
+#define f_004F3A70 n_004F3A70
+#define f_004F3C70 n_004F3C70
+#define f_00509500 n_00509500
+#define f_00508940 n_00508940
+#define f_004D3AA0 n_004D3AA0
+#define f_004FCE80 n_004FCE80
+#define f_004FC960 n_004FC960
+#define f_004FCA50 n_004FCA50
+#define f_004FC4E0 n_004FC4E0
+#define f_004FCAE0 n_004FCAE0
+#define f_004F4260 n_004F4260
+#define f_004F41C0 n_004F41C0
 #include "../src/render_backend.cpp"

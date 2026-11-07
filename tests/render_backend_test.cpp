@@ -24,6 +24,7 @@
 // NaNs or huge), and index lists for the strips that continue a strip or
 // start a new one at random.
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstdarg>
@@ -120,6 +121,16 @@ constexpr Gl kGl[] = {
     {0x533100, "SetLastError", 1},
     {0x1549684, "ri 0x1549684", 1, true},
     {0x154967C, "ri 0x154967C", 1, true},
+    {0x1534A58, "glCombinerParameterfvNV", 2, false, 1, 4},
+    {0x15352A0, "glCombinerParameteriNV", 2},
+    {0x1535580, "glCombinerInputNV", 6},
+    {0x1534810, "glCombinerOutputNV", 10},
+    {0x1534954, "glCombinerStageParameterfvNV", 3, false, 2, 4},
+    {0x1534AD0, "glFinalCombinerInputNV", 4},
+    {0x1534CA4, "glBindProgramARB", 2},
+    {0x1534AA4, "glProgramLocalParameter4fvARB", 3, false, 2, 4},
+    {0x1534D24, "glProgramLocalParameter4fARB", 6},
+    {0x1534E4C, "glTexSubImage2D", 9},
 };
 constexpr int kNumGl = sizeof(kGl) / sizeof(kGl[0]);
 constexpr uint32_t kGlTarget = 0x7FFD0000;  // + 0x10 * index
@@ -128,7 +139,7 @@ constexpr uint32_t kGlTarget = 0x7FFD0000;  // + 0x10 * index
 constexpr uint32_t kSkyIterator = 0x4DD6E0;
 
 struct CallRec {
-  uint32_t target, ret, esp, args[6];
+  uint32_t target, ret, esp, args[11];
   uint32_t data[4];
   uint32_t regs[7];  // stubs: the registers their callee reads
   bool operator==(const CallRec&) const = default;
@@ -161,27 +172,35 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
 
 namespace recomp {
 namespace gen {
-// The stubs: the video generator's update (ECX; time, unit), the register
-// combiners (combiners), the vertex program (ESI), and the CRT's rand
-// and srand (the debug colours; its state is the thread's).
-void f_004FCE80(Ctx& c) { Stub(c, 0x4FCE80, kEcx, 2); }
-void f_004F3A70(Ctx& c) { Stub(c, 0x4F3A70, 0, 1); }
-void f_004F3C70(Ctx& c) { Stub(c, 0x4F3C70, kEsi, 0); }
+// The stubs: the CRT's rand and srand (the debug colours; its state is
+// the thread's).
 #define COD1_STUB(va, regs, args) \
   void f_##va(Ctx& c) { Stub(c, 0x##va, regs, args); }
 COD1_STUB(0051B5EC, 0, 0)
 COD1_STUB(0051B5DF, 0, 1)
 // Under the stages and the flush: ComputeTexCoords, setting a cvar,
-// printing, va and fprintf, and the debug triangles' DXF file (EBX the
-// tessellator), each with the registers the native code keeps as the
-// original has them.
+// printing, va and fprintf, each with the registers the native code keeps
+// as the original has them.
 COD1_STUB(004F5940, kEax | kSaved, 0)
 COD1_STUB(00431CF0, kEax | kSaved, 2)
 COD1_STUB(0042E300, kSaved, 1)
 COD1_STUB(00440940, kSaved, 2)
 COD1_STUB(0051D45A, kSaved, 3)
-COD1_STUB(004F4260, kSaved, 0)
+// Under the combiners and the DXF file: GL_CheckErrors (the caller's
+// name) and FS_Write (buffer, length, file).
+COD1_STUB(004A5440, 0, 1)
+COD1_STUB(004230E0, 0, 3)
 #undef COD1_STUB
+// sprintf (buffer, format, ...: the DXF file's face, its number, or its
+// corners, three of an index and a double), writing a hex number of the
+// arguments' hash into the buffer.
+void f_0051A70E(Ctx& c) {
+  const uint32_t buf = Rd(c.esp + 4);
+  Stub(c, 0x51A70E, 0, Rd(c.esp + 8) == 0x53C0B0 ? 3 : 11);
+  uint32_t h = 2166136261u;
+  for (uint32_t v : g_calls.back().args) h = (h ^ v) * 16777619u;
+  std::snprintf(g_mem.ptr<char>(buf), 9, "%x", h >> (h & 31));
+}
 // The immediate-mode batch's allocation (size), answering with the case's
 // buffer.
 uint32_t g_batch = 0;
@@ -324,6 +343,18 @@ void f_004ADEC0_lifted(Ctx& c);
 void f_004F44A0_lifted(Ctx& c);
 void f_004F4560_lifted(Ctx& c);
 void f_004F4850_lifted(Ctx& c);
+void f_004F3A70_lifted(Ctx& c);
+void f_004F3C70_lifted(Ctx& c);
+void f_00509500_lifted(Ctx& c);
+void f_00508940_lifted(Ctx& c);
+void f_004D3AA0_lifted(Ctx& c);
+void f_004FCE80_lifted(Ctx& c);
+void f_004FC960_lifted(Ctx& c);
+void f_004FCA50_lifted(Ctx& c);
+void f_004FC4E0_lifted(Ctx& c);
+void f_004FCAE0_lifted(Ctx& c);
+void f_004F4260_lifted(Ctx& c);
+void f_004F41C0_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -442,6 +473,18 @@ void f_004ADEC0(Ctx& c) { f_004ADEC0_lifted(c); }
 void f_004F44A0(Ctx& c) { f_004F44A0_lifted(c); }
 void f_004F4560(Ctx& c) { f_004F4560_lifted(c); }
 void f_004F4850(Ctx& c) { f_004F4850_lifted(c); }
+void f_004F3A70(Ctx& c) { f_004F3A70_lifted(c); }
+void f_004F3C70(Ctx& c) { f_004F3C70_lifted(c); }
+void f_004FCE80(Ctx& c) { f_004FCE80_lifted(c); }
+void f_004F4260(Ctx& c) { f_004F4260_lifted(c); }
+void f_00509500(Ctx& c) { f_00509500_lifted(c); }
+void f_00508940(Ctx& c) { f_00508940_lifted(c); }
+void f_004D3AA0(Ctx& c) { f_004D3AA0_lifted(c); }
+void f_004FC960(Ctx& c) { f_004FC960_lifted(c); }
+void f_004FCA50(Ctx& c) { f_004FCA50_lifted(c); }
+void f_004FC4E0(Ctx& c) { f_004FC4E0_lifted(c); }
+void f_004FCAE0(Ctx& c) { f_004FCAE0_lifted(c); }
+void f_004F41C0(Ctx& c) { f_004F41C0_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -558,6 +601,18 @@ void n_004ADEC0(Ctx& c);
 void n_004F44A0(Ctx& c);
 void n_004F4560(Ctx& c);
 void n_004F4850(Ctx& c);
+void n_004F3A70(Ctx& c);
+void n_004F3C70(Ctx& c);
+void n_00509500(Ctx& c);
+void n_00508940(Ctx& c);
+void n_004D3AA0(Ctx& c);
+void n_004FCE80(Ctx& c);
+void n_004FC960(Ctx& c);
+void n_004FCA50(Ctx& c);
+void n_004FC4E0(Ctx& c);
+void n_004FCAE0(Ctx& c);
+void n_004F4260(Ctx& c);
+void n_004F41C0(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -580,6 +635,14 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
   for (int k = 0; k < n; k++) r.args[k] = Rd(c.esp + 4 + 4 * uint32_t(k));
   if (gl.ptr_arg >= 0)
     for (int k = 0; k < gl.floats; k++) r.data[k] = Rd(r.args[gl.ptr_arg] + 4 * uint32_t(k));
+  // The texels glTexSubImage2D sends (width x height RGBA bytes, at most
+  // the water's buffer of 256 x 256), hashed.
+  if (gl.ptr == 0x1534E4C) {
+    uint32_t h = 2166136261u;
+    const uint32_t n = std::min(4 * (r.args[4] & 0xFFFF) * (r.args[5] & 0xFFFF), 0x40000u);
+    for (uint32_t i = 0; i < n; i++) h = (h ^ g_mem.read<uint8_t>(r.args[8] + i)) * 16777619u;
+    r.data[0] = h;
+  }
   // The tessellator's shader, stages and their count it draws with.
   if (gl.ptr == 0x1549570) {
     r.data[0] = Rd(0x17F0C70);
@@ -676,7 +739,7 @@ const Entry kEntries[] = {
     COD1_ENTRY(0050AEC0, "specular", 0, 7),      COD1_ENTRY(0050B040, "diffuse"),
     COD1_ENTRY(004F2E60, "debug colour"),
     COD1_ENTRY(00508AE0, "deform wave"),    COD1_ENTRY(00508C50, "deform wave st"),
-    COD1_ENTRY(00508DE0, "deform normals"), COD1_ENTRY(00508F00, "deform noise"),
+    COD1_ENTRY(00508DE0, "deform normals"), COD1_ENTRY(00508F00, "deform noise", 0, 8),
     COD1_ENTRY(00509040, "deform bulge"),   COD1_ENTRY(005090E0, "deform move"),
     COD1_ENTRY(00508800, "deform shadow"),  COD1_ENTRY(005095F0, "deform sprite"),
     COD1_ENTRY(005098A0, "deform sprite2"), COD1_ENTRY(00509190, "deform text"),
@@ -709,6 +772,12 @@ const Entry kEntries[] = {
     COD1_ENTRY(004F4A20, "tess arrays"),      COD1_ENTRY(004ADC20, "batch begin"),
     COD1_ENTRY(004ADEC0, "batch vertex"),     COD1_ENTRY(004F44A0, "debug tris"),
     COD1_ENTRY(004F4560, "debug axes"),       COD1_ENTRY(004F4850, "debug normals"),
+    COD1_ENTRY(004F3A70, "combiners"),        COD1_ENTRY(004F3C70, "vertex program"),
+    COD1_ENTRY(00509500, "entity frame"),     COD1_ENTRY(00508940, "wave table"),
+    COD1_ENTRY(004D3AA0, "noise", 0, 8),      COD1_ENTRY(004FCE80, "water", 0, 8),
+    COD1_ENTRY(004FC960, "water spectrum"),   COD1_ENTRY(004FCA50, "water transform", 0, 8),
+    COD1_ENTRY(004FC4E0, "FFT", 0, 8),        COD1_ENTRY(004FCAE0, "water texels"),
+    COD1_ENTRY(004F4260, "DXF", 0, 8),        COD1_ENTRY(004F41C0, "projection"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -765,17 +834,21 @@ void Load(const std::vector<Window>& w, const std::vector<uint8_t>& in) {
 
 struct Call {
   int entry;
+  uint32_t preload = 0;  // x87 values below the entry's
   uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0, esi = 0, edi = 0;
   std::vector<uint32_t> args;
 };
 
 void PrintCall(const char* side, size_t i, const CallRec& r) {
   const uint32_t k = (r.target - kGlTarget) / 0x10;
-  std::printf("  %zu %s: %s ret %08X esp %08X args %08X %08X %08X %08X %08X %08X data %08X %08X "
-              "%08X %08X\n",
-              i, side, k < uint32_t(kNumGl) ? kGl[k].name : "?", r.ret, r.esp, r.args[0],
-              r.args[1], r.args[2], r.args[3], r.args[4], r.args[5], r.data[0], r.data[1],
-              r.data[2], r.data[3]);
+  std::printf("  %zu %s: %s %08X ret %08X esp %08X args", i, side,
+              k < uint32_t(kNumGl) ? kGl[k].name : "?", r.target, r.ret, r.esp);
+  for (uint32_t a : r.args) std::printf(" %08X", a);
+  std::printf(" data");
+  for (uint32_t d : r.data) std::printf(" %08X", d);
+  std::printf(" regs");
+  for (uint32_t v : r.regs) std::printf(" %08X", v);
+  std::printf("\n");
 }
 
 void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
@@ -801,7 +874,7 @@ void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
   c0.esp = esp;
   recomp::x87::Init(c0.fpu);
   recomp::x87::SetControlWord(c0.fpu, 0x027F);
-  for (uint32_t i = g() % (9 - e.x87); i; i--) recomp::x87::LoadF32(c0.fpu, g());
+  for (uint32_t i = k.preload; i; i--) recomp::x87::LoadF32(c0.fpu, g());
   c0.mxcsr = recomp::sse::kMxcsrDefault;
 
   Ctx cl = c0;
@@ -821,7 +894,15 @@ void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
   s.calls += int(lcalls.size());
   bool ok = cn.esp == cl.esp && cn.ebp == cl.ebp && cn.ebx == cl.ebx && cn.esi == cl.esi &&
             cn.edi == cl.edi && cn.fpu.top == cl.fpu.top && cn.fpu.empty == cl.fpu.empty &&
-            cn.fpu.cw == cl.fpu.cw && (e.va != 0x4F3330 || cn.eax == cl.eax);
+            cn.fpu.cw == cl.fpu.cw &&
+            ((e.va != 0x4F3330 && e.va != 0x508940) || cn.eax == cl.eax);
+  // The x87 registers in use (the noise's value; the caller's below).
+  for (int r = 0; r < 8; r++)
+    if (!(cl.fpu.empty & (1 << r)) &&
+        (cl.fpu.r[r].sig != cn.fpu.r[r].sig || cl.fpu.r[r].se != cn.fpu.r[r].se)) {
+      if (s.failures < 20) std::printf("%s: x87 register %d differs\n", e.name, r);
+      ok = false;
+    }
   if (!ok && s.failures < 20)
     std::printf("%s: registers differ (esp %08X/%08X ebx %08X/%08X esi %08X/%08X edi "
                 "%08X/%08X ebp %08X/%08X top %d/%d empty %02X/%02X)\n",
@@ -954,10 +1035,93 @@ uint32_t StateBits(std::mt19937& g) {
 
 // A waveform: its type (1-5 the tables, 6 the noise, now and then
 // another), base, amplitude, phase and frequency.
+// x87 values below the case's entry: none lets its callees use all eight
+// (the noise and the water's FFT do; the game calls them at an empty
+// stack), so those are built only then.
+uint32_t g_preload = 0;
+
 void Wave(std::mt19937& g, uint32_t w) {
-  Wr(w, g() % 16 ? 1 + g() % 6 : g() % 8);
+  uint32_t type = g() % 16 ? 1 + g() % 6 : g() % 8;
+  if (g_preload && type == 6) type = 1;
+  Wr(w, type);
   for (uint32_t i = 4; i < 0x14; i += 4)
     Wr(w + i, g() % 4 ? Float(float(int(g() % 4001) - 2000) / 1000.0f) : RandFloat(g));
+}
+
+// A float about a lattice: within 1000 of 0 in hundredths (now and then
+// exactly on a half or an integer), now and then any.
+uint32_t NoiseCoord(std::mt19937& g) {
+  switch (g() % 8) {
+    case 0: return RandFloat(g);
+    case 1: return Float(float(int(g() % 2001) - 1000) + 0.5f);
+    case 2: return Float(float(int(g() % 2001) - 1000));
+    default: return Float(float(int(g() % 200001) - 100000) / 100.0f);
+  }
+}
+
+// A power of two from 4 to 64, now and then 128 (small: 4 to 16).
+uint32_t WaterSize(std::mt19937& g, bool small) {
+  return small ? 4u << (g() % 3) : g() % 16 ? 4u << (g() % 5) : 128u;
+}
+
+// Complex floats (n of them) in the arena: ordinary, now and then special.
+uint32_t Complex(Arena& a, std::mt19937& g, uint32_t n) {
+  const uint32_t v = a.Alloc(8 * n);
+  const bool special = g() % 8 == 0;
+  for (uint32_t i = 0; i < 2 * n; i++)
+    Wr(v + 4 * i, special && g() % 16 == 0 ? RandFloat(g) : Float(float(int(g() % 20001) - 10000) / 1000.0f));
+  return v;
+}
+
+// The water's generator: its image (of its width and height; past them
+// glTexSubImage2D would read the stack under the texels), frame
+// stamp (now and then this frame's), amplitudes, frequencies (now and
+// then 0, -0 or special) and size.
+uint32_t Water(Arena& a, std::mt19937& g, bool small = false) {
+  const uint32_t gen = a.Alloc(0x18), w = WaterSize(g, small), h = g() % 8 ? w : WaterSize(g, small);
+  const uint32_t im = Image(a, g);
+  g_mem.write<uint16_t>(im + 0x40, uint16_t(w));
+  g_mem.write<uint16_t>(im + 0x42, uint16_t(h));
+  Wr(gen, im);
+  Wr(gen + 4, g() % 8 ? uint32_t(g()) : Rd(0x1535A24));
+  Wr(gen + 8, Complex(a, g, w * h));
+  const uint32_t f = a.Alloc(4 * w * h);
+  for (uint32_t i = 0; i < w * h; i++)
+    Wr(f + 4 * i, Pick(g, {0, 0x80000000, RandFloat(g), Float(float(g() % 10000) / 1000.0f),
+                           Float(float(g() % 10000) / 1000.0f)}));
+  Wr(gen + 0xC, f);
+  Wr(gen + 0x10, w);
+  Wr(gen + 0x14, h);
+  return gen;
+}
+
+// Register combiners: anything, their count small (now and then
+// negative), per-stage constants on or off.
+uint32_t Combiners(Arena& a, std::mt19937& g) {
+  const uint32_t cb = a.Alloc(0x600);
+  for (uint32_t i = 0; i < 0x600; i += 4) Wr(cb + i, i < 0x20 && g() % 4 ? RandFloat(g) : uint32_t(g()));
+  Wr(cb + 0x5F8, g() % 8 ? g() % 9 : uint32_t(g()) | 0x80000000u);
+  Wr(cb + 0x5FC, g() % 2 ? 0 : uint32_t(g()));
+  return cb;
+}
+
+// A vertex program (now and then the one bound).
+uint32_t Program(Arena& a, std::mt19937& g) {
+  const uint32_t prog = a.Alloc(0x50);
+  Wr(prog + 0x40, g());
+  if (g() % 4 == 0) Wr(0x1534674, prog);
+  return prog;
+}
+
+// The light the stages draw for (or none) and its scale.
+void StageLight(Arena& a, std::mt19937& g) {
+  uint32_t light = 0;
+  if (g() % 2) {
+    light = a.Alloc(0x70);
+    for (uint32_t i = 0; i < 0x70; i += 4) Wr(light + i, RandFloat(g));
+  }
+  Wr(0x1549B40, light);
+  Wr(0x1549B44, RandFloat(g));
 }
 
 // A stage: 8 bundles of 200 bytes from +4, then the combiners, vertex
@@ -972,7 +1136,7 @@ uint32_t Bundle(Arena& a, std::mt19937& g, uint32_t b) {
   for (uint32_t i = 0; i < 32; i++) Wr(b + 4 * i, pool[g() % 4]);
   Wr(b + 0x80, g() % 4 ? g() % 6 : g() % 2 ? g() % 33 : uint32_t(g()) | 0x80000000u);
   Wr(b + 0x84, RandFloat(g));
-  Wr(b + 0x88, g() % 8 == 0 ? a.Alloc(16) : 0);
+  Wr(b + 0x88, g() % 8 == 0 && !g_preload ? Water(a, g, true) : 0);
   Wr(b + 0x8C, 2 + g() % 3);
   Wr(b + 0x90, g() % 5 == 0 ? 0 : Pick(g, {0x2100, 0x1E01, 0x104, 0x8570, uint32_t(g())}));
   const uint32_t combine = a.Alloc(0x50);
@@ -997,8 +1161,8 @@ uint32_t Stage(Arena& a, std::mt19937& g) {
   for (uint32_t u = 0; u < 8; u++) Bundle(a, g, s + 4 + 0xC8 * u);
   if (g() % 2) Wr(s + 0xCC, 0);  // no second bundle: one unit
   Wr(s + 0x644, g() % 4 ? Rd(0x1534670) : g() % 3);
-  Wr(s + 0x648, g() % 8 == 0 ? g() : 0);
-  Wr(s + 0x64C, g() % 8 == 0 ? g() : 0);
+  Wr(s + 0x648, g() % 8 == 0 ? Combiners(a, g) : 0);
+  Wr(s + 0x64C, g() % 8 == 0 ? Program(a, g) : 0);
   Wave(g, s + 0x650);
   Wave(g, s + 0x668);
   Wr(s + 0x664, g() % 8 ? g() % 15 : uint32_t(g()));
@@ -1085,6 +1249,7 @@ void Randomize(Arena& a, std::mt19937& g) {
     const uint32_t ds = shader + 0xB0 + 0x34 * d;
     uint32_t type = g() % 8 ? 1 + g() % 18 : g() % 24;
     if (d && type == 10) type = 9;
+    if (g_preload && type == 4) type = 5;  // the noise
     Wr(ds, type);
     for (uint32_t i = 4; i < 0x34; i += 4)
       Wr(ds + i, g() % 4 ? Float(float(int(g() % 4001) - 2000) / 1000.0f) : RandFloat(g));
@@ -1199,7 +1364,10 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(0x1830C94, g() % 2 ? g() % 1000 : 0);
   Wr(0x1830C98, g() % 1000);
   Wr(0x1549B08, g());
-  Wr(0x1549B40, g() % 2 ? 0 : uint32_t(g()));  // the light the stages draw for
+  StageLight(a, g);
+  // The tessellator's entity (the DXF file's): one of the entities.
+  Wr(0x15497F8, a.Alloc(4 * 0x2B8));
+  Wr(0x17F0C7C, Rd(0x15497F8) + 0x2B8 * (g() % 4));
   Wr(0x1549B0C, g());
   Wr(0x1549B10, g());
   if (g() % 2) Wr(0x1536290, 0x3F800000);  // tr.identityLight 1
@@ -1379,9 +1547,10 @@ void Light(Arena& a, std::mt19937& g) {
 }
 
 void Cases(Arena& a, std::mt19937& g, Stats& s) {
-  Randomize(a, g);
   Call k{};
   k.entry = int(g() % kNumEntries);
+  k.preload = g_preload = g() % (9 - kEntries[k.entry].x87);
+  Randomize(a, g);
   switch (kEntries[k.entry].va) {
     case 0x4CB3B0:
       k.esi = g() % 32 ? Image(a, g) : 0;
@@ -1750,7 +1919,7 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       // another), now and then over 256 vertices (a draw every 256; with
       // both axes, which are otherwise computed from the vertices past the
       // windows); the inputs of the axes; the normals cvar's value.
-      Wr(0x17F0C7C, Pick(g, {0x1549B5C, 0x1549E14, uint32_t(g())}));
+      Wr(0x17F0C7C, Pick(g, {0x1549B5C, 0x1549E14, a.Alloc(0x2B8)}));
       if (g() % 8 == 0) {
         Wr(0x17F0C88, 250 + g() % 60);
         Wr(0x17F0C68, 1);
@@ -1762,6 +1931,109 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       else if (kEntries[k.entry].va == 0x4F4560) k.args = {0x1618C40};
       else k.ebx = 0x1618C40;
       break;
+    case 0x4F3A70: {
+      // The combiners, with one to three units.
+      Wr(0x15347A4, g() % 4);
+      k.args = {Combiners(a, g)};
+      break;
+    }
+    case 0x4F3C70:
+      k.esi = Program(a, g);
+      break;
+    case 0x509500: {
+      const uint32_t p = a.Alloc(12);
+      for (uint32_t i = 0; i < 12; i += 4) Wr(p + i, g() % 4 ? Mixed(g) : RandFloat(g));
+      // Now and then products that cancel, for the sum's order: an axis
+      // (1, -1, 1) from the origin 0 and the point (2^60, 2^60, 1).
+      if (g() % 8 == 0) {
+        const uint32_t axis = 0x1549A94 + 0xC * (g() % 3);
+        Wr(axis, Float(1.0f));
+        Wr(axis + 4, Float(-1.0f));
+        Wr(axis + 8, Float(1.0f));
+        for (uint32_t i = 0; i < 12; i += 4) Wr(0x1549A88 + i, 0);
+        Wr(p, Float(0x1p60f));
+        Wr(p + 4, Float(0x1p60f));
+        Wr(p + 8, Float(1.0f));
+      }
+      k.ecx = g() % 8 ? p : 0x1549828;
+      k.eax = g() % 4 ? a.Alloc(12) : k.ecx;
+      break;
+    }
+    case 0x508940:
+      k.ecx = g() % 8 ? g() % 7 : uint32_t(g());
+      break;
+    case 0x4D3AA0:
+      k.args = {NoiseCoord(g), NoiseCoord(g), NoiseCoord(g), NoiseCoord(g)};
+      break;
+    case 0x4FCE80:
+      k.ecx = Water(a, g);
+      k.args = {g() % 8 ? uint32_t(g() % 1000000) : uint32_t(g()), uint32_t(g() % 8)};
+      break;
+    case 0x4FC960: {
+      const uint32_t gen = Water(a, g);
+      k.esi = gen;
+      k.edi = a.Alloc(8 * Rd(gen + 0x10) * Rd(gen + 0x14));
+      k.args = {g() % 4 ? Float(float(g() % 100000) / 1000.0f) : RandFloat(g)};
+      break;
+    }
+    case 0x4FCA50: {
+      const uint32_t gen = Water(a, g);
+      k.esi = gen;
+      k.args = {Complex(a, g, Rd(gen + 0x10) * Rd(gen + 0x14))};
+      break;
+    }
+    case 0x4FC4E0: {
+      // 4 to 256 values, 1 to 3 apart.
+      const uint32_t lg = 2 + g() % 7, stride = 1 + g() % 3;
+      k.ecx = lg;
+      k.args = {Complex(a, g, (1u << lg) * stride), stride};
+      break;
+    }
+    case 0x4FCAE0: {
+      const uint32_t gen = Water(a, g), n = Rd(gen + 0x10) * Rd(gen + 0x14);
+      k.args = {a.Alloc(4 * n), Complex(a, g, n), gen};
+      break;
+    }
+    case 0x4F41C0: {
+      // A matrix (or the view's), a point and its result (now and then
+      // the point itself).
+      uint32_t m = 0x1549AC4;
+      if (g() % 2) {
+        m = a.Alloc(64);
+        for (uint32_t i = 0; i < 64; i += 4) Wr(m + i, g() % 8 ? Mixed(g) : RandFloat(g));
+      }
+      const uint32_t p = a.Alloc(12);
+      for (uint32_t i = 0; i < 12; i += 4) Wr(p + i, g() % 4 ? Mixed(g) : RandFloat(g));
+      k.eax = m;
+      k.ecx = p;
+      k.edx = g() % 4 ? a.Alloc(12) : p;
+      break;
+    }
+    case 0x4F4260: {
+      // The entity (the two skipped, the world or one of the entities at
+      // 0x15497F8 by a type and flags), the shader's flags, the matrices,
+      // the file.
+      const uint32_t ents = a.Alloc(4 * 0x2B8);
+      Wr(0x15497F8, ents);
+      uint32_t ent = Pick(g, {0x1549B5C, 0x1549E14, 0x1535D6C, 0, 0, 0});
+      if (!ent) {
+        ent = ents + 0x2B8 * (g() % 4);
+        Wr(ent, g() % 4 ? g() % 3 : g() % 12);
+        Wr(ent + 4, g() % 4 ? 0 : uint32_t(g()));
+      }
+      Wr(0x17F0C7C, ent);
+      if (g() % 8 == 0) Wr(0x15497F8, ents + 0x2B8 * (1 + g() % 3));  // past it: a negative index
+      g_mem.write<uint8_t>(Rd(0x17F0C70) + 0x4C, uint8_t(g() % 4 ? 0 : g()));
+      for (uint32_t i = 0; i < 64; i += 4) {
+        Wr(0x1549AC4 + i, g() % 8 ? Mixed(g) : RandFloat(g));
+        Wr(0x15498E0 + i, g() % 8 ? Mixed(g) : RandFloat(g));
+      }
+      Wr(0x13F9D04, g());
+      Wr(0x17F0C60, g() % 4 ? 8 : 4);  // positions 8 floats apart (4 are skipped)
+      if (g() % 2) Wr(0x17F0C84, g() % 16);
+      k.ebx = 0x1618C40;
+      break;
+    }
     case 0x5033B0:
     case 0x503590:
     case 0x503760: {
@@ -1783,7 +2055,7 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       Wr(0x153479C, g() % 2);
       Wr(0x1549548, g() % 2);
       Wr(0x153465C, g() % 2);
-      Wr(0x17F0C7C, g());
+      Wr(0x17F0C7C, Rd(0x15497F8) + 0x2B8 * (g() % 4));
       if (kEntries[k.entry].va == 0x503760 && g() % 32 == 0) {
         n %= 41;
         Wr(0x1830C94, 0x20000 - n + g() % 4);
@@ -1943,6 +2215,16 @@ int main(int argc, char** argv) {
   // the renderer's init fills them, with now and then a special value.
   for (uint32_t i = 0; i < 5 * 0x1000; i += 4)
     Wr(0x1544530 + i, g() % 16 ? Float(float(int(g() % 2001) - 1000) / 1000.0f) : RandFloat(g));
+  // The FFT's bit reversals and twiddles (cos, sin), as the water's init
+  // makes them, the twiddles now and then special.
+  for (uint32_t i = 0; i < 256; i++) {
+    uint32_t r = 0;
+    for (uint32_t b = 0; b < 8; b++) r |= ((i >> b) & 1) << (7 - b);
+    Wr(0x11E12B0 + 4 * i, r);
+    const float t = float(i) * 6.2831855f / 256.0f;
+    Wr(0x11E0AA8 + 8 * i, g() % 64 ? Float(std::cos(t)) : RandFloat(g));
+    Wr(0x11E0AAC + 8 * i, g() % 64 ? Float(std::sin(t)) : RandFloat(g));
+  }
   for (uint32_t i = 0; i < 0x400; i += 4) {
     Wr(0x1195C38 + i, g() & 0xFF);
     Wr(0x1196038 + i, g() % 16 ? Float(float(int(g() % 2001) - 1000) / 1000.0f) : RandFloat(g));
