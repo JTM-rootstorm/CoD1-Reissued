@@ -104,6 +104,7 @@ constexpr Gl kGl[] = {
     {0x153539C, "glDepthRange", 4},
     {0x1534EB0, "glColor4ubv", 1, false, 0, 1},
     {0x153501C, "glDrawArrays", 3},
+    {0x1535744, "glLineWidth", 1},
     {0x1534DF8, "glColorMask", 4},
     {0x1534E7C, "glStencilFunc", 3},
     {0x1535428, "glStencilOp", 3},
@@ -176,20 +177,10 @@ COD1_STUB(00431CF0, kEax | kSaved, 2)
 COD1_STUB(0042E300, kSaved, 1)
 COD1_STUB(00440940, kSaved, 2)
 COD1_STUB(0051D45A, kSaved, 3)
-// Under the other surfaces: RB_CheckOverflow, the tessellator's begin
-// (ECX the shader; position stride) and an entity's surfaces by its type.
+// Under the other surfaces: RB_CheckOverflow and the tessellator's begin
+// (ECX the shader; position stride).
 COD1_STUB(00500A60, kSaved, 2)
 COD1_STUB(004F4AB0, kEcx | kSaved, 1)
-COD1_STUB(005012D0, kSaved, 0)
-COD1_STUB(00501240, kSaved, 0)
-COD1_STUB(00501900, kSaved, 0)
-COD1_STUB(005030E0, kSaved, 0)
-COD1_STUB(00503010, kSaved, 0)
-COD1_STUB(00503230, kSaved, 0)
-COD1_STUB(005014C0, kSaved, 0)
-COD1_STUB(00502350, kSaved, 0)
-COD1_STUB(00502450, kSaved, 0)
-COD1_STUB(00503860, kSaved, 0)
 #undef COD1_STUB
 // _stricmp, recorded and answering as the CRT's: 0 when the strings match
 // but for case.
@@ -302,6 +293,20 @@ void f_005039A0_lifted(Ctx& c);
 void f_005033B0_lifted(Ctx& c);
 void f_00503590_lifted(Ctx& c);
 void f_00503760_lifted(Ctx& c);
+void f_00500F20_lifted(Ctx& c);
+void f_00502110_lifted(Ctx& c);
+void f_00502AF0_lifted(Ctx& c);
+void f_00502CE0_lifted(Ctx& c);
+void f_005012D0_lifted(Ctx& c);
+void f_00501240_lifted(Ctx& c);
+void f_005014C0_lifted(Ctx& c);
+void f_00502350_lifted(Ctx& c);
+void f_00503010_lifted(Ctx& c);
+void f_005030E0_lifted(Ctx& c);
+void f_00503230_lifted(Ctx& c);
+void f_00502450_lifted(Ctx& c);
+void f_00501900_lifted(Ctx& c);
+void f_00503860_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -398,6 +403,20 @@ void f_005039A0(Ctx& c) { f_005039A0_lifted(c); }
 void f_005033B0(Ctx& c) { f_005033B0_lifted(c); }
 void f_00503590(Ctx& c) { f_00503590_lifted(c); }
 void f_00503760(Ctx& c) { f_00503760_lifted(c); }
+void f_00500F20(Ctx& c) { f_00500F20_lifted(c); }
+void f_00502110(Ctx& c) { f_00502110_lifted(c); }
+void f_00502AF0(Ctx& c) { f_00502AF0_lifted(c); }
+void f_00502CE0(Ctx& c) { f_00502CE0_lifted(c); }
+void f_005012D0(Ctx& c) { f_005012D0_lifted(c); }
+void f_00501240(Ctx& c) { f_00501240_lifted(c); }
+void f_005014C0(Ctx& c) { f_005014C0_lifted(c); }
+void f_00502350(Ctx& c) { f_00502350_lifted(c); }
+void f_00503010(Ctx& c) { f_00503010_lifted(c); }
+void f_005030E0(Ctx& c) { f_005030E0_lifted(c); }
+void f_00503230(Ctx& c) { f_00503230_lifted(c); }
+void f_00502450(Ctx& c) { f_00502450_lifted(c); }
+void f_00501900(Ctx& c) { f_00501900_lifted(c); }
+void f_00503860(Ctx& c) { f_00503860_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -492,6 +511,20 @@ void n_005039A0(Ctx& c);
 void n_005033B0(Ctx& c);
 void n_00503590(Ctx& c);
 void n_00503760(Ctx& c);
+void n_00500F20(Ctx& c);
+void n_00502110(Ctx& c);
+void n_00502AF0(Ctx& c);
+void n_00502CE0(Ctx& c);
+void n_005012D0(Ctx& c);
+void n_00501240(Ctx& c);
+void n_005014C0(Ctx& c);
+void n_00502350(Ctx& c);
+void n_00503010(Ctx& c);
+void n_005030E0(Ctx& c);
+void n_00503230(Ctx& c);
+void n_00502450(Ctx& c);
+void n_00501900(Ctx& c);
+void n_00503860(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -622,9 +655,16 @@ const Entry kEntries[] = {
     COD1_ENTRY(004FB8C0, "static T2N3V3"),   COD1_ENTRY(004FBAF0, "static T2V3"),
     COD1_ENTRY(004FBD50, "static T2N3V3 NV"),
     COD1_ENTRY(00503A60, "bad surface", 0, 0), COD1_ENTRY(00503A80, "skipped surface", 0, 0),
-    COD1_ENTRY(005016B0, "polygon"),         COD1_ENTRY(005039A0, "entity surface", 0, 0),
+    COD1_ENTRY(005016B0, "polygon"),         COD1_ENTRY(005039A0, "entity surface"),
     COD1_ENTRY(005033B0, "surface 24", 0, 0), COD1_ENTRY(00503590, "surface 25 dlights", 0, 0),
     COD1_ENTRY(00503760, "surface 25"),
+    COD1_ENTRY(00500F20, "quad"),             COD1_ENTRY(00502110, "line quad"),
+    COD1_ENTRY(00502AF0, "beam quad"),        COD1_ENTRY(00502CE0, "rings"),
+    COD1_ENTRY(005012D0, "entity 4"),         COD1_ENTRY(00501240, "entity 5"),
+    COD1_ENTRY(005014C0, "entity 12"),        COD1_ENTRY(00502350, "entity 13"),
+    COD1_ENTRY(00503010, "entity 9"),         COD1_ENTRY(005030E0, "entity 7"),
+    COD1_ENTRY(00503230, "entity 10"),        COD1_ENTRY(00502450, "entity 15"),
+    COD1_ENTRY(00501900, "entity 6"),         COD1_ENTRY(00503860, "entity other"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -649,11 +689,17 @@ const Window kGlobals[] = {
     {0x1630C40, 0x1000}, {0x1690C40, 0x200}, {0x1698C40, 0x600}, {0x16E0C40, 0x100},
     // The vertices' two axes, the dlight's texture coordinates (the second
     // set's) and the first set's, and the indexes (the texts' quads reach
-    // 124 vertices).
+    // 124 vertices, a cylinder's sides 192 indexes).
     {0x16B0C40, 0x200}, {0x16C8C40, 0x200}, {0x1670C40, 0x400}, {0x1650C40, 0x400},
-    {0x1618C40, 0x200},
+    {0x1618C40, 0x400},
     // The triangles' facing, the vertices' edges and their counts.
     {0x11E16D8, 0x100}, {0x11F16D8, 0x2900}, {0x13F16D8, 0x100},
+    // The tessellator's ends, which a quad near its limits writes past the
+    // windows above and RB_EndSurface's sentinels read: the last indexes,
+    // the positions of vertices 0x1FC0 to 0x2040 at either stride, their
+    // texture coordinates and colours.
+    {0x162FC40, 0x1000}, {0x1650840, 0x800}, {0x1670440, 0x1000},
+    {0x1660A40, 0x400}, {0x1680A40, 0x400}, {0x1698B40, 0x200},
 };
 
 struct Stats {
@@ -734,9 +780,9 @@ void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
             cn.fpu.cw == cl.fpu.cw && (e.va != 0x4F3330 || cn.eax == cl.eax);
   if (!ok && s.failures < 20)
     std::printf("%s: registers differ (esp %08X/%08X ebx %08X/%08X esi %08X/%08X edi "
-                "%08X/%08X ebp %08X/%08X top %d/%d)\n",
+                "%08X/%08X ebp %08X/%08X top %d/%d empty %02X/%02X)\n",
                 e.name, cl.esp, cn.esp, cl.ebx, cn.ebx, cl.esi, cn.esi, cl.edi, cn.edi, cl.ebp,
-                cn.ebp, cl.fpu.top, cn.fpu.top);
+                cn.ebp, cl.fpu.top, cn.fpu.top, unsigned(cl.fpu.empty), unsigned(cn.fpu.empty));
   if (lcalls != g_calls) {
     if (s.failures < 20) {
       std::printf("%s: calls differ (%zu lifted, %zu native)\n", e.name, lcalls.size(),
@@ -1608,15 +1654,6 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       k.args = {surf};
       break;
     }
-    case 0x5039A0: {
-      // An entity of each type, now and then any.
-      const uint32_t ent = a.Alloc(0x10);
-      Wr(ent, g() % 8 ? g() % 17 : uint32_t(g()));
-      Wr(0x1549B3C, ent);
-      k.esi = g();
-      k.edi = g();
-      break;
-    }
     case 0x5033B0:
     case 0x503590:
     case 0x503760: {
@@ -1655,6 +1692,113 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       }
       if (kEntries[k.entry].va == 0x503590) k.esi = surf;
       else k.args = {surf};
+      break;
+    }
+    case 0x500F20:
+    case 0x502110:
+    case 0x502AF0:
+    case 0x502CE0:
+    case 0x5012D0:
+    case 0x501240:
+    case 0x5014C0:
+    case 0x502350:
+    case 0x503010:
+    case 0x5030E0:
+    case 0x503230:
+    case 0x502450:
+    case 0x501900:
+    case 0x503860:
+    case 0x5039A0: {
+      // An entity (now and then its ends the same, a rotation out of
+      // FSINCOS's range) and its quads into a tessellator of at most 20
+      // vertices, now and then at its limits; the view's axes, its field
+      // of view, the cvars the beams read, the line width last set. The
+      // entity's positions and first axis and the view's origin finite, as
+      // VectorNormalize needs them (above); the quads' own inputs any. For
+      // the entity's surface, each type (now and then any).
+      // Near the limits, not the shader with its own flush (its shadow
+      // volume would read the edges of 0x2000 vertices).
+      if (Rd(0x17F0C88) > 20) Wr(0x17F0C88, g() % 21);
+      if (g() % 32 == 0) Wr(0x17F0C88, 0x2000 - g() % 70);
+      if (g() % 32 == 0) Wr(0x17F0C84, 0xC000 - g() % 200);
+      if (Rd(0x17F0C88) > 20 || Rd(0x17F0C84) > 0x1000) Wr(0x1535AEC, 0);
+      bool special = false;
+      auto coord = [&] {
+        return !special && g() % 8 ? Float(float(int(g() % 20001) - 10000) / 100.0f) : RandFloat(g);
+      };
+      auto vec = [&] {
+        const uint32_t v = a.Alloc(12);
+        for (uint32_t i = 0; i < 12; i += 4) Wr(v + i, coord());
+        return v;
+      };
+      auto finite = [&] { return g() % 8 ? Float(float(int(g() % 20001) - 10000) / 100.0f) : Mixed(g); };
+      const uint32_t ent = a.Alloc(0x90);
+      for (uint32_t i = 0x18; i < 0x90; i += 4) Wr(ent + i, i < 0x60 ? finite() : coord());
+      // The sprites' origin any (they never normalise it).
+      const uint32_t va = kEntries[k.entry].va;
+      if (va == 0x501240 || va == 0x5012D0 || va == 0x5014C0)
+        for (uint32_t i = 0x44; i < 0x50; i += 4) Wr(ent + i, g() % 2 ? RandFloat(g) : coord());
+      for (uint32_t i = 0; i < 12; i += 4) Wr(0x1549828 + i, finite());
+      Wr(ent, g() % 8 ? g() % 17 : uint32_t(g()));  // its type, for 0x5039A0
+      // Its ends now and then the same, but for type 10, whose turns take
+      // a zero axis to a NaN in VectorNormalize (above).
+      if (g() % 8 == 0 && kEntries[k.entry].va != 0x503230 && Rd(ent) != 10)
+        for (uint32_t i = 0; i < 12; i += 4) Wr(ent + 0x54 + i, Rd(ent + 0x44 + i));
+      for (uint32_t r : {0x64u, 0x7Cu}) Wr(ent + r, g() % 8 ? Float(float(1 + g() % 3200) / 100.0f) : RandFloat(g));
+      Wr(ent + 0x6C, uint32_t(g()));
+      Wr(ent + 0x80, Pick(g, {0, 0, Float(float(int(g() % 1441) - 720)), RandFloat(g), Float(0x1p70f)}));
+      Wr(0x1549B3C, ent);
+      Wr(0x17F0C7C, g() % 2 ? ent : a.Alloc(0x90));
+      Wr(Rd(0x17F0C7C) + 0x6C, uint32_t(g()));
+      for (uint32_t i = 0; i < 0x24; i += 4) Wr(0x1549834 + i, g() % 8 ? Float(float(int(g() % 2001) - 1000) / 1000.0f) : RandFloat(g));
+      Wr(0x1549960, g() % 8 ? Float(float(30 + g() % 100)) : RandFloat(g));
+      Wr(0x1534470, Cvar(a, g, 0));
+      // Type 9's ring length: its length over 1 to 40 rings (more would
+      // run the tessellator, whose begin the test stubs, off its arrays),
+      // now and then 0, negative, infinite or a NaN (one ring).
+      double len = 0;
+      for (uint32_t i = 0; i < 12; i += 4) {
+        const double d = double(std::bit_cast<float>(Rd(ent + 0x44 + i))) - std::bit_cast<float>(Rd(ent + 0x54 + i));
+        len += d * d;
+      }
+      Wr(Rd(0x1534470) + 0x1C, g() % 8 ? Float(float(std::sqrt(len) / double(1 + g() % 40)) + 1e-3f)
+                                       : Pick(g, {0, 0xBF800000, 0x7F800000, 0x7FC00000}));
+      Wr(0x1534540, Cvar(a, g, g() % 8 ? g() % 12 : uint32_t(g())));
+      Wr(0x15344A8, Cvar(a, g, 0));
+      Wr(0x15495CC, Pick(g, {Float(1.0f), Float(3.0f), RandFloat(g)}));
+      switch (kEntries[k.entry].va) {
+        case 0x500F20: {
+          const uint32_t colour = a.Alloc(4);
+          Wr(colour, uint32_t(g()));
+          k.args = {vec(), vec(), vec(), colour, RandFloat(g), RandFloat(g), RandFloat(g), RandFloat(g)};
+          break;
+        }
+        case 0x502110:
+          k.eax = vec();
+          k.ecx = vec();
+          k.edi = vec();
+          k.args = {coord()};
+          break;
+        case 0x502AF0:
+          k.eax = vec();
+          k.edx = vec();
+          k.ecx = vec();
+          k.args = {coord(), coord()};
+          break;
+        case 0x502CE0:
+          // Now and then every input special (a step's SNaN against a
+          // point's QNaN).
+          special = g() % 4 == 0;
+          k.eax = vec();
+          k.ecx = vec();
+          k.ebx = vec();
+          k.args = {g() % 8 ? uint32_t(g() % 6) : uint32_t(int(g() % 5) - 2), vec()};
+          break;
+        default:
+          k.esi = g();
+          k.edi = g();
+          break;
+      }
       break;
     }
   }

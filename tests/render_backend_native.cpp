@@ -95,4 +95,18 @@
 #define f_005033B0 n_005033B0
 #define f_00503590 n_00503590
 #define f_00503760 n_00503760
+#define f_00500F20 n_00500F20
+#define f_00502110 n_00502110
+#define f_00502AF0 n_00502AF0
+#define f_00502CE0 n_00502CE0
+#define f_005012D0 n_005012D0
+#define f_00501240 n_00501240
+#define f_005014C0 n_005014C0
+#define f_00502350 n_00502350
+#define f_00503010 n_00503010
+#define f_005030E0 n_005030E0
+#define f_00503230 n_00503230
+#define f_00502450 n_00502450
+#define f_00501900 n_00501900
+#define f_00503860 n_00503860
 #include "../src/render_backend.cpp"

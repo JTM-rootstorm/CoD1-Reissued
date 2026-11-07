@@ -53,7 +53,7 @@ on gfx::Device" below).
   alpha generators are layer 8, the deforms layer 9, the texture
   coordinate generators and modifiers layer 10, the static model surfaces
   that fill or draw the flush layer 11, the surface table's others layer
-  12.
+  12, an entity's surfaces by its type layer 13.
 - Layer 4, the stages and the flush: a stage's draw 0x4F5DE0 (EAX stage,
   EBX indexes, count on the stack: colours, ComputeTexCoords, the colour
   array, then all units when the second bundle has an image or the first
@@ -353,6 +353,50 @@ on gfx::Device" below).
   indexes less its first plus the vertex count). 2, 24 and 0x503590 test
   RB_CheckOverflow's limits (0x2000 vertices, 0xC000 indexes, signed)
   themselves and call it with the surface's counts.
+- Layer 13, an entity's surfaces (2026-11-06), which 0x5039A0 calls by
+  the entity's type (0x1549B3C: first axis +0x1C, origin +0x44, old
+  origin +0x54, height +0x64, colour +0x6C, radius +0x7C, rotation +0x80
+  in degrees), and the quads they add. 0x500F20 a quad into the
+  tessellator (stack: origin, left, up, colour, s1, t1, s2, t2):
+  RB_CheckOverflow for 4 vertices and 6 indexes inlined (RB_EndSurface,
+  then the tessellator begun again with the entity 0x17F0C7C, as in the
+  other quads); corners left + up + origin (y and z summed left + origin
+  + up), origin - left + up, - left - up, left + origin - up, 12 bytes
+  apart from the stride's first; normals vec3_origin (0x537E54) less the
+  view's forward axis 0x1549834; both coordinate sets (s1, t1), (s2,
+  t1), (s2, t2), (s1, t2) through FLD/FSTP, so an SNaN is stored quiet;
+  normals, coordinates and colours by the vertex count's low 16 bits.
+  0x502110 a line's quad (EAX direction, ECX start, EDI end; stack: half
+  width; the overflow inlined) and 0x502AF0 a beam's without it (EAX end,
+  EDX start, ECX direction; stack: length, half width; s the length /
+  256, the colour kept in the length's slot), both at the stride.
+  0x502CE0 square rings along a beam (EAX right, ECX up, EBX step;
+  stack: count, start; one fewer for more than one; four points 45
+  degrees apart from 45, a quarter of the cvar 0x1534540's integer out
+  along up by the cosine and right by the sine; coordinates as integers
+  through the x87 stack, t left in the count's slot). The types: 4
+  0x5012D0 a sprite on the view's left and up (0x1549840, 0x154984C) and
+  12 0x5014C0 one in its own plane (0x426D30 from its first axis), both
+  turned by FSINCOS of their rotation, left vec3_origin less it for a
+  mirrored view (0x1549930); 5 0x501240 a quad on the world's x and y;
+  13 0x502350 a line across both ends' directions from the view origin
+  0x1549828; 9 0x503010 rings, one per the cvar 0x1534470's value of the
+  length (by _ftol2, at least 1); 7 0x5030E0 a beam as wide as the cvar
+  0x15344A8's value, and 10 0x503230 one 8 wide four times, turned 45
+  degrees about it (0x426AB0) after each; 15 0x502450 a cylinder of 8 to
+  32 sides from its middle's distance to the view and 0x1549960 ((1 - d
+  x it / 90 / 1024) x 32, FISTP after a 2^-30 nudge), RB_CheckOverflow
+  for them, its rings by FSINCOS, two triangles a side, a vertex pair a
+  side (near t 1, far t 0); 6 0x501900 six points 60 degrees apart about
+  a beam (0x4273C0, 0x426AB0), drawn red as a triangle strip through
+  the immediate-mode batch (0x4ADC20, its vertex 0x4ADEC0 inlined:
+  32-byte vertices at 0x15495F0, count 0x15495E8 of 0x15495EC, colour
+  bytes 0x15495D8) with the image 0x1535AC4 and state bits 0x22, then
+  fog back on as a flush would set it; any other 0x503860 the axes, lines
+  16 long in red, green and blue through the batch (0x4ADEC0),
+  glLineWidth 3 (0x1535744, the width last set 0x15495CC) then 1. The
+  natives keep FSINCOS on the guest's x87 stack (out of its range it
+  pushes nothing and the second store takes the register below).
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -480,6 +524,19 @@ on gfx::Device" below).
   double's last bit, and the float radius squared would have to fall
   between the two sums (none in the cases, nor in a directed search of
   3M vertices around radii 0.5-4).
+  With layer 13: 200000 cases over 108 entries, 3.44M calls out, 0
+  mismatches (the entity types' functions no longer stubbed, 0x4ADEC0
+  lifted, glLineWidth recorded; entities with finite positions where
+  VectorNormalize takes them, as the CRT's square root of a NaN reaches
+  the thread's data, otherwise any; type 9's rings 1 to 40; the oracle
+  now also compares the tessellator's ends, which RB_EndSurface's
+  sentinels read, and 0x5039A0 gets the x87 headroom of its callees).
+  Its mutations: 61, 58 fail the oracle (two only after the rings'
+  inputs and the sprites' origins were let be any); 1 cannot change a
+  result on those finite inputs (a vector product's operands swapped)
+  and 2 are gaps that need a value at a rounding midpoint: the
+  cylinder's 2^-30 nudge before FISTP, and its field of view product
+  reassociated.
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -559,6 +616,13 @@ on gfx::Device" below).
   identical, the rest in the 2D text but one frame (+55, 227020 px),
   which differs as much between two runs of the layer 11 build (47
   identical, +55 227079 px): a frame's timing, not the layer.
+  With layer 13 (2026-11-06): the walk reaches none of the fourteen, nor
+  0x5039A0 (under gdb, on the layer 12 build); only the oracle covers
+  them. Standing, against the layer 12 build: all 13 loading and
+  briefing frames shared, 45 of 1640 in-level frames identical, two runs
+  of the layer 12 build 44, with the same differences (the 2D text, an
+  objective box at (200,254)-(438,331), whole frames at +49 and +75 by
+  timing).
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),

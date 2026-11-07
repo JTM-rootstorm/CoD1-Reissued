@@ -12,7 +12,8 @@
 // the tessellator or the optimised batch or draw themselves, and the
 // table's other surfaces: bad, skipped, a polygon, an entity's (by its
 // type) and the two of 24 and 25 that fill the tessellator and the
-// optimised batch. Replacements of lifted functions named with `replace`
+// optimised batch; and an entity's surfaces by its type, with the quads
+// they add. Replacements of lifted functions named with `replace`
 // in manifest/CoDSP.manifest; FINDINGS.md "Renderer back end". Names and
 // evidence are in the Ghidra plate comments.
 //
@@ -73,6 +74,10 @@ void f_0051D45A(Ctx& c);  // fprintf
 void f_0042B0A0(Ctx& c);  // the memcpy (src/render.cpp)
 void f_00500A60(Ctx& c);  // RB_CheckOverflow (verts, indexes)
 void f_004F4AB0(Ctx& c);  // begins the tessellator (ECX shader; position stride)
+void f_00426D30(Ctx& c);  // two axes across EDI into EAX and EBX
+void f_00426AB0(Ctx& c);  // rotates a point about EAX (out, point, degrees)
+void f_004273C0(Ctx& c);  // a vector across EBX into EDX
+void f_004ADEC0(Ctx& c);  // the immediate-mode batch's vertex (x, y, z)
 // An entity's surfaces by its type (0x5039A0).
 void f_005012D0(Ctx& c);
 void f_00501240(Ctx& c);
@@ -4461,6 +4466,746 @@ void f_00503760(Ctx& c) {
   c.esi = esi;
   c.edi = edi;
   c.ebp = ebp;
+  c.esp = e + 4;
+}
+
+
+// ---- an entity's surfaces --------------------------------------------------------
+
+namespace {
+
+constexpr float kDeg2Rad = std::bit_cast<float>(0x3C8EFA35u);
+// The view's origin, left and up axes (after its forward 0x1549834), and
+// whether it is mirrored.
+constexpr uint32_t kViewOrg = 0x1549828, kViewLeft = 0x1549840, kViewUp = 0x154984C,
+                   kMirrored = 0x1549930;
+
+// VectorNormalize (0x426710) of the vector at va (ESI), its length (ret:
+// the call's return).
+St Normalize(Ctx& c, uint32_t va, uint32_t ret) {
+  c.esi = va;
+  Call(c, f_00426710, ret);
+  return PopSt0(c);
+}
+
+// FSINCOS of the float at va, the cosine stored to cos and the sine to
+// sin, on the guest's x87 stack (out of range FSINCOS pushes nothing: the
+// float itself is stored as the cosine and the register below it as the
+// sine, which the second pop takes too).
+void SinCos(Ctx& c, uint32_t va, uint32_t cos, uint32_t sin) {
+  x87::LoadF32(c.fpu, U32(va));
+  x87::SinCos(c.fpu);
+  Put(cos, x87::StoreF32(c.fpu));
+  x87::Pop(c.fpu);
+  Put(sin, x87::StoreF32(c.fpu));
+  x87::Pop(c.fpu);
+}
+
+// The vector product the beams take (b x a), into out.
+void Cross(uint32_t out, uint32_t a, uint32_t b) {
+  Put(out, Fst(St(Ld(a + 8)) * Ld(b + 4) - St(Ld(a + 4)) * Ld(b + 8)));
+  Put(out + 4, Fst(St(Ld(a)) * Ld(b + 8) - St(Ld(a + 8)) * Ld(b)));
+  Put(out + 8, Fst(St(Ld(a + 4)) * Ld(b) - St(Ld(a)) * Ld(b + 4)));
+}
+
+// RB_CheckOverflow for a quad, inlined: RB_EndSurface and the tessellator
+// begun again (its shader and position stride, the entity 0x17F0C7C) when
+// it cannot take 4 more vertices or 6 more indexes (signed). The original
+// loads the indexes plus 6 into scratch only once the vertices pass (end:
+// the call of RB_EndSurface, begin: of the tessellator's begin).
+void QuadRoom(Ctx& c, uint32_t Ctx::*scratch, uint32_t end, uint32_t begin) {
+  if (I32(kTessVerts) + 4 < 0x2000) {
+    c.*scratch = U32(kTessIndexCount) + 6;
+    if (int32_t(c.*scratch) < 0xC000) return;
+  }
+  Call(c, f_004F7D00, end + 5);
+  const uint32_t stride = U32(kXyzStride);
+  Put(kEntity, U32(0x17F0C7C));
+  c.ecx = U32(kTessShader);
+  Push(c, stride);
+  Call(c, f_004F4AB0, begin + 5);
+  c.esp += 4;
+}
+
+// A quad's two triangles, the vertex count plus each of ks, the index
+// count stepped after each.
+void QuadIndexes(std::initializer_list<uint32_t> ks) {
+  for (uint32_t k : ks) {
+    Put16(kTessIndexes + 2 * U32(kTessIndexCount), U32(kTessVerts) + k);
+    Put(kTessIndexCount, U32(kTessIndexCount) + 1);
+  }
+}
+
+// A beam's quad from the vertex count: the positions (at the stride) from
+// and to plus w and -w along dir, texture coordinates st (8 dwords) and
+// the entity's colour; then the triangles (0, 1, 2), (2, 1, 3) and the
+// count.
+void BeamQuad(F32 w, uint32_t dir, uint32_t from, uint32_t to, const uint32_t (&st)[8],
+              uint32_t colour) {
+  const uint32_t v = U32(kTessVerts);
+  const St ws[4] = {St(w), -St(w), St(w), -St(w)};
+  const uint32_t at[4] = {from, from, to, to};
+  uint32_t p = kTessXyz + 4 * (U32(kXyzStride) * v);
+  for (uint32_t i = 0; i < 4; i++, p = NextXyz(p)) {
+    for (uint32_t k = 0; k < 12; k += 4) Put(p + k, Fst(ws[i] * Ld(dir + k) + Ld(at[i] + k)));
+    Put(kTessTexCoords + 8 * v + 8 * i, st[2 * i]);
+    Put(kTessTexCoords + 8 * v + 8 * i + 4, st[2 * i + 1]);
+    Put(kVertColors + 4 * (v + i), colour);
+  }
+  QuadIndexes({0, 1, 2, 2, 1, 3});
+  Put(kTessVerts, U32(kTessVerts) + 4);
+}
+
+// A sprite's quad (0x500F20, from the call at va): the entity's origin,
+// left and up (locals), its colour, texture coordinates 0 to 1.
+void SpriteQuad(Ctx& c, uint32_t ent, uint32_t left, uint32_t up, uint32_t va) {
+  for (uint32_t v : {0x3F800000u, 0x3F800000u, 0u, 0u, ent + 0x6C, up, left, ent + 0x44}) Push(c, v);
+  Call(c, f_00500F20, va + 5);
+  c.esp += 0x20;
+}
+
+// The three floats at va less vec3_origin's, for a mirrored view.
+void Mirror(uint32_t va) {
+  if (U32(kMirrored))
+    for (uint32_t k = 0; k < 12; k += 4) Put(va + k, Fst(St(Ld(0x537E54 + k)) - Ld(va + k)));
+}
+
+}  // namespace
+
+// A quad into the tessellator (stack: origin, left, up, colour, s1, t1,
+// s2, t2): the overflow tested and handled as RB_CheckOverflow would; the
+// triangles (0, 1, 3), (3, 1, 2); its corners left + up + origin (y and
+// z left + origin + up), origin - left + up, - left - up, left + origin -
+// up (12 bytes apart from the position
+// stride's first), the normals vec3_origin less the view's forward axis
+// (0x1549834), both sets of texture coordinates (s1, t1), (s2, t1), (s2,
+// t2), (s1, t2) through the x87 stack and the colour, these three by the
+// vertex count's low 16 bits.
+void f_00500F20(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi;
+  c.esp = e - 0x14;
+  c.edi = U32(kTessVerts);
+  QuadRoom(c, &Ctx::edx, 0x500F57, 0x500F75);
+  const uint32_t v = U32(kTessVerts), w = v & 0xFFFF, i = U32(kTessIndexCount);
+  uint32_t at = 0;
+  for (uint32_t k : {0u, 1u, 3u, 3u, 1u, 2u}) Put16(kTessIndexes + 2 * i + 2 * at++, v + k);
+  const uint32_t origin = Arg(c, e, 1), left = Arg(c, e, 2), up = Arg(c, e, 3);
+  const uint32_t p = kTessXyz + 4 * (U32(kXyzStride) * v);
+  for (uint32_t k = 0; k < 12; k += 4) {
+    Put(p + k, Fst(k ? St(Ld(left + k)) + Ld(origin + k) + Ld(up + k)
+                     : St(Ld(left + k)) + Ld(up + k) + Ld(origin + k)));
+    Put(p + 0xC + k, Fst(St(Ld(origin + k)) - Ld(left + k) + Ld(up + k)));
+    Put(p + 0x18 + k, Fst(St(Ld(origin + k)) - Ld(left + k) - Ld(up + k)));
+    Put(p + 0x24 + k, Fst(St(Ld(left + k)) + Ld(origin + k) - Ld(up + k)));
+  }
+  for (uint32_t k = 0; k < 12; k += 4) {
+    const F32 n = Fst(St(Ld(0x537E54 + k)) - Ld(kViewAxes + k));
+    for (uint32_t j = 0; j < 4; j++) Put(kTessNormals + 12 * (w + j) + k, n);
+  }
+  const uint32_t s1 = Arg(c, e, 5), t1 = Arg(c, e, 6), s2 = Arg(c, e, 7), t2 = Arg(c, e, 8);
+  uint32_t k = 0;
+  for (uint32_t x : {s1, t1, s2, t1, s2, t2, s1, t2}) {
+    const F32 f = Fst(St(F32{x}));
+    Put(kTessTexCoords2 + 8 * w + 4 * k, f);
+    Put(kTessTexCoords + 8 * w + 4 * k++, f);
+  }
+  const uint32_t colour = U32(Arg(c, e, 4));
+  for (uint32_t j = 0; j < 4; j++) Put(kVertColors + 4 * (w + j), colour);
+  Put(kTessVerts, U32(kTessVerts) + 4);
+  Put(kTessIndexCount, U32(kTessIndexCount) + 6);
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// A line's quad (EAX its direction, ECX its start, EDI its end; stack:
+// half its width) after the quad's overflow test: from and to plus and
+// minus the width along the direction, texture coordinates (0, 0), (1, 0),
+// (0, 1), (1, 1).
+void f_00502110(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi;
+  const uint32_t dir = c.eax, from = c.ecx, to = c.edi;
+  c.esp = e - 0x10;
+  c.ebx = from;
+  c.esi = dir;
+  QuadRoom(c, &Ctx::ebp, 0x50214B, 0x502167);
+  BeamQuad(Ld(e + 4), dir, from, to, {0, 0, 0x3F800000, 0, 0, 0x3F800000, 0x3F800000, 0x3F800000},
+           U32(U32(kEntity) + 0x6C));
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// A beam's quad without the overflow test (EAX its end, EDX its start,
+// ECX the direction; stack: its length, half its width): s 0 at the start
+// and the length / 256 at the end, t 0 and 1 across (the colour kept in
+// the length's slot).
+void f_00502AF0(Ctx& c) {
+  const uint32_t e = c.esp;
+  const F32 s = Fst(St(Ld(e + 4)) * 0x1p-8f);
+  Put(e + 4, U32(U32(kEntity) + 0x6C));
+  BeamQuad(Ld(e + 8), c.ecx, c.edx, c.eax, {0, 0, 0, 0x3F800000, s.bits, 0, s.bits, 0x3F800000},
+           U32(e + 4));
+  c.esp = e + 4;
+}
+
+// Square rings along a beam (EAX right, ECX up, EBX the step; stack:
+// count, start): with more than one, one fewer; four points 45 degrees
+// apart from 45 about the start, a quarter of the cvar 0x1534540's
+// integer out along up (the cosine) and right (the sine), each a step on
+// for more than one; then for each a quad of the four points (after the
+// overflow test), texture coordinates (1, 0), (1, 1), (0, 1), (0, 0)
+// (integers through the x87 stack, t left in the count's slot), each
+// point moved a step on; the triangles (0, 1, 3), (3, 1, 2).
+void f_00502CE0(Ctx& c) {
+  const uint32_t e = c.esp, ebp = c.ebp, esi = c.esi, edi = c.edi, f = e - 0x6C;
+  const uint32_t right = c.eax, up = c.ecx, step = c.ebx, from = Arg(c, e, 2);
+  c.esp = f;
+  c.ebp = from;
+  c.esi = right;
+  c.edi = up;
+  Put(f + 0x18, U32(U32(0x1534540) + 0x20));
+  if (I32(e + 4) > 1) Put(e + 4, U32(e + 4) - 1);
+  if (!U32(e + 4)) {
+    c.ebp = ebp;
+    c.esi = esi;
+    c.edi = edi;
+    c.esp = e + 4;
+    return;
+  }
+  Put(f + 0x14, Fst(FromInt(I32(f + 0x18))));
+  const float kPi = std::bit_cast<float>(0x40490FDBu), k1_180 = std::bit_cast<float>(0x3BB60B61u);
+  uint32_t pt = f + 0x38;
+  for (int32_t a = 45; a < 405; a += 90, pt += 0xC) {
+    Put(f + 0x24, Fst(FromInt(a) * kPi * k1_180));
+    SinCos(c, f + 0x24, f + 0x10, f + 0xC);
+    const St cs = St(Ld(f + 0x10)), sn = St(Ld(f + 0xC));
+    const St x = (cs * Ld(up) + sn * Ld(right)) * Ld(f + 0x14) * 0.25f;
+    const St y = (sn * Ld(right + 4) + cs * Ld(up + 4)) * Ld(f + 0x14) * 0.25f;
+    Put(f + 0x34, Fst((sn * Ld(right + 8) + cs * Ld(up + 8)) * Ld(f + 0x14) * 0.25f));
+    const St px = x + Ld(from), py = y + Ld(from + 4);
+    Put(f + 0x24, Fst(px));
+    Put(pt, Fst(px));
+    Put(pt + 4, Fst(py));
+    const St pz = St(Ld(f + 0x34)) + Ld(from + 8);
+    Put(f + 0x28, Fst(pz));
+    Put(pt + 8, Fst(pz));
+    if (I32(e + 4) > 1) {
+      Put(pt, Fst(St(Ld(f + 0x24)) + Ld(step)));
+      Put(pt + 4, Fst(py + Ld(step + 4)));
+      Put(pt + 8, Fst(St(Ld(f + 0x28)) + Ld(step + 8)));
+    }
+    Put(f + 0x18, uint32_t(a + 90));
+  }
+  Put(f + 0x28, U32(U32(kEntity) + 0x6C));
+  for (int32_t n = I32(e + 4); n > 0; n--) {
+    QuadRoom(c, &Ctx::esi, 0x502E69, 0x502E85);
+    const uint32_t v = U32(kTessVerts);
+    uint32_t p = kTessXyz + 4 * (U32(kXyzStride) * v);
+    for (uint32_t i = 0; i < 4; i++, p = NextXyz(p)) {
+      const uint32_t q = f + 0x38 + 12 * i;
+      for (uint32_t k = 0; k < 12; k += 4) Put(p + k, U32(q + k));
+      Put(e + 4, i < 2);
+      Put(kTessTexCoords + 8 * (v + i), Fst(FromInt(i < 2)));
+      Put(e + 4, i == 0 || i == 3 ? 0 : 1);
+      Put(kTessTexCoords + 8 * (v + i) + 4, Fst(FromInt(I32(e + 4))));
+      Put(kVertColors + 4 * (v + i), U32(f + 0x28));
+      Put(q, Fst(St(Ld(step)) + Ld(q)));
+      Put(q + 4, Fst(St(Ld(q + 4)) + Ld(step + 4)));
+      Put(q + 8, Fst(St(Ld(q + 8)) + Ld(step + 8)));
+    }
+    c.esi = 4;
+    c.edi = kTessTexCoords + 8 * v + 0x20;
+    c.ebp = kVertColors + 4 * v + 0x10;
+    QuadIndexes({0, 1, 3, 3, 1, 2});
+    Put(kTessVerts, U32(kTessVerts) + 4);
+  }
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// Entity type 4, a sprite facing the view: the view's left and up axes
+// times its radius (+0x7C) and height (+0x64), turned by its rotation
+// (+0x80, degrees, by FSINCOS) when it has one; left negated for a
+// mirrored view.
+void f_005012D0(Ctx& c) {
+  const uint32_t e = c.esp, f = e - 0x34;
+  uint32_t ent = U32(kEntity);
+  c.esp = f;
+  Put(f, U32(ent + 0x7C));
+  Put(f + 4, U32(ent + 0x64));
+  if (Ld(ent + 0x80) == 0.0f) {
+    for (uint32_t k = 0; k < 12; k += 4) Put(f + 0x1C + k, Fst(St(Ld(kViewLeft + k)) * Ld(f)));
+    for (uint32_t k = 0; k < 12; k += 4) Put(f + 0x28 + k, Fst(St(Ld(kViewUp + k)) * Ld(f + 4)));
+  } else {
+    Put(f + 0x18, Fst(St(Ld(ent + 0x80)) * kDeg2Rad));
+    SinCos(c, f + 0x18, f + 8, f + 0xC);
+    ent = U32(kEntity);
+    const St t = St(Ld(f + 8)) * Ld(f), a = St(Ld(kViewLeft)) * t;
+    Put(f + 0x20, Fst(t * Ld(kViewLeft + 4)));
+    Put(f + 0x24, Fst(t * Ld(kViewLeft + 8)));
+    const St u = -(St(Ld(f + 0xC)) * Ld(f));
+    Put(f, Fst(u));
+    Put(f + 0x1C, Fst(u * Ld(kViewUp) + a));
+    Put(f + 0x20, Fst(St(Ld(f)) * Ld(kViewUp + 4) + Ld(f + 0x20)));
+    Put(f + 0x24, Fst(St(Ld(f)) * Ld(kViewUp + 8) + Ld(f + 0x24)));
+    const St t2 = St(Ld(f + 8)) * Ld(f + 4), b = St(Ld(kViewUp)) * t2;
+    Put(f + 0x2C, Fst(t2 * Ld(kViewUp + 4)));
+    Put(f + 0x30, Fst(t2 * Ld(kViewUp + 8)));
+    const St w = St(Ld(f + 0xC)) * Ld(f + 4);
+    Put(f + 0xC, Fst(w));
+    Put(f + 0x28, Fst(w * Ld(kViewLeft) + b));
+    Put(f + 0x2C, Fst(St(Ld(f + 0xC)) * Ld(kViewLeft + 4) + Ld(f + 0x2C)));
+    Put(f + 0x30, Fst(St(Ld(f + 0xC)) * Ld(kViewLeft + 8) + Ld(f + 0x30)));
+  }
+  Mirror(f + 0x1C);
+  SpriteQuad(c, ent, f + 0x1C, f + 0x28, 0x5014AC);
+  c.esp = e + 4;
+}
+
+// Entity type 5: a quad of left (-radius, 0, 0) (vec3_origin less it for
+// a mirrored view, its other two from vec3_origin) and up (0, radius, 0)
+// in the world's axes.
+void f_00501240(Ctx& c) {
+  const uint32_t e = c.esp, f = e - 0x1C, ent = U32(kEntity);
+  c.esp = f;
+  const St r = St(Ld(ent + 0x7C));
+  Put(f + 8, 0u);
+  Put(f + 4, Fst(-r));
+  Put(f + 0xC, 0u);
+  Put(f + 0x14, Fst(r));
+  Put(f + 0x10, 0u);
+  Put(f + 0x18, 0u);
+  if (U32(kMirrored)) {
+    Put(f + 4, Fst(St(Ld(0x537E54)) - Ld(f + 4)));
+    Put(f + 8, U32(0x537E58));
+    Put(f + 0xC, U32(0x537E5C));
+  }
+  SpriteQuad(c, ent, f + 4, f + 0x10, 0x5012C3);
+  c.esp = e + 4;
+}
+
+// Entity type 12, a sprite in its own plane: right and up from its first
+// axis (+0x1C, by 0x426D30), times its radius and height, turned by its
+// rotation as type 4's; right negated for a mirrored view.
+void f_005014C0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, f = e - 0x5C;
+  uint32_t ent = U32(kEntity);
+  c.esp = f;
+  Put(f + 0x10, U32(ent + 0x7C));
+  Put(f + 0x14, U32(ent + 0x64));
+  c.esi = ent;
+  c.edi = ent + 0x1C;
+  c.ebx = f + 0x38;
+  c.eax = f + 0x2C;
+  Call(c, f_00426D30, 0x5014EA);
+  if (Ld(ent + 0x80) == 0.0f) {
+    for (uint32_t k = 0; k < 12; k += 4) Put(f + 0x2C + k, Fst(St(Ld(f + 0x2C + k)) * Ld(f + 0x10)));
+    for (uint32_t k = 0; k < 12; k += 4) Put(f + 0x38 + k, Fst(St(Ld(f + 0x38 + k)) * Ld(f + 0x14)));
+  } else {
+    Put(f + 0x28, Fst(St(Ld(ent + 0x80)) * kDeg2Rad));
+    SinCos(c, f + 0x28, f + 0x18, f + 0x1C);
+    ent = U32(kEntity);
+    c.esi = ent;
+    const St t = St(Ld(f + 0x18)) * Ld(f + 0x10);
+    Put(f + 0x44, Fst(St(Ld(f + 0x2C)) * t));
+    Put(f + 0x48, Fst(St(Ld(f + 0x30)) * t));
+    Put(f + 0x4C, Fst(t * Ld(f + 0x34)));
+    const St u = -(St(Ld(f + 0x1C)) * Ld(f + 0x10));
+    Put(f + 0x10, Fst(u));
+    const St x = u * Ld(f + 0x38) + Ld(f + 0x44);
+    const St y = St(Ld(f + 0x10)) * Ld(f + 0x3C) + Ld(f + 0x48);
+    Put(f + 0x4C, Fst(St(Ld(f + 0x10)) * Ld(f + 0x40) + Ld(f + 0x4C)));
+    const uint32_t z = U32(f + 0x4C);
+    const St t2 = St(Ld(f + 0x18)) * Ld(f + 0x14), b = St(Ld(f + 0x38)) * t2;
+    Put(f + 0x54, Fst(t2 * Ld(f + 0x3C)));
+    Put(f + 0x58, Fst(t2 * Ld(f + 0x40)));
+    const St w = St(Ld(f + 0x1C)) * Ld(f + 0x14);
+    Put(f + 0x1C, Fst(w));
+    Put(f + 0x38, Fst(w * Ld(f + 0x2C) + b));
+    Put(f + 0x3C, Fst(St(Ld(f + 0x1C)) * Ld(f + 0x30) + Ld(f + 0x54)));
+    Put(f + 0x40, Fst(St(Ld(f + 0x1C)) * Ld(f + 0x34) + Ld(f + 0x58)));
+    Put(f + 0x34, z);
+    Put(f + 0x2C, Fst(x));
+    Put(f + 0x30, Fst(y));
+  }
+  Mirror(f + 0x2C);
+  c.esi = ent + 0x44;
+  SpriteQuad(c, ent, f + 0x2C, f + 0x38, 0x50169B);
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// Entity type 13, a line from its origin (+0x44) to its old origin
+// (+0x54), its width +0x7C: across both ends' directions from the view
+// (0x1549828), normalised, by 0x502110.
+void f_00502350(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi, f = e - 0x44, ent = U32(kEntity);
+  c.esp = f;
+  for (uint32_t k = 0; k < 12; k += 4) {
+    Put(f + 0x20 + k, U32(ent + 0x54 + k));
+    Put(f + 0x2C + k, U32(ent + 0x44 + k));
+  }
+  for (uint32_t k = 0; k < 12; k += 4) Put(f + 0x14 + k, Fst(St(Ld(f + 0x2C + k)) - Ld(kViewOrg + k)));
+  for (uint32_t k = 0; k < 12; k += 4) Put(f + 8 + k, Fst(St(Ld(f + 0x20 + k)) - Ld(kViewOrg + k)));
+  Cross(f + 0x38, f + 8, f + 0x14);
+  Normalize(c, f + 0x38, 0x502424);
+  Push(c, U32(ent + 0x7C));
+  c.eax = f + 0x38;
+  c.edi = f + 0x20;
+  c.ecx = f + 0x2C;
+  Call(c, f_00502110, 0x50243B);
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// Entity type 9: rings (0x502CE0) from the old origin (+0x54) towards the
+// origin, one per the cvar 0x1534470's value (+0x1C) of the distance (by
+// _ftol2, at least 1) and stepped by it along the direction, right and up
+// from 0x426D30.
+void f_00503010(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, f = e - 0x38;
+  const uint32_t ent = U32(kEntity);
+  Put(f + 0x14, U32(ent + 0x54));
+  Put(f + 0x18, U32(ent + 0x58));
+  Put(f + 0x28, U32(ent + 0x4C));
+  Put(f + 0x1C, U32(ent + 0x5C));
+  Put(f + 8, Fst(St(Ld(ent + 0x44)) - Ld(f + 0x14)));
+  Put(f + 0xC, Fst(St(Ld(ent + 0x48)) - Ld(f + 0x18)));
+  Put(f + 0x10, Fst(St(Ld(f + 0x28)) - Ld(f + 0x1C)));
+  c.esp = f - 0xC;
+  Put(f + 4, Fst(Normalize(c, f + 8, 0x503064)));
+  c.ebx = f + 0x20;
+  c.eax = f + 0x2C;
+  c.edi = f + 8;
+  Call(c, f_00426D30, 0x503079);
+  const uint32_t cvar = U32(0x1534470);
+  c.esi = cvar;
+  int32_t n = Ftol(St(Ld(f + 4)) / Ld(cvar + 0x1C));
+  if (n <= 0) n = 1;
+  for (uint32_t k = 0; k < 12; k += 4) Put(f + 8 + k, Fst(St(Ld(f + 8 + k)) * Ld(cvar + 0x1C)));
+  Push(c, f + 0x14);
+  Push(c, uint32_t(n));
+  c.eax = f + 0x20;
+  c.ecx = f + 0x2C;
+  c.ebx = f + 8;
+  Call(c, f_00502CE0, 0x5030CC);
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The ends' directions from the view (into a, b) and the beam's direction
+// across them, each normalised by 0x426710 (from the calls at rets).
+void BeamAxis(Ctx& c, uint32_t from, uint32_t to, uint32_t a, uint32_t b, uint32_t out,
+              const uint32_t (&rets)[3]) {
+  for (uint32_t k = 0; k < 12; k += 4) Put(b + k, Fst(St(Ld(to + k)) - Ld(kViewOrg + k)));
+  Normalize(c, b, rets[0]);
+  for (uint32_t k = 0; k < 12; k += 4) Put(a + k, Fst(St(Ld(from + k)) - Ld(kViewOrg + k)));
+  Normalize(c, a, rets[1]);
+  Cross(out, a, b);
+  Normalize(c, out, rets[2]);
+}
+
+// Entity type 7: a beam's quad (0x502AF0) from the origin (+0x44) to the
+// old origin (+0x54), its length, as wide as the cvar 0x15344A8's value
+// (+0x1C), across the ends' directions from the view.
+void f_005030E0(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, f = e - 0x40, ent = U32(kEntity);
+  for (uint32_t k = 0; k < 12; k += 4) {
+    Put(f + 0x28 + k, U32(ent + 0x54 + k));
+    Put(f + 0x1C + k, U32(ent + 0x44 + k));
+  }
+  for (uint32_t k = 0; k < 12; k += 4) Put(f + 0x34 + k, Fst(St(Ld(f + 0x1C + k)) - Ld(f + 0x28 + k)));
+  c.esp = f - 4;
+  Put(f, Fst(Normalize(c, f + 0x34, 0x503140)));
+  BeamAxis(c, f + 0x1C, f + 0x28, f + 4, f + 0x10, f + 0x34, {0x503177, 0x5031AC, 0x5031F9});
+  Push(c, U32(U32(0x15344A8) + 0x1C));
+  Push(c, U32(f));
+  c.ecx = f + 0x34;
+  c.eax = f + 0x1C;
+  c.edx = f + 0x28;
+  Call(c, f_00502AF0, 0x50321A);
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// Entity type 10: type 7's quad 8 wide (its ends swapped) four times,
+// turned 45 degrees about the beam (0x426AB0) after each.
+void f_00503230(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi, f = e - 0x4C, ent = U32(kEntity);
+  for (uint32_t k = 0; k < 12; k += 4) {
+    Put(f + 0x1C + k, U32(ent + 0x54 + k));
+    Put(f + 0x28 + k, U32(ent + 0x44 + k));
+  }
+  for (uint32_t k = 0; k < 12; k += 4) Put(f + 0x40 + k, Fst(St(Ld(f + 0x1C + k)) - Ld(f + 0x28 + k)));
+  c.esp = f - 8;
+  Put(f, Fst(Normalize(c, f + 0x40, 0x503291)));
+  BeamAxis(c, f + 0x1C, f + 0x28, f + 4, f + 0x10, f + 0x34, {0x5032C8, 0x5032FD, 0x50334A});
+  c.edi = U32(f);
+  for (c.esi = 4; c.esi; c.esi--) {
+    Push(c, 0x41000000);
+    Push(c, c.edi);
+    c.ecx = f + 0x34;
+    c.eax = f + 0x1C;
+    c.edx = f + 0x28;
+    Call(c, f_00502AF0, 0x50336C);
+    Push(c, 0x42340000);
+    Push(c, f + 0x34);
+    Push(c, f + 0x10);
+    c.eax = f + 0x40;
+    Call(c, f_00426AB0, 0x503384);
+    c.esp += 0x14;
+    for (uint32_t k = 0; k < 12; k += 4) Put(f + 0x34 + k, U32(f + 0x10 + k));
+  }
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// Entity type 15, a cylinder from the origin (+0x44, radius +0x64) to the
+// old origin (+0x54, radius +0x7C): its sides from the distance of its
+// middle to the view and 0x1549960 ((1 - dist x it / 90 / 1024) x 32,
+// FISTP after a 2^-30 nudge, 8 to 32); RB_CheckOverflow for twice
+// that and 2 vertices, 6 indexes a side; rings about the axis from
+// 0x426D30 (the sine on its first vector, the cosine on its second, by
+// FSINCOS of the side's angle), the first repeated at the end; two
+// triangles a side, then each ring's vertex pair (near: t 1, far: t 0; s
+// the side's fraction) at the stride, the entity's colour.
+constexpr uint32_t kSideA[3] = {0, 1, 3}, kSideB[3] = {3, 2, 0};
+void f_00502450(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi, f = e - 0x37C;
+  const uint32_t ent = U32(kEntity);
+  c.esp = f;
+  c.ebp = ent;
+  const St s0 = St(Ld(ent + 0x44)) + Ld(ent + 0x54), s1 = St(Ld(ent + 0x58)) + Ld(ent + 0x48);
+  Put(f + 0x2C, Fst(St(Ld(ent + 0x5C)) + Ld(ent + 0x4C)));
+  Put(f + 0x24, Fst(s0 * 0.5f));
+  const St h1 = s1 * 0.5f, h2 = St(Ld(f + 0x2C)) * 0.5f;
+  Put(f + 0x24, Fst(St(Ld(f + 0x24)) - Ld(kViewOrg)));
+  Put(f + 0x28, Fst(h1 - Ld(kViewOrg + 4)));
+  Put(f + 0x2C, Fst(h2 - Ld(kViewOrg + 8)));
+  const St dist = Normalize(c, f + 0x24, 0x5024BF);
+  Put(f + 0x24, 0u);
+  Put(f + 0x28, 0x3E100000u);
+  const St fov = St(Ld(0x1549960)) * std::bit_cast<float>(0x3C360B61u);
+  Put(f + 0x20, Fst((1.0f - dist * fov * 0x1p-10f) * 32.0f));
+  const int32_t r = Fistp(St(Ld(f + 0x20)) + St(0x1p-30));
+  Put(f + 0x18, uint32_t(r));
+  const int32_t n = r < 8 ? 8 : r > 32 ? 32 : r;
+  Put(f + 0x1C, uint32_t(n));
+  if (I32(kTessVerts) + 2 * n + 2 >= 0x2000 || I32(kTessIndexCount) + 6 * n >= 0xC000) {
+    Push(c, uint32_t(6 * n));
+    Push(c, uint32_t(2 * n + 2));
+    Call(c, f_00500A60, 0x50255D);
+    c.esp += 8;
+  }
+  for (uint32_t k = 0; k < 12; k += 4) Put(f + 0x24 + k, Fst(St(Ld(ent + 0x44 + k)) - Ld(ent + 0x54 + k)));
+  Normalize(c, f + 0x24, 0x502587);
+  c.ebx = f + 0x40;
+  c.eax = f + 0x4C;
+  c.edi = f + 0x24;
+  Call(c, f_00426D30, 0x50259A);
+  const St inv = 1.0f / FromInt(n);
+  Put(f + 0x20, Fst(inv));
+  Put(f + 0x18, Fst(inv * std::bit_cast<float>(0x40C90FDBu)));
+  Put(f + 0x14, 0u);
+  // The rings: near at 0x5C, far at 0x1EC, from the second slot of each.
+  for (int32_t i = 0; i < n; i++) {
+    Put(f + 0x14, Fst(FromInt(I32(f + 0x14)) * Ld(f + 0x18)));
+    SinCos(c, f + 0x14, f + 0x3C, f + 0x38);
+    Put(f + 0x14, uint32_t(i + 1));
+    for (uint32_t ring : {0u, 1u}) {
+      const uint32_t radius = ring ? 0x7C : 0x64, centre = ring ? 0x54 : 0x44;
+      const uint32_t out = f + (ring ? 0x1EC : 0x5C) + 12 * uint32_t(i);
+      const St a = St(Ld(f + 0x38)) * Ld(ent + radius), b = St(Ld(f + 0x3C)) * Ld(ent + radius);
+      Put(out, Fst(St(Ld(f + 0x40)) * b + a * Ld(f + 0x4C) + Ld(ent + centre)));
+      Put(out + 4, Fst(St(Ld(f + 0x44)) * b + a * Ld(f + 0x50) + Ld(ent + centre + 4)));
+      Put(out + 8, Fst(b * Ld(f + 0x48) + a * Ld(f + 0x54) + Ld(ent + centre + 8)));
+    }
+  }
+  for (uint32_t ring : {0x5Cu, 0x1ECu})
+    for (uint32_t k = 0; k < 12; k += 4) Put(f + ring + 12 * n + k, Fst(St(Ld(f + ring + k))));
+  Put(f + 0x18, U32(f + 0x20));
+  for (int32_t j = 0; j < n; j++) {
+    for (const uint32_t* tri : {kSideA, kSideB}) {
+      for (uint32_t m = 0; m < 3; m++)
+        Put16(kTessIndexes + 2 * (U32(kTessIndexCount) + m), U32(kTessVerts) + 2 * j + tri[m]);
+      Put(kTessIndexCount, U32(kTessIndexCount) + 3);
+    }
+  }
+  const uint32_t v = U32(kTessVerts), colour = U32(U32(kEntity) + 0x6C);
+  uint32_t p = kTessXyz + 4 * (U32(kXyzStride) * v);
+  for (int32_t k = 0; k <= n; k++) {
+    const F32 s = Fst(FromInt(k) * Ld(f + 0x18));
+    for (uint32_t ring : {0u, 1u}) {
+      const uint32_t from = f + (ring ? 0x1EC : 0x5C) + 12 * uint32_t(k), at = v + 2 * k + ring;
+      for (uint32_t i = 0; i < 12; i += 4) Put(p + i, U32(from + i));
+      p = NextXyz(p);
+      Put(kTessTexCoords + 8 * at, s);
+      Put(kTessTexCoords + 8 * at + 4, ring ? 0u : 0x3F800000u);
+      Put(kVertColors + 4 * at, colour);
+    }
+  }
+  Put(kTessVerts, U32(kTessVerts) + 2 * (n + 1));
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// Entity type 6: six points 4 out from its beam (from the origin +0x44 to
+// the old origin +0x54), a perpendicular (0x4273C0) turned 60 degrees
+// apart about it (0x426AB0), each also the beam's length on; drawn red
+// (255, 0, 0, 255) as a triangle strip of the pairs,
+// the first again at the end, through the immediate-mode batch
+// (0x4ADC20, its vertex 0x4ADEC0 inlined) with the image 0x1535AC4 and
+// state bits 0x22; then fog back on as a flush would set it, and the
+// vertex pointer back to the tessellator's. Nothing for a beam of no
+// length.
+void f_00501900(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, ebx = c.ebx, f = e - 0xC4, ent = U32(kEntity);
+  const St d0 = St(Ld(ent + 0x54)) - St(Ld(ent + 0x44));
+  Put(f + 8, U32(ent + 0x48));
+  Put(f + 0xC0, U32(ent + 0x5C));
+  Put(f + 0xC, U32(ent + 0x4C));
+  Put(f + 0x10, Fst(d0));
+  Put(f + 0x1C, Fst(d0));
+  const St d1 = St(Ld(ent + 0x58)) - Ld(f + 8);
+  Put(f + 0x14, Fst(d1));
+  Put(f + 0x20, Fst(d1));
+  const St d2 = St(Ld(f + 0xC0)) - Ld(f + 0xC);
+  Put(f + 0x18, Fst(d2));
+  Put(f + 0x24, Fst(d2));
+  c.esp = f - 4;
+  if (Normalize(c, f + 0x1C, 0x501967) == 0.0f) {
+    c.esi = esi;
+    c.esp = e + 4;
+    return;
+  }
+  c.esp = f - 8;
+  c.ebx = f + 0x1C;
+  c.edx = f + 4;
+  Call(c, f_004273C0, 0x501986);
+  Put(f + 4, Fst(St(Ld(f + 4)) * 4.0f));
+  c.ebx = 0;
+  Put(f, 0u);
+  const uint32_t edi = c.edi;
+  c.esp = f - 0xC;
+  Put(f + 8, Fst(St(Ld(f + 8)) * 4.0f));
+  Put(f + 0xC, Fst(St(Ld(f + 0xC)) * 4.0f));
+  for (c.esi = 0; c.esi < 0x48; c.esi += 0xC) {
+    const uint32_t k = c.esi;
+    Push(c, Fst(FromInt(I32(f)) * 60.0f).bits);
+    c.ecx = f + 4;
+    c.edi = f + 0x70 + k;
+    c.eax = f + 0x1C;
+    Push(c, c.ecx);
+    Push(c, c.edi);
+    Call(c, f_00426AB0, 0x5019E4);
+    Put(f, U32(f) + 1);
+    for (uint32_t j = 0; j < 12; j += 4)
+      Put(f + 0x28 + k + j, Fst(St(Ld(f + 0x10 + j)) + Ld(f + 0x70 + k + j)));
+    c.esp += 0xC;
+  }
+  c.esi = U32(0x1535AC4);
+  Call(c, f_004CB3B0, 0x501A25);
+  c.eax = 0x22;
+  Call(c, f_004CB710, 0x501A2F);
+  Call(c, f_004ADC20, 0x501A34);
+  for (uint32_t va : {0x15495D8u, 0x15495D9u, 0x15495DAu, 0x15495DBu})
+    Wr<uint8_t>(g_guest_base, va, va == 0x15495D8 || va == 0x15495DB ? 0xFF : 0);
+  Put(0x15495C8, 5u);
+  c.edi = edi;
+  c.esp = f - 8;
+  for (uint32_t i = 0; i < 14; i++) {
+    const uint32_t from = f + ((i & 1) ? 0x28 : 0x70) + 12 * (i / 2 % 6);
+    const uint32_t n = U32(0x15495E8);
+    if (I32(0x15495E8) >= I32(0x15495EC)) break;
+    const uint32_t b = U32(0x15495F0) + 32 * n;
+    for (uint32_t k = 0; k < 4; k++) Wr<uint8_t>(g_guest_base, b + 0x1C + k, U8(0x15495D8 + k));
+    Put(b + 0xC, U32(0x15495D0));
+    Put(b + 0x10, U32(0x15495D4));
+    for (uint32_t k = 0; k < 12; k += 4) Put(b + k, U32(from + k));
+    Put(0x15495E8, n + 1);
+  }
+  Push(c, U32(0x15495E8));
+  Push(c, 0);
+  Push(c, U32(0x15495C8));
+  CallPtr(c, 0x153501C, 0x50208B);
+  Put(0x15495E8, 0u);
+  Put(0x15495C8, 0u);
+  Put(0x15495C4, 0u);
+  if (!U32(0x1549B50)) {
+    c.esi = 0x200000;
+    if (!(U32(kStateBits) & 0x200000) && CvarInt(0x15347F4) &&
+        ((U8(0x15496EC) & 8) ? U32(0x1535890) : U32(0x13F9CF8))) {
+      Enable(c, 0xB60, 0x5020E0);
+      Put(kStateBits, U32(kStateBits) | 0x200000);
+    }
+  }
+  for (uint32_t v : {0x1630C40u, 0u, 0x1406u, 3u}) Push(c, v);
+  CallPtr(c, 0x15354F0, 0x5020F9);
+  c.ebx = ebx;
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// Any other entity type: the axes, lines 16 long in red, green and blue
+// from (0, 0, 0), through the immediate-mode batch (0x4ADC20
+// with EBX as given; the vertices by 0x4ADEC0) with the image 0x1535AC4,
+// 3 wide (glLineWidth 0x1535744, the width last set 0x15495CC), as lines;
+// then width 1, fog back on (0x4C89D0) and the vertex pointer back to the
+// tessellator's.
+void f_00503860(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, ebx = c.ebx;
+  c.esp = e - 4;
+  Call(c, f_004ADC20, 0x503866);
+  c.esi = U32(0x1535AC4);
+  Call(c, f_004CB3B0, 0x503871);
+  c.esi = esi;
+  c.esp = e;
+  auto width = [&](float w, uint32_t va) {
+    if (!(Ld(0x15495CC) == w)) {
+      Push(c, std::bit_cast<uint32_t>(w));
+      Put(0x15495CC, std::bit_cast<uint32_t>(w));
+      CallPtr(c, 0x1535744, va);
+    }
+  };
+  width(3.0f, 0x503894);
+  Push(c, ebx);
+  c.ebx = 0;
+  Put(0x15495C8, 1u);
+  const uint32_t rets[6] = {0x5038C9, 0x5038D5, 0x5038F7, 0x503903, 0x503925, 0x503931};
+  for (uint32_t axis = 0; axis < 3; axis++) {
+    for (uint32_t k = 0; k < 4; k++)
+      Wr<uint8_t>(g_guest_base, 0x15495D8 + k, k == axis || k == 3 ? 0xFF : 0);
+    for (uint32_t end = 0; end < 2; end++) {
+      for (uint32_t k = 3; k-- > 0;) Push(c, end && k == axis ? 0x41800000u : 0u);
+      Call(c, f_004ADEC0, rets[2 * axis + end]);
+    }
+  }
+  c.esp += 0x48;
+  Push(c, U32(0x15495E8));
+  Push(c, 0);
+  Push(c, U32(0x15495C8));
+  CallPtr(c, 0x153501C, 0x503942);
+  Put(0x15495E8, 0u);
+  Put(0x15495C8, 0u);
+  width(1.0f, 0x503976);
+  Put(0x15495C4, 0u);
+  Call(c, f_004C89D0, 0x503987);
+  for (uint32_t v : {0x1630C40u, 0u, 0x1406u, 3u}) Push(c, v);
+  CallPtr(c, 0x15354F0, 0x503994);
+  c.ebx = ebx;
   c.esp = e + 4;
 }
 

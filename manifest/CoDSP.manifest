@@ -192,6 +192,20 @@ replace 005039A0
 replace 005033B0
 replace 00503590
 replace 00503760
+replace 00500F20
+replace 00502110
+replace 00502AF0
+replace 00502CE0
+replace 005012D0
+replace 00501240
+replace 005014C0
+replace 00502350
+replace 00503010
+replace 005030E0
+replace 00503230
+replace 00502450
+replace 00501900
+replace 00503860
 
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0
