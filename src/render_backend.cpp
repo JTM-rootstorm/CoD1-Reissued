@@ -62,22 +62,26 @@ void f_0051B5DF(Ctx& c);  // srand (seed)
 void f_00426A60(Ctx& c);  // rotates ECX by the axes EAX into EDX
 void f_004268B0(Ctx& c);  // normalises EAX (approximate inverse square root)
 void f_004F5940(Ctx& c);  // ComputeTexCoords (EAX stage; src/render.cpp)
-void f_004ADC20(Ctx& c);  // begins the immediate-mode batch
-void f_004F44A0(Ctx& c);  // the debug lines of cvar 0x15343E8 (EAX the tessellator)
-void f_004F4560(Ctx& c);  // the white normals (the tessellator)
-void f_004F4850(Ctx& c);  // the coloured normals (EBX the tessellator)
 void f_0052AB6F(Ctx& c);  // _stricmp
 void f_00431CF0(Ctx& c);  // sets a cvar (name, value; EAX force)
 void f_0042E300(Ctx& c);  // prints (format, ...)
 void f_00440940(Ctx& c);  // va (format, ...)
 void f_0051D45A(Ctx& c);  // fprintf
 void f_0042B0A0(Ctx& c);  // the memcpy (src/render.cpp)
-void f_00500A60(Ctx& c);  // RB_CheckOverflow (verts, indexes)
-void f_004F4AB0(Ctx& c);  // begins the tessellator (ECX shader; position stride)
 void f_00426D30(Ctx& c);  // two axes across EDI into EAX and EBX
 void f_00426AB0(Ctx& c);  // rotates a point about EAX (out, point, degrees)
 void f_004273C0(Ctx& c);  // a vector across EBX into EDX
-void f_004ADEC0(Ctx& c);  // the immediate-mode batch's vertex (x, y, z)
+void f_0042A480(Ctx& c);  // allocates zeroed memory (size; EAX), exits when out of it
+void f_004F4260(Ctx& c);  // writes the tessellator's triangles to a DXF file (EBX)
+// The tessellator's begin and overflow, the immediate-mode batch and the
+// debug draws.
+void f_004F4AB0(Ctx& c);
+void f_00500A60(Ctx& c);
+void f_004ADC20(Ctx& c);
+void f_004ADEC0(Ctx& c);
+void f_004F44A0(Ctx& c);
+void f_004F4560(Ctx& c);
+void f_004F4850(Ctx& c);
 // An entity's surfaces by its type (0x5039A0).
 void f_005012D0(Ctx& c);
 void f_00501240(Ctx& c);
@@ -5206,6 +5210,353 @@ void f_00503860(Ctx& c) {
   for (uint32_t v : {0x1630C40u, 0u, 0x1406u, 3u}) Push(c, v);
   CallPtr(c, 0x15354F0, 0x503994);
   c.ebx = ebx;
+  c.esp = e + 4;
+}
+
+// ---- the tessellator's begin, the immediate-mode batch, the debug draws ----------
+
+// Begins the tessellator (ECX shader; stack: position stride): no
+// vertices, indexes, vertex range or dlight bits, the shader with its
+// stages (+0x154), their count (+0x150) and its stage iterator (+0x174),
+// the entity 0x1549B3C, normals wanted for +0x50 bit 1, no axes, the
+// stride, and the shader time: the refdef's (0x15496F0) less the shader's
+// offset (+0x17C), at most its clamp (+0x178) when that is not 0.
+void f_004F4AB0(Ctx& c) {
+  const uint32_t s = c.ecx;
+  const St now(Ld(0x15496F0));
+  for (uint32_t va : {kTessIndexCount, kTessVerts, 0x17F0C8Cu, 0x17F0C90u, 0x17F0C80u}) Put(va, 0u);
+  Put(kTessShader, s);
+  Put(0x1830CA4, s + 0x154);
+  Put(0x1830C9C, U32(s + 0x150));
+  Put(0x1830CA0, U32(s + 0x174));
+  Put(0x17F0C7C, U32(0x1549B3C));
+  Put(0x17F0C64, U32(s + 0x50) >> 1 & 1);
+  const uint32_t stride = U32(c.esp + 4);
+  for (uint32_t va : {0x17F0C6Cu, 0x17F0C68u, 0x1830C94u, 0x1830C98u}) Put(va, 0u);
+  Put(kXyzStride, stride);
+  Put(kShaderTime, Fst(now - Ld(s + 0x17C)));
+  if (!(St(Ld(s + 0x178)) == 0.0f) && St(Ld(kShaderTime)) >= Ld(s + 0x178))
+    Put(kShaderTime, U32(s + 0x178));
+  c.esp += 4;
+}
+
+// RB_CheckOverflow (stack: vertices, indexes): when they would take the
+// tessellator to 0x2000 vertices or 0xC000 indexes (signed), RB_EndSurface
+// (ESI, EDI the counts), ri.Error (level 1) for counts past those limits
+// themselves, and the tessellator begun again with its shader, stride and
+// the entity it had.
+void f_00500A60(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi;
+  c.esp = e - 0xC;
+  c.esi = Arg(c, e, 1);
+  c.edi = Arg(c, e, 2);
+  if (int32_t(U32(kTessVerts) + c.esi) >= 0x2000 || int32_t(U32(kTessIndexCount) + c.edi) >= 0xC000) {
+    Call(c, f_004F7D00, 0x500A8E);
+    if (int32_t(c.esi) > 0x2000) {
+      for (uint32_t v : {0x2000u, c.esi, 0x539368u, 1u}) Push(c, v);
+      CallPtr(c, kError, 0x500AA3);
+      c.esp += 0x10;
+    }
+    if (int32_t(c.edi) > 0xC000) {
+      for (uint32_t v : {0xC000u, c.edi, 0x53933Cu, 1u}) Push(c, v);
+      CallPtr(c, kError, 0x500AC1);
+      c.esp += 0x10;
+    }
+    c.eax = U32(kXyzStride);
+    c.edx = U32(0x17F0C7C);
+    c.ecx = U32(kTessShader);
+    Push(c, c.eax);
+    Put(0x1549B3C, c.edx);
+    Call(c, f_004F4AB0, 0x500AE7);
+    c.esp += 4;
+  }
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// Points the client arrays back at the tessellator (EAX the vertex array
+// mode; for 3, the plain arrays): positions at the stride, normals and the
+// first texture coordinates.
+void f_004F4A20(Ctx& c) {
+  if (c.eax == 3) {
+    for (uint32_t v : {0x1630C40u, 0u, 0x1406u, U32(kXyzStride)}) Push(c, v);
+    CallPtr(c, kglVertexPointer, 0x4F4A37);
+    for (uint32_t v : {0x1698C40u, 0xCu, 0x1406u}) Push(c, v);
+    CallPtr(c, kglNormalPointer, 0x4F4A49);
+    for (uint32_t v : {U32(0x16E8C40), 0u, 0x1406u, 2u}) Push(c, v);
+    CallPtr(c, kglTexCoordPointer, 0x4F4A5F);
+  }
+  c.esp += 4;
+}
+
+// Begins the immediate-mode batch: its 32-byte vertices (0x15495F0,
+// allocated for 0x15495EC of them the first time), white (0x15495D8), no
+// mode, line width or texture coordinates (0x15495C8-0x15495D4); the
+// client arrays back to plain ones (0x153465C 3: for the NV vertex array
+// range 0x153479C its range off, then all the tessellator's arrays; else
+// with 0x15347B8 as 0x4F4A20 sets them), one texture unit, texture
+// coordinates, colours and positions on, fog off, and the arrays at the
+// batch's vertices with normal (0, 0, 1). Sets 0x15495C4.
+void f_004ADC20(Ctx& c) {
+  const uint32_t e = c.esp;
+  if (!U32(0x15495F0)) {
+    Push(c, U32(0x15495EC) << 5);
+    Call(c, f_0042A480, 0x4ADC37);
+    c.esp += 4;
+    Put(0x15495F0, c.eax);
+  }
+  for (uint32_t k = 0; k < 4; k++) Wr<uint8_t>(g_guest_base, 0x15495D8 + k, 0xFF);
+  for (uint32_t va : {0x15495C8u, 0x15495CCu, 0x15495D0u, 0x15495D4u}) Put(va, 0u);
+  if (U32(0x153465C) != 3) {
+    if (U32(0x153479C)) {
+      Push(c, U32(0x153479C) == 1 ? 0x851D : 0x8533);
+      CallPtr(c, kglDisableClientState, 0x4ADCA4);
+      for (uint32_t v : {0x1630C40u, 0u, 0x1406u, U32(kXyzStride)}) Push(c, v);
+      CallPtr(c, kglVertexPointer, 0x4ADCBD);
+      for (uint32_t v : {0x1698C40u, 0u, 0x1406u}) Push(c, v);
+      CallPtr(c, kglNormalPointer, 0x4ADCCF);
+      for (uint32_t v : {U32(0x16E8C40), 0u, 0x1406u, 2u}) Push(c, v);
+      CallPtr(c, kglTexCoordPointer, 0x4ADCE5);
+      for (uint32_t v : {kColors, 0u, 0x1401u, 4u}) Push(c, v);
+      CallPtr(c, kglColorPointer, 0x4ADCF9);
+    } else if (U32(0x15347B8)) {
+      for (uint32_t v : {0x1630C40u, 0u, 0x1406u, U32(kXyzStride)}) Push(c, v);
+      CallPtr(c, kglVertexPointer, 0x4ADD1C);
+      for (uint32_t v : {0x1698C40u, 0xCu, 0x1406u}) Push(c, v);
+      CallPtr(c, kglNormalPointer, 0x4ADD2E);
+      for (uint32_t v : {U32(0x16E8C40), 0u, 0x1406u, 2u}) Push(c, v);
+      CallPtr(c, kglTexCoordPointer, 0x4ADD44);
+    }
+    Put(0x153465C, 3u);
+  }
+  Call(c, f_004F4090, 0x4ADD59);
+  Push(c, 0x501);
+  Call(c, f_004CBBE0, 0x4ADD63);
+  c.esp += 4;
+  if (U32(kStateBits) & 0x200000) {
+    Disable(c, 0xB60, 0x4ADD77);
+    Put(kStateBits, U32(kStateBits) & 0xFFDFFFFF);
+  }
+  for (uint32_t v : {U32(0x15495F0) + 0xC, 0x20u, 0x1406u, 2u}) Push(c, v);
+  CallPtr(c, kglTexCoordPointer, 0x4ADD9A);
+  for (uint32_t v : {U32(0x15495F0) + 0x1C, 0x20u, 0x1401u, 4u}) Push(c, v);
+  CallPtr(c, kglColorPointer, 0x4ADDB2);
+  for (uint32_t v : {0x3F800000u, 0u, 0u}) Push(c, v);
+  CallPtr(c, 0x1534DCC, 0x4ADDC1);
+  for (uint32_t v : {U32(0x15495F0), 0x20u, 0x1406u, 3u}) Push(c, v);
+  CallPtr(c, kglVertexPointer, 0x4ADDD7);
+  Put(0x15495C4, 1u);
+  c.esp = e + 4;
+}
+
+// The immediate-mode batch's vertex (x, y, z; cdecl), with its colour and
+// texture coordinates, unless the batch is full (signed).
+void f_004ADEC0(Ctx& c) {
+  if (I32(0x15495E8) < I32(0x15495EC)) {
+    const uint32_t v = U32(0x15495F0) + (U32(0x15495E8) << 5);
+    for (uint32_t k = 0; k < 4; k++) Wr<uint8_t>(g_guest_base, v + 0x1C + k, U8(0x15495D8 + k));
+    Put(v + 0xC, U32(0x15495D0));
+    Put(v + 0x10, U32(0x15495D4));
+    for (uint32_t k = 0; k < 3; k++) Put(v + 4 * k, Arg(c, c.esp, 1 + int(k)));
+    Put(0x15495E8, U32(0x15495E8) + 1);
+  }
+  c.esp += 4;
+}
+
+// The tessellator's triangles drawn again by the cvar 0x15343E8 (EAX the
+// tessellator; above 2, or for an entity other than 0x1549B5C and
+// 0x1549E14): with the shader 0x1535B5C in place of the tessellator's
+// (its stages and their count) through 0x1549570, its depth range 0 to
+// 0.1 for an odd value, then 0 to 1; written to a DXF file (0x4F4260) for
+// a negative 0x14E43FC.
+void f_004F44A0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx;
+  const uint32_t cvar = U32(0x15343E8);
+  c.esp = e - 4;
+  c.ebx = c.eax;
+  if (I32(cvar + 0x20) > 2 ||
+      (U32(c.ebx + 0x1D803C) != 0x1549B5C && U32(c.ebx + 0x1D803C) != 0x1549E14)) {
+    const uint32_t tris = U32(0x1535B5C), ebp = c.ebp, esi = c.esi, edi = c.edi;
+    c.ebp = U32(0x1830C9C);
+    c.esi = U32(kTessShader);
+    c.edi = U32(0x1830CA4);
+    c.esp = e - 0x10;
+    Put(kTessShader, tris);
+    Put(0x1830CA4, tris + 0x154);
+    Put(0x1830C9C, U32(tris + 0x150));
+    if (U8(cvar + 0x20) & 1) {
+      for (uint32_t v : {0x3FB99999u, 0xA0000000u, 0u, 0u}) Push(c, v);
+      CallPtr(c, kglDepthRange, 0x4F4515);
+    }
+    Push(c, 0);
+    CallPtr(c, 0x1549570, 0x4F451D);
+    c.esp += 4;
+    for (uint32_t v : {0x3FF00000u, 0u, 0u, 0u}) Push(c, v);
+    CallPtr(c, kglDepthRange, 0x4F4531);
+    Put(0x1830CA4, c.edi);
+    Put(kTessShader, c.esi);
+    Put(0x1830C9C, c.ebp);
+    c.ebp = ebp;
+    c.esi = esi;
+    c.edi = edi;
+    c.esp = e - 4;
+    if (I32(U32(0x14E43FC) + 0x20) < 0) Call(c, f_004F4260, 0x4F455E);
+  }
+  c.ebx = ebx;
+  c.esp = e + 4;
+}
+
+namespace {
+
+// The batch's vertex at x, y, z (dwords) from the call at ret - 5.
+void BatchVertex(Ctx& c, uint32_t x, uint32_t y, uint32_t z, uint32_t ret) {
+  for (uint32_t v : {z, y, x}) Push(c, v);
+  Call(c, f_004ADEC0, ret);
+  c.esp += 0xC;
+}
+
+// A line from the position at p along twice the vector at d.
+void NormalLine(Ctx& c, uint32_t p, uint32_t d, uint32_t ret1, uint32_t ret2) {
+  BatchVertex(c, U32(p), U32(p + 4), U32(p + 8), ret1);
+  uint32_t to[3];
+  for (uint32_t k = 0; k < 3; k++) {
+    const St v(Ld(d + 4 * k));
+    to[k] = Fst(v + v + Ld(p + 4 * k)).bits;
+  }
+  BatchVertex(c, to[0], to[1], to[2], ret2);
+}
+
+// What the normals' draws end with: the lines left drawn, the depth range
+// 0 to 1, the batch ended (fog back on as a flush would set it) and the
+// positions back at the tessellator's, 3 floats apart.
+void NormalsEnd(Ctx& c, uint32_t draw, uint32_t range, uint32_t enable, uint32_t pointer) {
+  Push(c, U32(0x15495E8));
+  Push(c, 0);
+  Push(c, U32(0x15495C8));
+  CallPtr(c, kglDrawArrays, draw);
+  for (uint32_t v : {0x3FF00000u, 0u, 0u, 0u}) Push(c, v);
+  Put(0x15495E8, 0u);
+  Put(0x15495C8, 0u);
+  CallPtr(c, kglDepthRange, range);
+  Put(0x15495C4, 0u);
+  if (!U32(0x1549B50) && !(U32(kStateBits) & 0x200000) && CvarInt(0x15347F4) &&
+      ((U8(0x15496EC) & 8) ? U32(0x1535890) : U32(0x13F9CF8))) {
+    Enable(c, 0xB60, enable);
+    Put(kStateBits, U32(kStateBits) | 0x200000);
+  }
+  for (uint32_t v : {0x1630C40u, 0u, 0x1406u, 3u}) Push(c, v);
+  CallPtr(c, kglVertexPointer, pointer);
+}
+
+}  // namespace
+
+// The vertices' normals as lines twice their length (stack: the
+// tessellator; when it has normals, +0x1D8024), blue, after its two axes
+// (+0x1D8028, +0x1D802C) in red and green when it has both; through the
+// immediate-mode batch with the image 0x1535AC4 and state bits 0x1100, the
+// axes computed (0x50ABF0) when it lacks either, its depth range 0 to
+// 0.999 (0 to 0 for the cvar 0x1534698 at 1); the lines drawn every 256
+// vertices and at the end.
+void f_004F4560(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t t = Arg(c, e, 1);
+  if (!U32(t + 0x1D8024)) {
+    c.esp = e + 4;
+    return;
+  }
+  c.esp = e - 0x18;
+  c.ebx = 0;
+  c.ebp = t;
+  Call(c, f_004ADC20, 0x4F457F);
+  for (uint32_t v : {0x3FEFF7CEu, 0xE0000000u, 0u, 0u}) Push(c, v);
+  CallPtr(c, kglDepthRange, 0x4F458B);
+  c.esi = U32(0x1535AC4);
+  Call(c, f_004CB3B0, 0x4F459C);
+  for (uint32_t k = 0; k < 4; k++) Wr<uint8_t>(g_guest_base, 0x15495D8 + k, 0xFF);
+  if (!U32(t + 0x1D802C) || !U32(t + 0x1D8028)) Call(c, f_0050ABF0, 0x4F45CD);
+  c.esi = 1;
+  if (CvarInt(0x1534698) == 1) {
+    for (uint32_t v : {0u, 0u, 0u, 0u}) Push(c, v);
+    CallPtr(c, kglDepthRange, 0x4F45E2);
+  }
+  c.eax = 0x1100;
+  Call(c, f_004CB710, 0x4F45F2);
+  Put(0x15495C8, 1u);
+  c.esi = kTessXyz;
+  if (I32(t + 0x1D8048) > 0) {
+    Push(c, edi);
+    const auto colour = [](uint8_t r, uint8_t g, uint8_t b) {
+      for (uint32_t k = 0; k < 4; k++) Wr<uint8_t>(g_guest_base, 0x15495D8 + k, k == 0 ? r : k == 1 ? g : k == 2 ? b : 0xFF);
+    };
+    c.edi = t + 0xB0004;
+    do {
+      if (U32(t + 0x1D8028) && U32(t + 0x1D802C)) {
+        colour(0xFF, 0x7F, 0x7F);
+        NormalLine(c, c.esi, c.edi - 4, 0x4F4658, 0x4F468E);
+        colour(0x7F, 0xFF, 0x7F);
+        NormalLine(c, c.esi, c.edi - 0x18004, 0x4F46BA, 0x4F46FA);
+        colour(0x7F, 0x7F, 0xFF);
+      }
+      NormalLine(c, c.esi, c.edi - 0x30004, 0x4F4729, 0x4F4769);
+      if ((c.ebx & 0xFF) == 0xFF) {
+        Push(c, U32(0x15495E8));
+        Push(c, 0);
+        Push(c, U32(0x15495C8));
+        CallPtr(c, kglDrawArrays, 0x4F4781);
+        Put(0x15495E8, 0u);
+        Put(0x15495C8, 1u);
+      }
+      c.esi += 4 * U32(kXyzStride);
+      c.ebx++;
+      c.edi += 0xC;
+    } while (int32_t(c.ebx) < I32(t + 0x1D8048));
+    c.esp += 4;
+  }
+  c.edi = edi;
+  NormalsEnd(c, 0x4F47C7, 0x4F47E1, 0x4F4829, 0x4F4842);
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// The vertices' normals as lines twice their length (EBX the tessellator),
+// each coloured by its normal's x and the next two vertices' normals' x
+// ((x + 1) x 0.5 x 255 by _ftol2, as the original reads them); through the
+// immediate-mode batch with the image 0x1535AC4 and state bits 0x1100.
+void f_004F4850(Ctx& c) {
+  const uint32_t e = c.esp, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t t = c.ebx;
+  c.esp = e - 0x18;
+  Call(c, f_004ADC20, 0x4F485B);
+  c.esi = U32(0x1535AC4);
+  Call(c, f_004CB3B0, 0x4F4866);
+  c.eax = 0x1100;
+  for (uint32_t k = 0; k < 4; k++) Wr<uint8_t>(g_guest_base, 0x15495D8 + k, 0xFF);
+  Call(c, f_004CB710, 0x4F488C);
+  Put(0x15495C8, 1u);
+  c.ebp = 0;
+  c.esi = kTessXyz;
+  if (I32(t + 0x1D8048) > 0) {
+    c.edi = t + 0x80000;
+    do {
+      const auto half = [&](uint32_t va) { return (St(Ld(va)) + Ld(0x55B580)) * Ld(0x55B590); };
+      const St b = half(c.edi + 0x18), g = half(c.edi + 0xC), r = half(c.edi);
+      Wr<uint8_t>(g_guest_base, 0x15495D8u, uint8_t(Ftol(r * Ld(0x55B5FC))));
+      Wr<uint8_t>(g_guest_base, 0x15495D9u, uint8_t(Ftol(g * Ld(0x55B5FC))));
+      Wr<uint8_t>(g_guest_base, 0x15495DAu, uint8_t(Ftol(b * Ld(0x55B5FC))));
+      Wr<uint8_t>(g_guest_base, 0x15495DBu, 0xFF);
+      NormalLine(c, c.esi, c.edi, 0x4F4924, 0x4F495A);
+      c.esi += 4 * U32(kXyzStride);
+      c.ebp++;
+      c.edi += 0xC;
+    } while (int32_t(c.ebp) < I32(t + 0x1D8048));
+  }
+  NormalsEnd(c, 0x4F4987, 0x4F49A3, 0x4F49EB, 0x4F4A04);
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
   c.esp = e + 4;
 }
 

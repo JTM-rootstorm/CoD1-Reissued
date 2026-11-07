@@ -97,7 +97,9 @@ replace 0042B0A0
 # a stage's texture units from an ATI vertex array object; the dlight pass;
 # the shadow volumes and their silhouette; the colour and alpha generators;
 # the vertex deforms; the texture coordinate generators and modifiers; the
-# static model surfaces; the other surfaces of the surface table.
+# static model surfaces; the other surfaces of the surface table; an
+# entity's surfaces by its type; the tessellator's begin, RB_CheckOverflow,
+# the immediate-mode batch and the debug draws.
 replace 004C89D0
 replace 004C8A20
 replace 004CB3B0
@@ -206,6 +208,14 @@ replace 00503230
 replace 00502450
 replace 00501900
 replace 00503860
+replace 004F4AB0
+replace 00500A60
+replace 004F4A20
+replace 004ADC20
+replace 004ADEC0
+replace 004F44A0
+replace 004F4560
+replace 004F4850
 
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0

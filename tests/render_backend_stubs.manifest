@@ -5,10 +5,6 @@ replace 004FCE80
 replace 004F3A70
 replace 004F3C70
 replace 004F5940
-replace 004ADC20
-replace 004F44A0
-replace 004F4560
-replace 004F4850
 replace 0052AB6F
 replace 00431CF0
 replace 0042E300
@@ -16,5 +12,5 @@ replace 00440940
 replace 0051D45A
 replace 0051B5EC
 replace 0051B5DF
-replace 00500A60
-replace 004F4AB0
+replace 0042A480
+replace 004F4260

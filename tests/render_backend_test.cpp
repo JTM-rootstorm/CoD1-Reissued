@@ -104,6 +104,7 @@ constexpr Gl kGl[] = {
     {0x153539C, "glDepthRange", 4},
     {0x1534EB0, "glColor4ubv", 1, false, 0, 1},
     {0x153501C, "glDrawArrays", 3},
+    {0x1534DCC, "glNormal3f", 3},
     {0x1535744, "glLineWidth", 1},
     {0x1534DF8, "glColorMask", 4},
     {0x1534E7C, "glStencilFunc", 3},
@@ -111,6 +112,12 @@ constexpr Gl kGl[] = {
     {0x1830CA0, "stage iterator", 1, true},
     {0x1549600, "ri.Printf", 2, true},
     {0x1549604, "ri.Error", 2, true},
+    {0x1549570, "tris", 1, true},
+    // The CRT's thread data (its square root's errno for a NaN): the
+    // case's, through TlsGetValue.
+    {0x5331D4, "GetLastError", 0},
+    {0x5330F4, "TlsGetValue", 1},
+    {0x533100, "SetLastError", 1},
     {0x1549684, "ri 0x1549684", 1, true},
     {0x154967C, "ri 0x154967C", 1, true},
 };
@@ -164,24 +171,26 @@ void f_004F3C70(Ctx& c) { Stub(c, 0x4F3C70, kEsi, 0); }
   void f_##va(Ctx& c) { Stub(c, 0x##va, regs, args); }
 COD1_STUB(0051B5EC, 0, 0)
 COD1_STUB(0051B5DF, 0, 1)
-// Under the stages and the flush: ComputeTexCoords, the
-// immediate-mode batch's begin, the debug lines and normals, setting a cvar,
-// printing, va and fprintf, each with the registers the native code keeps
-// as the original has them.
+// Under the stages and the flush: ComputeTexCoords, setting a cvar,
+// printing, va and fprintf, and the debug triangles' DXF file (EBX the
+// tessellator), each with the registers the native code keeps as the
+// original has them.
 COD1_STUB(004F5940, kEax | kSaved, 0)
-COD1_STUB(004ADC20, kSaved, 0)
-COD1_STUB(004F44A0, kEax | kSaved, 0)
-COD1_STUB(004F4560, kSaved, 1)
-COD1_STUB(004F4850, kSaved, 0)
 COD1_STUB(00431CF0, kEax | kSaved, 2)
 COD1_STUB(0042E300, kSaved, 1)
 COD1_STUB(00440940, kSaved, 2)
 COD1_STUB(0051D45A, kSaved, 3)
-// Under the other surfaces: RB_CheckOverflow and the tessellator's begin
-// (ECX the shader; position stride).
-COD1_STUB(00500A60, kSaved, 2)
-COD1_STUB(004F4AB0, kEcx | kSaved, 1)
+COD1_STUB(004F4260, kSaved, 0)
 #undef COD1_STUB
+// The immediate-mode batch's allocation (size), answering with the case's
+// buffer.
+uint32_t g_batch = 0;
+// The CRT's thread data (TlsGetValue's answer).
+uint32_t g_tiddata = 0;
+void f_0042A480(Ctx& c) {
+  Stub(c, 0x42A480, kSaved, 1);
+  c.eax = g_batch;
+}
 // _stricmp, recorded and answering as the CRT's: 0 when the strings match
 // but for case.
 void f_0052AB6F(Ctx& c) {
@@ -307,6 +316,14 @@ void f_00503230_lifted(Ctx& c);
 void f_00502450_lifted(Ctx& c);
 void f_00501900_lifted(Ctx& c);
 void f_00503860_lifted(Ctx& c);
+void f_004F4AB0_lifted(Ctx& c);
+void f_00500A60_lifted(Ctx& c);
+void f_004F4A20_lifted(Ctx& c);
+void f_004ADC20_lifted(Ctx& c);
+void f_004ADEC0_lifted(Ctx& c);
+void f_004F44A0_lifted(Ctx& c);
+void f_004F4560_lifted(Ctx& c);
+void f_004F4850_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -417,6 +434,14 @@ void f_00503230(Ctx& c) { f_00503230_lifted(c); }
 void f_00502450(Ctx& c) { f_00502450_lifted(c); }
 void f_00501900(Ctx& c) { f_00501900_lifted(c); }
 void f_00503860(Ctx& c) { f_00503860_lifted(c); }
+void f_004F4AB0(Ctx& c) { f_004F4AB0_lifted(c); }
+void f_00500A60(Ctx& c) { f_00500A60_lifted(c); }
+void f_004F4A20(Ctx& c) { f_004F4A20_lifted(c); }
+void f_004ADC20(Ctx& c) { f_004ADC20_lifted(c); }
+void f_004ADEC0(Ctx& c) { f_004ADEC0_lifted(c); }
+void f_004F44A0(Ctx& c) { f_004F44A0_lifted(c); }
+void f_004F4560(Ctx& c) { f_004F4560_lifted(c); }
+void f_004F4850(Ctx& c) { f_004F4850_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -525,6 +550,14 @@ void n_00503230(Ctx& c);
 void n_00502450(Ctx& c);
 void n_00501900(Ctx& c);
 void n_00503860(Ctx& c);
+void n_004F4AB0(Ctx& c);
+void n_00500A60(Ctx& c);
+void n_004F4A20(Ctx& c);
+void n_004ADC20(Ctx& c);
+void n_004ADEC0(Ctx& c);
+void n_004F44A0(Ctx& c);
+void n_004F4560(Ctx& c);
+void n_004F4850(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -547,11 +580,18 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
   for (int k = 0; k < n; k++) r.args[k] = Rd(c.esp + 4 + 4 * uint32_t(k));
   if (gl.ptr_arg >= 0)
     for (int k = 0; k < gl.floats; k++) r.data[k] = Rd(r.args[gl.ptr_arg] + 4 * uint32_t(k));
+  // The tessellator's shader, stages and their count it draws with.
+  if (gl.ptr == 0x1549570) {
+    r.data[0] = Rd(0x17F0C70);
+    r.data[1] = Rd(0x1830CA4);
+    r.data[2] = Rd(0x1830C9C);
+  }
   g_calls.push_back(r);
   const uint32_t junk = 0xC0DE0000u + uint32_t(g_calls.size());
   c.eax = junk;
   c.ecx = junk ^ 1;
   c.edx = junk ^ 2;
+  if (gl.ptr == 0x5330F4) c.eax = recomp::gen::g_tiddata;
   // A stage iterator now and then leaves no indexes.
   if (gl.ptr == 0x1830CA0 && (Rd(0x17F0C88) & 1)) Wr(0x17F0C84, 0);
   c.esp += 4 + (gl.cdecl ? 0 : 4 * uint32_t(gl.args));
@@ -656,7 +696,7 @@ const Entry kEntries[] = {
     COD1_ENTRY(004FBD50, "static T2N3V3 NV"),
     COD1_ENTRY(00503A60, "bad surface", 0, 0), COD1_ENTRY(00503A80, "skipped surface", 0, 0),
     COD1_ENTRY(005016B0, "polygon"),         COD1_ENTRY(005039A0, "entity surface"),
-    COD1_ENTRY(005033B0, "surface 24", 0, 0), COD1_ENTRY(00503590, "surface 25 dlights", 0, 0),
+    COD1_ENTRY(005033B0, "surface 24"),      COD1_ENTRY(00503590, "surface 25 dlights"),
     COD1_ENTRY(00503760, "surface 25"),
     COD1_ENTRY(00500F20, "quad"),             COD1_ENTRY(00502110, "line quad"),
     COD1_ENTRY(00502AF0, "beam quad"),        COD1_ENTRY(00502CE0, "rings"),
@@ -665,6 +705,10 @@ const Entry kEntries[] = {
     COD1_ENTRY(00503010, "entity 9"),         COD1_ENTRY(005030E0, "entity 7"),
     COD1_ENTRY(00503230, "entity 10"),        COD1_ENTRY(00502450, "entity 15"),
     COD1_ENTRY(00501900, "entity 6"),         COD1_ENTRY(00503860, "entity other"),
+    COD1_ENTRY(004F4AB0, "begin surface"),    COD1_ENTRY(00500A60, "check overflow"),
+    COD1_ENTRY(004F4A20, "tess arrays"),      COD1_ENTRY(004ADC20, "batch begin"),
+    COD1_ENTRY(004ADEC0, "batch vertex"),     COD1_ENTRY(004F44A0, "debug tris"),
+    COD1_ENTRY(004F4560, "debug axes"),       COD1_ENTRY(004F4850, "debug normals"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -1243,7 +1287,16 @@ void Randomize(Arena& a, std::mt19937& g) {
   const uint32_t batch = g() % 4 ? 64 : g() % 6;
   Wr(0x15495EC, batch);
   Wr(0x15495E8, batch ? g() % batch : 0);
-  Wr(0x15495F0, a.Alloc(32 * 64));
+  if (g() % 32 == 0) Wr(0x15495EC, uint32_t(g()) | 0x80000000u);  // a negative capacity
+  recomp::gen::g_batch = a.Alloc(32 * 64);
+  recomp::gen::g_tiddata = a.Alloc(0x88);
+  Wr(0x15495F0, g() % 8 ? recomp::gen::g_batch : 0);
+  // The client arrays' mode, the NV vertex array range and the arrays'
+  // flag; the debug triangles' DXF cvar.
+  Wr(0x153465C, g() % 4);
+  Wr(0x153479C, g() % 3 ? 0 : 1 + g() % 2);
+  Wr(0x15347B8, g() % 2);
+  Wr(0x14E43FC, Cvar(a, g, g() % 4 ? 0 : 0xFFFFFFFF));
   for (uint32_t i = 0x15495C4; i < 0x15495DC; i += 4) Wr(i, uint32_t(g()));
 }
 
@@ -1654,6 +1707,61 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       k.args = {surf};
       break;
     }
+    case 0x4F4AB0: {
+      // A shader's stages, their count, its stage iterator and flags; the
+      // refdef's time; the shader's time offset and its clamp (now and
+      // then 0, -0, the time it gives or any).
+      const uint32_t sh = Rd(0x17F0C70);
+      Wr(sh + 0x150, g());
+      Wr(sh + 0x174, g());
+      Wr(sh + 0x50, g());
+      const float now = float(g() % 100000) / 100.0f, off = float(g() % 10000) / 100.0f;
+      Wr(0x15496F0, g() % 4 ? Float(now) : RandFloat(g));
+      Wr(sh + 0x17C, g() % 4 ? Float(off) : RandFloat(g));
+      Wr(sh + 0x178, Pick(g, {0, 0x80000000, Float(now - off), Float(float(g() % 100000) / 100.0f), RandFloat(g)}));
+      k.ecx = sh;
+      k.args = {g() % 4 ? Pick(g, {4, 8}) : uint32_t(g())};
+      break;
+    }
+    case 0x500A60: {
+      // Counts that take the tessellator to its limits or not, and now
+      // and then past them on their own.
+      auto count = [&](uint32_t limit, uint32_t have) {
+        switch (g() % 6) {
+          case 0: return uint32_t(limit - have - 1 + g() % 3);
+          case 1: return uint32_t(limit + g() % 3 - 1);
+          case 2: return uint32_t(g());
+          default: return uint32_t(g() % 16);
+        }
+      };
+      k.args = {count(0x2000, Rd(0x17F0C88)), count(0xC000, Rd(0x17F0C84))};
+      break;
+    }
+    case 0x4F4A20:
+      k.eax = Pick(g, {3, 3, 0, 1, 2, uint32_t(g())});
+      break;
+    case 0x4ADEC0:
+      k.args = {uint32_t(g()), uint32_t(g()), uint32_t(g())};
+      break;
+    case 0x4F44A0:
+    case 0x4F4560:
+    case 0x4F4850:
+      // The tessellator, its entity (the two the triangles skip, or
+      // another), now and then over 256 vertices (a draw every 256; with
+      // both axes, which are otherwise computed from the vertices past the
+      // windows); the inputs of the axes; the normals cvar's value.
+      Wr(0x17F0C7C, Pick(g, {0x1549B5C, 0x1549E14, uint32_t(g())}));
+      if (g() % 8 == 0) {
+        Wr(0x17F0C88, 250 + g() % 60);
+        Wr(0x17F0C68, 1);
+        Wr(0x17F0C6C, 1);
+      }
+      AxesInputs(g);
+      Wr(Rd(0x1534698) + 0x20, g() % 3);
+      if (kEntries[k.entry].va == 0x4F44A0) k.eax = 0x1618C40;
+      else if (kEntries[k.entry].va == 0x4F4560) k.args = {0x1618C40};
+      else k.ebx = 0x1618C40;
+      break;
     case 0x5033B0:
     case 0x503590:
     case 0x503760: {
@@ -1716,12 +1824,9 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       // entity's positions and first axis and the view's origin finite, as
       // VectorNormalize needs them (above); the quads' own inputs any. For
       // the entity's surface, each type (now and then any).
-      // Near the limits, not the shader with its own flush (its shadow
-      // volume would read the edges of 0x2000 vertices).
       if (Rd(0x17F0C88) > 20) Wr(0x17F0C88, g() % 21);
       if (g() % 32 == 0) Wr(0x17F0C88, 0x2000 - g() % 70);
       if (g() % 32 == 0) Wr(0x17F0C84, 0xC000 - g() % 200);
-      if (Rd(0x17F0C88) > 20 || Rd(0x17F0C84) > 0x1000) Wr(0x1535AEC, 0);
       bool special = false;
       auto coord = [&] {
         return !special && g() % 8 ? Float(float(int(g() % 20001) - 10000) / 100.0f) : RandFloat(g);
@@ -1754,7 +1859,7 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       Wr(0x1549960, g() % 8 ? Float(float(30 + g() % 100)) : RandFloat(g));
       Wr(0x1534470, Cvar(a, g, 0));
       // Type 9's ring length: its length over 1 to 40 rings (more would
-      // run the tessellator, whose begin the test stubs, off its arrays),
+      // run the tessellator past the windows),
       // now and then 0, negative, infinite or a NaN (one ring).
       double len = 0;
       for (uint32_t i = 0; i < 12; i += 4) {
@@ -1802,6 +1907,10 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       break;
     }
   }
+  // Near the tessellator's limits, which RB_CheckOverflow flushes, not
+  // the shader with its own flush (its shadow volume would read the edges
+  // of 0x2000 vertices).
+  if (Rd(0x17F0C88) > 0x400 || Rd(0x17F0C84) > 0x1000) Wr(0x1535AEC, 0);
   Run(k, a.top - kArena, g, s);
 }
 

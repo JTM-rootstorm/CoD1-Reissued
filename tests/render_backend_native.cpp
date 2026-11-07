@@ -109,4 +109,12 @@
 #define f_00502450 n_00502450
 #define f_00501900 n_00501900
 #define f_00503860 n_00503860
+#define f_004F4AB0 n_004F4AB0
+#define f_00500A60 n_00500A60
+#define f_004F4A20 n_004F4A20
+#define f_004ADC20 n_004ADC20
+#define f_004ADEC0 n_004ADEC0
+#define f_004F44A0 n_004F44A0
+#define f_004F4560 n_004F4560
+#define f_004F4850 n_004F4850
 #include "../src/render_backend.cpp"

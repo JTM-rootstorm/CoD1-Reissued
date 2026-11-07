@@ -53,7 +53,8 @@ on gfx::Device" below).
   alpha generators are layer 8, the deforms layer 9, the texture
   coordinate generators and modifiers layer 10, the static model surfaces
   that fill or draw the flush layer 11, the surface table's others layer
-  12, an entity's surfaces by its type layer 13.
+  12, an entity's surfaces by its type layer 13, the tessellator's begin,
+  RB_CheckOverflow, the immediate-mode batch and the debug draws layer 14.
 - Layer 4, the stages and the flush: a stage's draw 0x4F5DE0 (EAX stage,
   EBX indexes, count on the stack: colours, ComputeTexCoords, the colour
   array, then all units when the second bundle has an image or the first
@@ -397,6 +398,38 @@ on gfx::Device" below).
   glLineWidth 3 (0x1535744, the width last set 0x15495CC) then 1. The
   natives keep FSINCOS on the guest's x87 stack (out of its range it
   pushes nothing and the second store takes the register below).
+- Layer 14, what the layers above call (2026-11-07): the tessellator's
+  begin 0x4F4AB0 (ECX shader; stack: position stride; no vertices,
+  indexes, vertex range or dlight bits; the shader's stages +0x154, their
+  count +0x150 and stage iterator +0x174 into 0x1830CA4/9C/A0; the entity
+  0x1549B3C into 0x17F0C7C; normals wanted 0x17F0C64 from +0x50 bit 1;
+  the shader time 0x17F0C78 the refdef's 0x15496F0 less +0x17C, clamped
+  to +0x178 when that is not 0, comparing the stored float), and
+  RB_CheckOverflow 0x500A60 (stack: vertices, indexes; signed against
+  0x2000 and 0xC000: RB_EndSurface, ri.Error (level 1) for counts past the
+  limits on their own, 0x1549B3C put back from 0x17F0C7C and the
+  tessellator begun again). The immediate-mode batch: its begin 0x4ADC20
+  (the vertices allocated zeroed, 0x42A480, for 0x15495EC the first time;
+  the client arrays back to plain ones by 0x153465C: the NV vertex array
+  range 0x153479C off (0x851D for 1, else 0x8533) and the tessellator's
+  arrays, or with 0x15347B8 the three 0x4F4A20 sets; one unit, the client
+  arrays 0x501, fog off, the batch's arrays and glNormal3f(0, 0, 1)) and
+  its vertex 0x4ADEC0 (cdecl x, y, z; colour and texture coordinates from
+  0x15495D0-0x15495DB; signed against the capacity). Its other helpers
+  (0x4ADDF0 end, 0x4ADE20 mode, 0x4ADE30 draw, 0x4ADE60/80/A0 2D vertices)
+  and 0x4F4A70 have no callers: every user inlines them. The debug draws
+  RB_EndSurface calls: 0x4F44A0 (EAX the tessellator; the cvar 0x15343E8
+  above 2, or the entity not 0x1549B5C or 0x1549E14) the triangles again
+  through 0x1549570 with the shader 0x1535B5C swapped in (depth range 0 to
+  0.1 for an odd value), and for a negative 0x14E43FC written as 3DFACEs
+  to a DXF file by 0x4F4260 (left lifted); 0x4F4560 ("white"; stack: the
+  tessellator) the normals and, with both axes, the two axes as lines twice
+  their length (blue, red, green; the axes computed by 0x50ABF0 when either
+  is missing), depth range 0 to 0.999 (0 to 0 for r_shownormals
+  0x1534698 at 1), the lines drawn every 256 vertices; 0x4F4850
+  ("color"; EBX the tessellator) the normals coloured (x + 1) x 0.5 x 255
+  by _ftol2 from the normal's x and the next two vertices' normals' x, as
+  the original reads them. Both end the batch as 0x501900 does.
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -537,6 +570,19 @@ on gfx::Device" below).
   and 2 are gaps that need a value at a rounding midpoint: the
   cylinder's 2^-30 nudge before FISTP, and its field of view product
   reassociated.
+  With layer 14: 200000 cases over 116 entries, 3.56M calls out, 0
+  mismatches (16 s; RB_CheckOverflow, the tessellator's begin, the batch
+  and the debug draws no longer stubbed: the allocation 0x42A480 and the
+  DXF file 0x4F4260 are, glNormal3f and 0x1549570 recorded, the latter
+  with the shader, stages and count it sees; the CRT's thread data answered
+  through TlsGetValue, so its square root of a NaN runs as in the game;
+  surfaces 24 and 25 get the x87 headroom of the flush RB_CheckOverflow
+  may run, and near the limits no case has the shader with its own flush).
+  Its mutations: 45, 41 fail the oracle (one, the batch vertex's signed
+  test, after a negative capacity was added); 4 cannot change a result:
+  the clamp's >= for > and against the unrounded time (where they differ
+  the clamp writes the value already stored), and the return address of
+  RB_EndSurface's call, below ESP and never read.
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -623,6 +669,12 @@ on gfx::Device" below).
   of the layer 12 build 44, with the same differences (the 2D text, an
   objective box at (200,254)-(438,331), whole frames at +49 and +75 by
   timing).
+  With layer 14 (2026-11-07): the walk reaches the tessellator's begin
+  (145508 times under gdb, on the layer 13 build), RB_CheckOverflow
+  (253655), the batch's begin (13882) and vertex (5048), not 0x4F4A20 nor
+  the debug draws. Standing, against the layer 13 build: all 13 loading
+  and briefing frames shared, 46 of 1640 in-level frames identical, as two
+  runs of the layer 13 build (46).
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),
