@@ -9,9 +9,12 @@
 // draw, the stage loop, the generic stage iterator with the dlight pass,
 // the optimised iterators and their dispatch, the shadow volumes of shader
 // 0x1535AEC, and RB_EndSurface; and the static model surfaces, which fill
-// the tessellator or the optimised batch or draw themselves. Replacements of lifted functions named
-// with `replace` in manifest/CoDSP.manifest; FINDINGS.md "Renderer back
-// end". Names and evidence are in the Ghidra plate comments.
+// the tessellator or the optimised batch or draw themselves, and the
+// table's other surfaces: bad, skipped, a polygon, an entity's (by its
+// type) and the two of 24 and 25 that fill the tessellator and the
+// optimised batch. Replacements of lifted functions named with `replace`
+// in manifest/CoDSP.manifest; FINDINGS.md "Renderer back end". Names and
+// evidence are in the Ghidra plate comments.
 //
 // The GL calls go through the renderer's qgl function pointers (set by
 // its QGL_Init from opengl32's exports and wglGetProcAddress; the names
@@ -68,6 +71,19 @@ void f_0042E300(Ctx& c);  // prints (format, ...)
 void f_00440940(Ctx& c);  // va (format, ...)
 void f_0051D45A(Ctx& c);  // fprintf
 void f_0042B0A0(Ctx& c);  // the memcpy (src/render.cpp)
+void f_00500A60(Ctx& c);  // RB_CheckOverflow (verts, indexes)
+void f_004F4AB0(Ctx& c);  // begins the tessellator (ECX shader; position stride)
+// An entity's surfaces by its type (0x5039A0).
+void f_005012D0(Ctx& c);
+void f_00501240(Ctx& c);
+void f_00501900(Ctx& c);
+void f_005030E0(Ctx& c);
+void f_00503010(Ctx& c);
+void f_00503230(Ctx& c);
+void f_005014C0(Ctx& c);
+void f_00502350(Ctx& c);
+void f_00502450(Ctx& c);
+void f_00503860(Ctx& c);
 
 namespace {
 
@@ -4155,6 +4171,296 @@ void f_004FB1B0(Ctx& c) {
   Put(0x1549B0C, U32(0x1549B0C) + U16(surf + 0x12));
   c.esi = esi;
   c.edi = edi;
+  c.esp = e + 4;
+}
+
+// ---- the other surfaces ----------------------------------------------------------
+
+namespace {
+
+// The tessellator's second texture coordinates (8 bytes a vertex).
+constexpr uint32_t kTessTexCoords2 = 0x1670C40;
+
+void Put16(uint32_t va, uint32_t v) { Wr<uint16_t>(g_guest_base, va, uint16_t(v)); }
+
+// The memcpy 0x42B0A0 (dst, src, size) from the call at va, its arguments
+// left on the stack.
+void Copy(Ctx& c, uint32_t dst, uint32_t src, uint32_t size, uint32_t va) {
+  Push(c, size);
+  Push(c, src);
+  Push(c, dst);
+  Call(c, f_0042B0A0, va + 5);
+}
+
+// RB_CheckOverflow (verts, indexes) when the tessellator cannot take them,
+// as the surfaces' own tests have it (signed sums).
+void CheckOverflow(Ctx& c, uint32_t verts, uint32_t indexes, uint32_t index_sum, uint32_t va) {
+  if (int32_t(verts + U32(kTessVerts)) >= 0x2000 || int32_t(index_sum) >= 0xC000) {
+    Push(c, indexes);
+    Push(c, verts);
+    Call(c, f_00500A60, va + 5);
+    c.esp += 8;
+  }
+}
+
+}  // namespace
+
+// Surface type 0, "Bad surface tesselated.\n" through ri.Printf.
+void f_00503A60(Ctx& c) {
+  const uint32_t e = c.esp;
+  Push(c, 0x539304);
+  Push(c, 0);
+  CallPtr(c, kPrintf, 0x503A67);
+  c.esp = e + 4;
+}
+
+// Surface type 1: nothing.
+void f_00503A80(Ctx& c) { c.esp += 4; }
+
+// Surface type 2, a polygon (stack: surface; +8 its vertex count, +0xC its
+// 32-byte vertices: position, texture coordinates, the second texture
+// coordinates and colour) into the tessellator, positions at its position
+// stride; for a shader with the sign bit of +0x54, the dlight bits
+// (0x17F0C80) of the dlights (0x1536474 of them at 0x153647C, 0x88 bytes:
+// radius +0x74, origin +0x78) within whose radius a vertex lies, the
+// squared radius left in the argument slot (before that, the vertex loop's
+// count); then a fan of triangles from its first vertex. The original
+// rereads the surface's fields as it goes, and so does this.
+void f_005016B0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, ebp = c.ebp;
+  const uint32_t surf = Arg(c, e, 1), n = U32(surf + 8);
+  c.esi = surf;
+  c.ebp = U32(kTessVerts);
+  c.esp = e - 0xC;
+  CheckOverflow(c, n, 3 * n - 6, U32(kTessIndexCount) + 3 * (n - 2), 0x5016E7);
+  const uint32_t verts = U32(kTessVerts);
+  uint32_t xyz = kTessXyz + 4 * (U32(kXyzStride) * verts), st = kTessTexCoords + 8 * verts,
+           st2 = kTessTexCoords2 + 8 * verts, colour = kVertColors + 4 * verts;
+  Put(e + 4, 0);
+  if (I32(surf + 8) > 0) {
+    uint32_t i = 0, at = 0;
+    do {
+      auto in = [&](uint32_t k) { return U32(U32(surf + 0xC) + at + k); };
+      Put(xyz, in(0));
+      Put(xyz + 4, in(4));
+      Put(xyz + 8, in(8));
+      Put(st, in(0xC));
+      Put(st + 4, in(0x10));
+      Put(st2, in(0x14));
+      Put(st2 + 4, in(0x18));
+      Put(colour, in(0x1C));
+      xyz += 4 * U32(kXyzStride);
+      st += 8;
+      st2 += 8;
+      colour += 4;
+      at += 0x20;
+      Put(e + 4, ++i);
+    } while (int32_t(i) < I32(surf + 8));
+  }
+  if (I32(0x1536474) && int8_t(U8(U32(kTessShader) + 0x54)) < 0 && I32(0x1536474) > 0) {
+    uint32_t i = 0, dl = U32(0x153647C) + 0x78;
+    do {
+      const uint32_t bit = 1u << (i & 31);
+      if (!(U32(0x17F0C80) & bit)) {
+        const St r = Ld(dl - 4);
+        Put(e + 4, Fst(r * r));
+        const uint32_t nv = U32(surf + 8);
+        uint32_t v = U32(surf + 0xC);
+        for (uint32_t k = 0; int32_t(k) < int32_t(nv); k++, v += 0x20) {
+          const St dx = St(Ld(v)) - Ld(dl), dy = St(Ld(v + 4)) - Ld(dl + 4),
+                   dz = St(Ld(v + 8)) - Ld(dl + 8);
+          if (dz * dz + dy * dy + dx * dx < Ld(e + 4)) {
+            Put(0x17F0C80, U32(0x17F0C80) | bit);
+            break;
+          }
+        }
+      }
+      i++;
+      dl += 0x88;
+    } while (int32_t(i) < I32(0x1536474));
+  }
+  for (uint32_t i = 0; int32_t(i) < int32_t(U32(surf + 8) - 2); i++) {
+    const uint32_t at = kTessIndexes + 2 * U32(kTessIndexCount);
+    Put16(at, U32(kTessVerts));
+    Put16(at + 2, i + U32(kTessVerts) + 1);
+    Put16(at + 4, i + U32(kTessVerts) + 2);
+    Put(kTessIndexCount, U32(kTessIndexCount) + 3);
+  }
+  Put(kTessVerts, U32(kTessVerts) + U32(surf + 8));
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.ebp = ebp;
+  c.esp = e + 4;
+}
+
+// Surface type 3, an entity's: by the entity's type (0x1549B3C +0), on an
+// 8-aligned frame, the lifted function of types 4-7, 9, 10, 12, 13 and
+// 15, "FXPORT RT_ELECTRICITY TDB\n" through ri.Printf for 14, and
+// 0x503860 (ESI) for any other.
+void f_005039A0(Ctx& c) {
+  const uint32_t e = c.esp, ebp = c.ebp;
+  c.ebp = e - 4;
+  c.esp = (e - 4) & ~7u;
+  switch (U32(U32(kEntity))) {
+    case 4: Call(c, f_005012D0, 0x5039CA); break;
+    case 5: Call(c, f_00501240, 0x5039C1); break;
+    case 6: Call(c, f_00501900, 0x5039DC); break;
+    case 7: Call(c, f_005030E0, 0x5039E5); break;
+    case 9: Call(c, f_00503010, 0x5039EE); break;
+    case 10: Call(c, f_00503230, 0x5039F7); break;
+    case 12: Call(c, f_005014C0, 0x5039D3); break;
+    case 13: Call(c, f_00502350, 0x503A14); break;
+    case 14:
+      Push(c, 0x539320);
+      Push(c, 0);
+      CallPtr(c, kPrintf, 0x503A02);
+      break;
+    case 15: Call(c, f_00502450, 0x503A1D); break;
+    default: Call(c, f_00503860, 0x503A26); break;
+  }
+  c.ebp = ebp;
+  c.esp = e + 4;
+}
+
+// Surface type 24 (stack: surface; +8 its dlight bits, +0x24 its vertex
+// count, +0x28 and +0x2C its vertices' two axes, +0x30 normals, +0x34 and
+// +0x38 texture coordinates, +0x3C colours, +0x40 positions, +0x44 its
+// index count, +0x48 its indexes) into the tessellator: the dlight bits,
+// its indexes plus the vertex count so far (from the last), then by the
+// memcpy for a shader with +0x50 bit 2, or with the cvar 0x15344E4 and
+// dlight bits, the normals (0x17F0C64 set) and, for +0x50 bits 0xC, each
+// axis it has (0x17F0C68, 0x17F0C6C set); positions 12 bytes apart, the
+// coordinates and colours; returns the vertex count.
+void f_005033B0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi;
+  const uint32_t surf = Arg(c, e, 1);
+  c.esi = surf;
+  c.esp = e - 0xC;
+  CheckOverflow(c, U32(surf + 0x24), U32(surf + 0x44), U32(surf + 0x44) + U32(kTessIndexCount),
+                0x5033E1);
+  const uint32_t indexes = kTessIndexes + 2 * U32(kTessIndexCount);
+  Put(0x17F0C80, U32(0x17F0C80) | U32(surf + 8));
+  const uint32_t verts = U32(kTessVerts), n = U32(surf + 0x44);
+  c.ebx = verts;
+  if (int32_t(n - 1) >= 0)
+    for (uint32_t k = n; k; k--)
+      Put16(indexes + 2 * (k - 1), U16(surf + 0x48 + 2 * (k - 1)) + verts);
+  Put(kTessIndexCount, U32(kTessIndexCount) + U32(surf + 0x44));
+  const uint32_t nv = U32(surf + 0x24);
+  c.edi = nv;
+  if ((U8(U32(kTessShader) + 0x50) & 2) || (CvarInt(0x15344E4) && U32(0x17F0C80))) {
+    c.ebx = 12 * nv;
+    Copy(c, kTessNormals + 12 * verts, U32(surf + 0x30), c.ebx, 0x503481);
+    c.esp += 0xC;
+    Put(0x17F0C64, 1);
+    if (U8(U32(kTessShader) + 0x50) & 0xC) {
+      if (const uint32_t src = U32(surf + 0x28)) {
+        Copy(c, kTangents + 12 * U32(kTessVerts), src, c.ebx, 0x5034B9);
+        c.esp += 0xC;
+        Put(0x17F0C68, 1);
+      }
+      if (const uint32_t src = U32(surf + 0x2C)) {
+        Copy(c, kBinormals + 12 * U32(kTessVerts), src, c.ebx, 0x5034E4);
+        c.esp += 0xC;
+        Put(0x17F0C6C, 1);
+      }
+    }
+  }
+  Copy(c, kTessXyz + 12 * U32(kTessVerts), U32(surf + 0x40), 12 * nv, 0x503512);
+  c.ebx = 8 * nv;
+  Copy(c, kTessTexCoords + 8 * U32(kTessVerts), U32(surf + 0x34), c.ebx, 0x503531);
+  Copy(c, kTessTexCoords2 + 8 * U32(kTessVerts), U32(surf + 0x38), c.ebx, 0x503549);
+  Copy(c, kVertColors + 4 * U32(kTessVerts), U32(surf + 0x3C), 4 * nv, 0x503568);
+  c.eax = U32(kTessVerts) + U32(surf + 0x24);
+  Put(kTessVerts, c.eax);
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// A type 25 surface (ESI) into the tessellator as well, for its dlights:
+// the normals and both axes for the cvar 0x15344E4 (0x17F0C64, 0x17F0C68,
+// 0x17F0C6C set), the coordinates, colours and positions (12 bytes apart)
+// by the memcpy; its indexes less its first plus the vertex count so far;
+// then both counts and its dlight bits.
+void f_00503590(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, edi = c.edi, surf = c.esi;
+  c.esp = e - 0xC;
+  CheckOverflow(c, U32(surf + 0x24), U32(surf + 0x44), U32(surf + 0x44) + U32(kTessIndexCount),
+                0x5035BC);
+  auto copy = [&](uint32_t dst, uint32_t size, uint32_t src, uint32_t va) {
+    Copy(c, dst + size * U32(kTessVerts), U32(surf + src), size * U32(surf + 0x24), va);
+    c.esp += 0xC;
+  };
+  if (CvarInt(0x15344E4)) {
+    copy(kTangents, 12, 0x28, 0x5035F3);
+    copy(kBinormals, 12, 0x2C, 0x503619);
+    copy(kTessNormals, 12, 0x30, 0x50363F);
+    Put(0x17F0C68, 1);
+    Put(0x17F0C6C, 1);
+    Put(0x17F0C64, 1);
+  }
+  copy(kTessTexCoords, 8, 0x34, 0x503673);
+  copy(kTessTexCoords2, 8, 0x38, 0x503693);
+  copy(kVertColors, 4, 0x3C, 0x5036B4);
+  copy(kTessXyz, 12, 0x40, 0x5036DA);
+  const uint32_t add = U32(kTessVerts) - U16(surf + 0x48);
+  for (uint32_t i = 0; int32_t(i) < I32(surf + 0x44); i++)
+    Put16(kTessIndexes + 2 * (U32(kTessIndexCount) + i), U16(surf + 0x48 + 2 * i) + add);
+  Put(kTessVerts, U32(kTessVerts) + U32(surf + 0x24));
+  Put(kTessIndexCount, U32(kTessIndexCount) + U32(surf + 0x44));
+  Put(0x17F0C80, U32(0x17F0C80) | U32(surf + 8));
+  c.ebx = ebx;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// Surface type 25 (stack: surface, as type 24's) into the optimised batch,
+// on an 8-aligned frame: when its indexes would take the batch to 0x20000,
+// RB_EndSurface and the tessellator begun again (its shader and position
+// stride, the entity 0x17F0C7C); the batch's vertex range widened to its
+// first index and that plus its vertex count (signed, set by the first);
+// its indexes as they are (by the memcpy) and both counts; then, with
+// dlights (0x15497FC) and dlight bits of its own, unless 0x153479C is set
+// and 0x1549548 differs from 0x153465C, also into the tessellator
+// (f_00503590).
+void f_00503760(Ctx& c) {
+  const uint32_t e = c.esp, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t surf = Arg(c, e, 1);
+  c.ebp = e - 4;
+  c.esp = ((e - 4) & ~7u) - 8;
+  c.esi = surf;
+  if (int32_t(U32(surf + 0x44) + U32(0x1830C94)) >= 0x20000) {
+    Call(c, f_004F7D00, 0x503782);
+    const uint32_t stride = U32(kXyzStride);
+    Put(kEntity, U32(0x17F0C7C));
+    c.ecx = U32(kTessShader);
+    Push(c, stride);
+    Call(c, f_004F4AB0, 0x5037A0);
+    c.esp += 4;
+  }
+  const uint32_t hi = U32(0x17F0C90), first = U16(surf + 0x48);
+  if (!hi) {
+    Put(0x17F0C8C, first);
+    Put(0x17F0C90, U16(surf + 0x48) + U32(surf + 0x24));
+  } else {
+    if (I32(0x17F0C8C) > int32_t(first)) Put(0x17F0C8C, first);
+    const uint32_t end = U16(surf + 0x48) + U32(surf + 0x24);
+    if (int32_t(hi) < int32_t(end)) Put(0x17F0C90, end);
+  }
+  Copy(c, 0x17F0C94 + 2 * U32(0x1830C94), surf + 0x48, 2 * U32(surf + 0x44), 0x5037FC);
+  c.edi = U32(0x1830C94) + U32(surf + 0x44);
+  const uint32_t count = U32(0x1830C98);
+  Put(0x1830C94, c.edi);
+  Put(0x1830C98, count + U32(surf + 0x24));
+  c.esp += 0xC;
+  if (U32(0x15497FC) && U32(surf + 8) && (!U32(0x153479C) || U32(0x1549548) == U32(0x153465C)))
+    Call(c, f_00503590, 0x503852);
+  c.esi = esi;
+  c.edi = edi;
+  c.ebp = ebp;
   c.esp = e + 4;
 }
 

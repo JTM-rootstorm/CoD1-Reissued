@@ -88,4 +88,11 @@
 #define f_004FB8C0 n_004FB8C0
 #define f_004FBAF0 n_004FBAF0
 #define f_004FBD50 n_004FBD50
+#define f_00503A60 n_00503A60
+#define f_00503A80 n_00503A80
+#define f_005016B0 n_005016B0
+#define f_005039A0 n_005039A0
+#define f_005033B0 n_005033B0
+#define f_00503590 n_00503590
+#define f_00503760 n_00503760
 #include "../src/render_backend.cpp"

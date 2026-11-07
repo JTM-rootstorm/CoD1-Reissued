@@ -52,7 +52,8 @@ on gfx::Device" below).
   original's scratch for its int and float conversions. The colour and
   alpha generators are layer 8, the deforms layer 9, the texture
   coordinate generators and modifiers layer 10, the static model surfaces
-  that fill or draw the flush layer 11.
+  that fill or draw the flush layer 11, the surface table's others layer
+  12.
 - Layer 4, the stages and the flush: a stage's draw 0x4F5DE0 (EAX stage,
   EBX indexes, count on the stack: colours, ComputeTexCoords, the colour
   array, then all units when the second bundle has an image or the first
@@ -323,6 +324,35 @@ on gfx::Device" below).
   (glArrayObjectATI of GL_ELEMENT_ARRAY_ATI 0x8768, client state on and
   off around the draws, uncached), else from +0x20. Each counts its
   indexes and vertices into 0x1549B10/0x1549B0C.
+- Layer 12, the table's other surfaces (2026-11-06): 0 0x503A60 "Bad
+  surface tesselated.\n" through ri.Printf; 1 0x503A80 a bare ret; 2
+  0x5016B0 a polygon (+8 its vertex count, +0xC its 32-byte vertices:
+  position, texture coordinates, second texture coordinates, colour) into
+  the tessellator at its position stride, a fan of triangles from its
+  first vertex, and for a shader with the sign bit of +0x54 the dlight
+  bits of the dlights 0x1536474/0x153647C (0x88 bytes: radius +0x74,
+  origin +0x78) that hold one of its vertices (dz² + dy² + dx² below the
+  radius squared, rounded to float and kept in the argument slot, which
+  the vertex loop's count held before); 3 0x5039A0 an entity's, by its
+  type (0x1549B3C +0) on an 8-aligned frame: types 4-7, 9, 10, 12, 13 and
+  15 to their own functions (left lifted), 14 "FXPORT RT_ELECTRICITY
+  TDB\n", any other 0x503860. 24 0x5033B0 and 25 0x503760 are the two
+  that fill the tessellator and the optimised batch (+8 dlight bits,
+  +0x24 vertex count, +0x28/+0x2C the vertices' two axes, +0x30 normals,
+  +0x34/+0x38 texture coordinates, +0x3C colours, +0x40 positions, +0x44
+  index count, +0x48 indexes): 24 into the tessellator (indexes plus the
+  vertex count, copied last to first; normals for +0x50 bit 2 or with the
+  cvar 0x15344E4 and dlight bits, the axes for bits 0xC, flagging
+  0x17F0C64/68/6C; positions 12 bytes apart, not at the stride); 25 into
+  the optimised batch (RB_EndSurface and the tessellator begun again,
+  0x4F4AB0 with the shader in ECX and the position stride, when its
+  indexes would take the batch to 0x20000; the vertex range from its
+  first index; its indexes as they are), then with dlights (0x15497FC)
+  and its own dlight bits, unless 0x153479C is set and 0x1549548 differs
+  from 0x153465C, into the tessellator as well by 0x503590 (ESI; its
+  indexes less its first plus the vertex count). 2, 24 and 0x503590 test
+  RB_CheckOverflow's limits (0x2000 vertices, 0xC000 indexes, signed)
+  themselves and call it with the surface's counts.
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -437,6 +467,19 @@ on gfx::Device" below).
   mutations: 37, 36 fail the oracle; the other cannot change a result
   (the stage loop's count compared unsigned: it is tested positive
   before the loop).
+  With layer 12: 200000 cases over 94 entries, 3.88M calls out, 0
+  mismatches (RB_CheckOverflow, 0x4F4AB0 and the entity types' functions
+  stubbed and recorded with the saved registers; each surface's counts
+  now and then at the limits, a polygon's vertices now and then on a
+  dlight's sphere, up to 32 dlights; surface 25 now and then with a
+  batch its indexes take to 0x20000, through the whole RB_EndSurface).
+  Its mutations: 36, 34 fail the oracle (one, the polygon's index limit,
+  after a case at that limit was added); 1 cannot change a result (the
+  batch's end raised for < written <=: equal, it writes the same value)
+  and 1 is a gap: the distance summed in another order, which moves a
+  double's last bit, and the float radius squared would have to fall
+  between the two sums (none in the cases, nor in a directed search of
+  3M vertices around radii 0.5-4).
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -509,6 +552,13 @@ on gfx::Device" below).
   loading and briefing frames shared, 46 of 1640 in-level frames
   identical, the rest in the 2D text, at most 774 px within
   (0,0)-(355,471), as base against base.
+  With layer 12 (2026-11-06): the walk reaches surface 25 0x503760
+  (435242 times under gdb, on the layer 11 build) and 24 0x5033B0 (15388),
+  none of the other five. Standing, against the layer 11 build: all 13
+  loading and briefing frames shared, 46 of 1640 in-level frames
+  identical, the rest in the 2D text but one frame (+55, 227020 px),
+  which differs as much between two runs of the layer 11 build (47
+  identical, +55 227079 px): a frame's timing, not the layer.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),

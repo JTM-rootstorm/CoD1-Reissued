@@ -176,6 +176,20 @@ COD1_STUB(00431CF0, kEax | kSaved, 2)
 COD1_STUB(0042E300, kSaved, 1)
 COD1_STUB(00440940, kSaved, 2)
 COD1_STUB(0051D45A, kSaved, 3)
+// Under the other surfaces: RB_CheckOverflow, the tessellator's begin
+// (ECX the shader; position stride) and an entity's surfaces by its type.
+COD1_STUB(00500A60, kSaved, 2)
+COD1_STUB(004F4AB0, kEcx | kSaved, 1)
+COD1_STUB(005012D0, kSaved, 0)
+COD1_STUB(00501240, kSaved, 0)
+COD1_STUB(00501900, kSaved, 0)
+COD1_STUB(005030E0, kSaved, 0)
+COD1_STUB(00503010, kSaved, 0)
+COD1_STUB(00503230, kSaved, 0)
+COD1_STUB(005014C0, kSaved, 0)
+COD1_STUB(00502350, kSaved, 0)
+COD1_STUB(00502450, kSaved, 0)
+COD1_STUB(00503860, kSaved, 0)
 #undef COD1_STUB
 // _stricmp, recorded and answering as the CRT's: 0 when the strings match
 // but for case.
@@ -281,6 +295,13 @@ void f_004FB660_lifted(Ctx& c);
 void f_004FB8C0_lifted(Ctx& c);
 void f_004FBAF0_lifted(Ctx& c);
 void f_004FBD50_lifted(Ctx& c);
+void f_00503A60_lifted(Ctx& c);
+void f_00503A80_lifted(Ctx& c);
+void f_005016B0_lifted(Ctx& c);
+void f_005039A0_lifted(Ctx& c);
+void f_005033B0_lifted(Ctx& c);
+void f_00503590_lifted(Ctx& c);
+void f_00503760_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -370,6 +391,13 @@ void f_004FB660(Ctx& c) { f_004FB660_lifted(c); }
 void f_004FB8C0(Ctx& c) { f_004FB8C0_lifted(c); }
 void f_004FBAF0(Ctx& c) { f_004FBAF0_lifted(c); }
 void f_004FBD50(Ctx& c) { f_004FBD50_lifted(c); }
+void f_00503A60(Ctx& c) { f_00503A60_lifted(c); }
+void f_00503A80(Ctx& c) { f_00503A80_lifted(c); }
+void f_005016B0(Ctx& c) { f_005016B0_lifted(c); }
+void f_005039A0(Ctx& c) { f_005039A0_lifted(c); }
+void f_005033B0(Ctx& c) { f_005033B0_lifted(c); }
+void f_00503590(Ctx& c) { f_00503590_lifted(c); }
+void f_00503760(Ctx& c) { f_00503760_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -457,6 +485,13 @@ void n_004FB660(Ctx& c);
 void n_004FB8C0(Ctx& c);
 void n_004FBAF0(Ctx& c);
 void n_004FBD50(Ctx& c);
+void n_00503A60(Ctx& c);
+void n_00503A80(Ctx& c);
+void n_005016B0(Ctx& c);
+void n_005039A0(Ctx& c);
+void n_005033B0(Ctx& c);
+void n_00503590(Ctx& c);
+void n_00503760(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -586,6 +621,10 @@ const Entry kEntries[] = {
     COD1_ENTRY(004FB1B0, "static ATI"),      COD1_ENTRY(004FB660, "static T2V3 NV"),
     COD1_ENTRY(004FB8C0, "static T2N3V3"),   COD1_ENTRY(004FBAF0, "static T2V3"),
     COD1_ENTRY(004FBD50, "static T2N3V3 NV"),
+    COD1_ENTRY(00503A60, "bad surface", 0, 0), COD1_ENTRY(00503A80, "skipped surface", 0, 0),
+    COD1_ENTRY(005016B0, "polygon"),         COD1_ENTRY(005039A0, "entity surface", 0, 0),
+    COD1_ENTRY(005033B0, "surface 24", 0, 0), COD1_ENTRY(00503590, "surface 25 dlights", 0, 0),
+    COD1_ENTRY(00503760, "surface 25"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -1535,6 +1574,87 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       k.args = {surf};
       k.esi = g();
       k.edi = g();
+      break;
+    }
+    case 0x503A60:
+    case 0x503A80:
+      break;
+    case 0x5016B0: {
+      // A polygon of at most 20 vertices (now and then a count below 3)
+      // into a tessellator of at most 20, and up to 5 dlights (now and then
+      // up to 32 of them) of the frame's kind.
+      if (Rd(0x17F0C88) > 20) Wr(0x17F0C88, g() % 21);
+      if (g() % 32 == 0) Wr(0x17F0C88, 0x2000 - g() % 24);  // over: RB_CheckOverflow
+      const uint32_t surf = a.Alloc(0x10), verts = a.Alloc(0x20 * 20);
+      const uint32_t n = g() % 8 ? g() % 21 : uint32_t(int(g() % 6) - 3);
+      Wr(surf + 8, n);
+      if (g() % 16 == 0) Wr(0x17F0C84, 0xC000 - 3 * (n - 2) + int(g() % 9) - 6);  // its triangles' limit
+      Wr(surf + 0xC, verts);
+      for (uint32_t i = 0; i < 0x20 * 20; i += 4) Wr(verts + i, i % 0x20 < 0x1C ? RandFloat(g) : uint32_t(g()));
+      const uint32_t num = g() % 8 ? g() % 6 : g() % 33, dlights = a.Alloc(0x88 * 32);
+      for (uint32_t d = 0; d < num; d++) {
+        const uint32_t dl = dlights + 0x88 * d;
+        Wr(dl + 0x74, g() % 8 ? Float(float(1 + g() % 3200) / 100.0f) : RandFloat(g));
+        for (uint32_t i = 0x78; i < 0x84; i += 4) Wr(dl + i, g() % 8 ? Float(float(int(g() % 3201) - 1600) / 100.0f) : RandFloat(g));
+      }
+      // Now and then a vertex on the first dlight's sphere.
+      if (g() % 4 == 0) {
+        const float r = std::bit_cast<float>(Pick(g, {Float(3.0f), Float(4.0f), Float(0.5f)}));
+        Wr(dlights + 0x74, Float(r));
+        for (uint32_t k = 0; k < 12; k += 4) Wr(verts + k, Float(std::bit_cast<float>(Rd(dlights + 0x78 + k)) + (k ? 0.0f : r)));
+      }
+      Wr(0x1536474, num);
+      Wr(0x153647C, dlights);
+      k.args = {surf};
+      break;
+    }
+    case 0x5039A0: {
+      // An entity of each type, now and then any.
+      const uint32_t ent = a.Alloc(0x10);
+      Wr(ent, g() % 8 ? g() % 17 : uint32_t(g()));
+      Wr(0x1549B3C, ent);
+      k.esi = g();
+      k.edi = g();
+      break;
+    }
+    case 0x5033B0:
+    case 0x503590:
+    case 0x503760: {
+      // A surface of at most 20 vertices and 120 indexes into a tessellator
+      // of at most 20 (now and then over, for RB_CheckOverflow), each array
+      // apart (an axis now and then none); for the optimised batch at most
+      // 100 indexes so far, now and then so many that its own take it to
+      // 0x20000.
+      if (Rd(0x17F0C88) > 20) Wr(0x17F0C88, g() % 21);
+      if (g() % 32 == 0) Wr(0x17F0C88, 0x2000 - g() % 24);
+      if (g() % 32 == 0) Wr(0x17F0C84, 0xC000 - g() % 140);
+      const uint32_t verts = g() % 8 ? g() % 21 : 0;
+      uint32_t n = g() % 8 ? g() % 121 : 0;
+      Wr(0x1830C94, g() % 101);
+      Wr(0x1830C98, g() % 1000);
+      Wr(0x17F0C8C, g() % 4 ? g() % 1000 : uint32_t(g()));
+      Wr(0x17F0C90, g() % 4 ? g() % 1000 : g() % 2 ? 0 : uint32_t(g()));
+      Wr(0x15497FC, g() % 2 ? 0 : 1 + g() % 4);
+      Wr(0x153479C, g() % 2);
+      Wr(0x1549548, g() % 2);
+      Wr(0x153465C, g() % 2);
+      Wr(0x17F0C7C, g());
+      if (kEntries[k.entry].va == 0x503760 && g() % 32 == 0) {
+        n %= 41;
+        Wr(0x1830C94, 0x20000 - n + g() % 4);
+      }
+      const uint32_t surf = a.Alloc(0x48 + 2 * std::min(n, 120u));
+      Wr(surf + 8, g() % 2 ? 0 : uint32_t(g()));
+      Wr(surf + 0x24, verts);
+      Wr(surf + 0x44, n);
+      for (uint32_t i = 0; i < 2 * std::min(n, 120u); i += 2) g_mem.write<uint16_t>(surf + 0x48 + i, uint16_t(g() % 4 ? g() % 500 : g()));
+      for (uint32_t at = 0x28; at < 0x44; at += 4) {
+        const uint32_t v = a.Alloc(12 * 20);
+        for (uint32_t i = 0; i < 12 * 20; i += 4) Wr(v + i, RandFloat(g));
+        Wr(surf + at, at < 0x30 && g() % 4 == 0 ? 0 : v);
+      }
+      if (kEntries[k.entry].va == 0x503590) k.esi = surf;
+      else k.args = {surf};
       break;
     }
   }
