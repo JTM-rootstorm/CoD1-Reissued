@@ -104,7 +104,11 @@ replace 0042B0A0
 # spectrum, FFT and texels) and the debug draws' DXF file; the 2D
 # commands: RB_SetGL2D, the client arrays by mode, the stretched pictures
 # (plain, rotated, by corners), the flares, RB_DrawSurfs, RB_DrawBuffer,
-# RB_ShowImages, the screen's copy and fade and RB_SwapBuffers.
+# RB_ShowImages, the screen's copy and fade and RB_SwapBuffers; the sky
+# (RB_StageIteratorSky, RB_ClipSkyPolygons, the box, the clouds), the sun
+# (its parameters, quad and flare), adding a flare, the transforms to clip
+# space and the window, the viewer's and an entity's orientation, a portal
+# surface's plane, mirror and off-screen tests, and the debug text.
 replace 004C89D0
 replace 004C8A20
 replace 004CB3B0
@@ -246,6 +250,31 @@ replace 004CE340
 replace 004CE5C0
 replace 004CE650
 replace 004CE730
+replace 004DD6E0
+replace 004DD600
+replace 004DD2D0
+replace 004DD3F0
+replace 004DCDF0
+replace 004DCB40
+replace 004DCB90
+replace 004DB9F0
+replace 004DB9B0
+replace 004DBC40
+replace 004DC600
+replace 004DC3E0
+replace 004DC190
+replace 004DBAF0
+replace 004CF210
+replace 004CEC60
+replace 004C9340
+replace 004C9440
+replace 004CA8D0
+replace 004C97D0
+replace 004C9250
+replace 004CA770
+replace 004C9580
+replace 004CA170
+replace 004ACF50
 
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0

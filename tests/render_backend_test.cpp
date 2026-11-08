@@ -149,6 +149,7 @@ constexpr Gl kGl[] = {
     {0x154961C, "ri.Hunk_FreeTempMemory", 1, true},
     {0x1426E20, "hook 0x1426E20", 2, true},
     {0x1426E24, "hook 0x1426E24", 2, true},
+    {0x1534D00, "glLoadMatrixf", 1, false, 0, 4},
 };
 constexpr int kNumGl = sizeof(kGl) / sizeof(kGl[0]);
 constexpr uint32_t kGlTarget = 0x7FFD0000;  // + 0x10 * index
@@ -214,6 +215,8 @@ COD1_STUB(004AD5C0, kSaved, 0)
 COD1_STUB(0040F5E0, kSaved, 1)
 COD1_STUB(004FFB40, kSaved, 0)
 COD1_STUB(004230E0, 0, 3)
+// Under the debug text: the font's load (name, size, its memory, ...).
+COD1_STUB(004D5520, kSaved, 4)
 #undef COD1_STUB
 // sprintf (buffer, format, ...: the DXF file's face, its number, or its
 // corners, three of an index and a double), writing a hex number of the
@@ -233,6 +236,13 @@ uint32_t g_tiddata = 0;
 // The temporary memory ri.Hunk_AllocateTempMemory answers (the screen's
 // size).
 uint32_t g_temp = 0;
+// The shader lookup under the sun (name, lightmap, ...), answering with
+// the case's shader.
+uint32_t g_found = 0;
+void f_004F1810(Ctx& c) {
+  Stub(c, 0x4F1810, kSaved, 4);
+  c.eax = g_found;
+}
 void f_0042A480(Ctx& c) {
   Stub(c, 0x42A480, kSaved, 1);
   c.eax = g_batch;
@@ -262,6 +272,12 @@ void f_004D42A0_lifted(Ctx& c);
 void f_004D42A0(Ctx& c) { f_004D42A0_lifted(c); }
 void f_004CDCC0_lifted(Ctx& c);
 void f_004CDCC0(Ctx& c) { f_004CDCC0_lifted(c); }
+// ClipSkyPolygon and AddSkyPolygon, native in the game (src/render.cpp):
+// here the sky's lifted bodies reach them.
+void f_004DB660_lifted(Ctx& c);
+void f_004DB660(Ctx& c) { f_004DB660_lifted(c); }
+void f_004DB3E0_lifted(Ctx& c);
+void f_004DB3E0(Ctx& c) { f_004DB3E0_lifted(c); }
 // The originals...
 void f_004C89D0_lifted(Ctx& c);
 void f_004C8A20_lifted(Ctx& c);
@@ -404,6 +420,31 @@ void f_004CE340_lifted(Ctx& c);
 void f_004CE5C0_lifted(Ctx& c);
 void f_004CE650_lifted(Ctx& c);
 void f_004CE730_lifted(Ctx& c);
+void f_004DD6E0_lifted(Ctx& c);
+void f_004DD600_lifted(Ctx& c);
+void f_004DD2D0_lifted(Ctx& c);
+void f_004DD3F0_lifted(Ctx& c);
+void f_004DCDF0_lifted(Ctx& c);
+void f_004DCB40_lifted(Ctx& c);
+void f_004DCB90_lifted(Ctx& c);
+void f_004DB9F0_lifted(Ctx& c);
+void f_004DB9B0_lifted(Ctx& c);
+void f_004DBC40_lifted(Ctx& c);
+void f_004DC600_lifted(Ctx& c);
+void f_004DC3E0_lifted(Ctx& c);
+void f_004DC190_lifted(Ctx& c);
+void f_004DBAF0_lifted(Ctx& c);
+void f_004CF210_lifted(Ctx& c);
+void f_004CEC60_lifted(Ctx& c);
+void f_004C9340_lifted(Ctx& c);
+void f_004C9440_lifted(Ctx& c);
+void f_004CA8D0_lifted(Ctx& c);
+void f_004C97D0_lifted(Ctx& c);
+void f_004C9250_lifted(Ctx& c);
+void f_004CA770_lifted(Ctx& c);
+void f_004C9580_lifted(Ctx& c);
+void f_004CA170_lifted(Ctx& c);
+void f_004ACF50_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -547,6 +588,31 @@ void f_004CE340(Ctx& c) { f_004CE340_lifted(c); }
 void f_004CE5C0(Ctx& c) { f_004CE5C0_lifted(c); }
 void f_004CE650(Ctx& c) { f_004CE650_lifted(c); }
 void f_004CE730(Ctx& c) { f_004CE730_lifted(c); }
+void f_004DD6E0(Ctx& c) { f_004DD6E0_lifted(c); }
+void f_004DD600(Ctx& c) { f_004DD600_lifted(c); }
+void f_004DD2D0(Ctx& c) { f_004DD2D0_lifted(c); }
+void f_004DD3F0(Ctx& c) { f_004DD3F0_lifted(c); }
+void f_004DCDF0(Ctx& c) { f_004DCDF0_lifted(c); }
+void f_004DCB40(Ctx& c) { f_004DCB40_lifted(c); }
+void f_004DCB90(Ctx& c) { f_004DCB90_lifted(c); }
+void f_004DB9F0(Ctx& c) { f_004DB9F0_lifted(c); }
+void f_004DB9B0(Ctx& c) { f_004DB9B0_lifted(c); }
+void f_004DBC40(Ctx& c) { f_004DBC40_lifted(c); }
+void f_004DC600(Ctx& c) { f_004DC600_lifted(c); }
+void f_004DC3E0(Ctx& c) { f_004DC3E0_lifted(c); }
+void f_004DC190(Ctx& c) { f_004DC190_lifted(c); }
+void f_004DBAF0(Ctx& c) { f_004DBAF0_lifted(c); }
+void f_004CF210(Ctx& c) { f_004CF210_lifted(c); }
+void f_004CEC60(Ctx& c) { f_004CEC60_lifted(c); }
+void f_004C9340(Ctx& c) { f_004C9340_lifted(c); }
+void f_004C9440(Ctx& c) { f_004C9440_lifted(c); }
+void f_004CA8D0(Ctx& c) { f_004CA8D0_lifted(c); }
+void f_004C97D0(Ctx& c) { f_004C97D0_lifted(c); }
+void f_004C9250(Ctx& c) { f_004C9250_lifted(c); }
+void f_004CA770(Ctx& c) { f_004CA770_lifted(c); }
+void f_004C9580(Ctx& c) { f_004C9580_lifted(c); }
+void f_004CA170(Ctx& c) { f_004CA170_lifted(c); }
+void f_004ACF50(Ctx& c) { f_004ACF50_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -688,13 +754,43 @@ void n_004CE340(Ctx& c);
 void n_004CE5C0(Ctx& c);
 void n_004CE650(Ctx& c);
 void n_004CE730(Ctx& c);
+void n_004DD6E0(Ctx& c);
+void n_004DD600(Ctx& c);
+void n_004DD2D0(Ctx& c);
+void n_004DD3F0(Ctx& c);
+void n_004DCDF0(Ctx& c);
+void n_004DCB40(Ctx& c);
+void n_004DCB90(Ctx& c);
+void n_004DB9F0(Ctx& c);
+void n_004DB9B0(Ctx& c);
+void n_004DBC40(Ctx& c);
+void n_004DC600(Ctx& c);
+void n_004DC3E0(Ctx& c);
+void n_004DC190(Ctx& c);
+void n_004DBAF0(Ctx& c);
+void n_004CF210(Ctx& c);
+void n_004CEC60(Ctx& c);
+void n_004C9340(Ctx& c);
+void n_004C9440(Ctx& c);
+void n_004CA8D0(Ctx& c);
+void n_004C97D0(Ctx& c);
+void n_004C9250(Ctx& c);
+void n_004CA770(Ctx& c);
+void n_004C9580(Ctx& c);
+void n_004CA170(Ctx& c);
+void n_004ACF50(Ctx& c);
 }  // namespace gen
+
+bool CallEntry(Ctx& c, uint32_t target);
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
   if (target == kSkyIterator) {
     Stub(c, kSkyIterator, kSaved, 1);
     return;
   }
+  // The surface table's functions (a portal's test adds its surface
+  // through it): their lifted bodies.
+  if (CallEntry(c, target)) return;
   const uint32_t i = (target - kGlTarget) / 0x10;
   if (target < kGlTarget || i >= uint32_t(kNumGl) || target != kGlTarget + 0x10 * i) {
     std::printf("unexpected call to %08X from %08X\n", target, va);
@@ -720,6 +816,14 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
     uint32_t h = 2166136261u;
     const uint32_t n = std::min(4 * (r.args[4] & 0xFFFF) * (r.args[5] & 0xFFFF), 0x40000u);
     for (uint32_t i = 0; i < n; i++) h = (h ^ g_mem.read<uint8_t>(r.args[8] + i)) * 16777619u;
+    r.data[0] = h;
+  }
+  // The indexes glDrawElements reads from the stack (the sky box's;
+  // 16-bit), hashed.
+  if (gl.ptr == 0x153513C && r.args[3] >= 0x6FF00000 && r.args[3] < 0x70000000) {
+    uint32_t h = 2166136261u;
+    for (uint32_t i = 0; i < std::min(r.args[1], 0x400u); i++)
+      h = (h ^ g_mem.read<uint16_t>(r.args[3] + 2 * i)) * 16777619u;
     r.data[0] = h;
   }
   // The tessellator's shader, stages and their count it draws with.
@@ -865,9 +969,37 @@ const Entry kEntries[] = {
     COD1_ENTRY(004CE2F0, "draw buffer"),      COD1_ENTRY(004CE340, "show images"),
     COD1_ENTRY(004CE5C0, "screen copy"),      COD1_ENTRY(004CE650, "screen fade"),
     COD1_ENTRY(004CE730, "swap buffers"),
+    COD1_ENTRY(004DD6E0, "sky iterator", 0, 7), COD1_ENTRY(004DD600, "sun", 0, 7),
+    COD1_ENTRY(004DD2D0, "sun quad", 0, 7),   COD1_ENTRY(004DD3F0, "sun flare"),
+    COD1_ENTRY(004DCDF0, "sun params"),       COD1_ENTRY(004DCB40, "sun shader"),
+    COD1_ENTRY(004DCB90, "sun axes"),         COD1_ENTRY(004DB9F0, "sky clip"),
+    COD1_ENTRY(004DB9B0, "sky clear"),        COD1_ENTRY(004DBC40, "sky box"),
+    COD1_ENTRY(004DC600, "clouds"),           COD1_ENTRY(004DC3E0, "cloud stage"),
+    COD1_ENTRY(004DC190, "cloud side"),       COD1_ENTRY(004DBAF0, "sky point"),
+    COD1_ENTRY(004CF210, "sun flare add"),    COD1_ENTRY(004CEC60, "add flare"),
+    COD1_ENTRY(004C9340, "model to clip"),    COD1_ENTRY(004C9440, "clip to window"),
+    COD1_ENTRY(004CA8D0, "portal offscreen", 0, 7), COD1_ENTRY(004C97D0, "viewer"),
+    COD1_ENTRY(004C9250, "point to clip"),    COD1_ENTRY(004CA770, "mirror"),
+    COD1_ENTRY(004C9580, "entity orientation"), COD1_ENTRY(004CA170, "surface plane"),
+    COD1_ENTRY(004ACF50, "debug text", 0, 7),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
+
+}  // namespace
+
+bool recomp::CallEntry(Ctx& c, uint32_t target) {
+  for (uint32_t i = 0; i < 26; i++)
+    if (Rd(0x564270 + 4 * i) == target)
+      for (const Entry& e : kEntries)
+        if (e.va == target) {
+          e.lifted(c);
+          return true;
+        }
+  return false;
+}
+
+namespace {
 
 // Random structures live in the arena, reset per case; the stack below.
 constexpr uint32_t kArena = 0x70000000, kArenaSize = 0x100000;
@@ -886,12 +1018,13 @@ const Window kGlobals[] = {
     // The tessellator's positions (with the shadow volume's copies),
     // vertex colours and normals, and the stage colours (as many as the
     // cases' vertices use).
-    {0x1630C40, 0x1000}, {0x1690C40, 0x200}, {0x1698C40, 0x600}, {0x16E0C40, 0x100},
+    {0x1630C40, 0x4000}, {0x1690C40, 0x200}, {0x1698C40, 0x600}, {0x16E0C40, 0x100},
     // The vertices' two axes, the dlight's texture coordinates (the second
     // set's) and the first set's, and the indexes (the texts' quads reach
-    // 124 vertices, a cylinder's sides 192 indexes).
-    {0x16B0C40, 0x200}, {0x16C8C40, 0x200}, {0x1670C40, 0x400}, {0x1650C40, 0x400},
-    {0x1618C40, 0x400},
+    // 124 vertices, a cylinder's sides 192 indexes, the clouds 405 vertices
+    // and 1920 indexes).
+    {0x16B0C40, 0x200}, {0x16C8C40, 0x200}, {0x1670C40, 0x400}, {0x1650C40, 0x1000},
+    {0x1618C40, 0x1000},
     // The triangles' facing, the vertices' edges and their counts.
     {0x11E16D8, 0x100}, {0x11F16D8, 0x2900}, {0x13F16D8, 0x100},
     // The tessellator's ends, which a quad near its limits writes past the
@@ -900,6 +1033,9 @@ const Window kGlobals[] = {
     // texture coordinates and colours.
     {0x162FC40, 0x1000}, {0x1650840, 0x800}, {0x1670440, 0x1000},
     {0x1660A40, 0x400}, {0x1680A40, 0x400}, {0x1698B40, 0x200},
+    // The sky's extents, the clouds' texture coordinates and the sun's
+    // quad and parameters; the flares' list.
+    {0x11CD000, 0x1840}, {0x154B000, 0x100},
 };
 
 struct Stats {
@@ -984,7 +1120,8 @@ void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
             cn.fpu.cw == cl.fpu.cw &&
             ((e.va != 0x4F3330 && e.va != 0x508940 && e.va != 0x4CD540 && e.va != 0x4CD740 &&
               e.va != 0x4CDA10 && e.va != 0x4CE290 && e.va != 0x4CE2F0 && e.va != 0x4CE5C0 &&
-              e.va != 0x4CE650 && e.va != 0x4CE730) ||
+              e.va != 0x4CE650 && e.va != 0x4CE730 && e.va != 0x4DCB40 && e.va != 0x4CA770 &&
+              e.va != 0x4CA8D0) ||
              cn.eax == cl.eax);
   // The x87 registers in use (the noise's value; the caller's below).
   for (int r = 0; r < 8; r++)
@@ -1592,6 +1729,117 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(0x15347B8, g() % 2);
   Wr(0x14E43FC, Cvar(a, g, g() % 4 ? 0 : 0xFFFFFFFF));
   for (uint32_t i = 0x15495C4; i < 0x15495DC; i += 4) Wr(i, uint32_t(g()));
+  // The sky: each side's extents (within the box: special ones would
+  // take the clouds' 16-bit grid past the tessellator, which the game's
+  // clipped polygons never do; the sky box's case has them), the clouds'
+  // texture coordinates and their limits, the box's vertex arrays (mode,
+  // kind, data), the shader's cloud height and box images (now and then
+  // none or the default image), the cvars of the sky.
+  auto unit = [&] { return g() % 8 ? Float(float(int(g() % 2401) - 1200) / 1000.0f) : RandFloat(g); };
+  for (uint32_t i = 0; i < 0x60; i += 4) Wr(0x11CD800 + i, Float(float(int(g() % 2401) - 1200) / 1000.0f));
+  for (uint32_t i = 0; i < 6 * 81 * 8; i += 4) Wr(0x11CD860 + i, RandFloat(g));
+  Wr(0x11CE834, g() % 4 ? 0x3B800000 : RandFloat(g));
+  Wr(0x11CD060, g() % 4 ? 0x3F7F0000 : RandFloat(g));
+  const uint32_t box = a.Alloc(16);
+  Wr(box, g() % 8 ? g() % 4 : uint32_t(g()));
+  Wr(box + 4, g() % 8 ? g() % 4 : g() % 6);
+  Wr(box + 8, g());
+  Wr(box + 0xC, g());
+  Wr(0x11CE790, box);
+  Wr(shader + 0x60, g() % 4 ? Float(float(g() % 512)) : RandFloat(g));
+  for (uint32_t i = 0x64; i < 0x94; i += 4)
+    Wr(shader + i, Pick(g, {Image(a, g), Image(a, g), Image(a, g), 0, Rd(0x1535A38)}));
+  for (uint32_t cv : {0x153457Cu, 0x153445Cu, 0x15346CCu, 0x15343FCu})
+    Wr(cv, Cvar(a, g, g() % 3 == 0));
+  Wr(0x1549A78, g() % 2);
+  Wr(0x1549A7C, g() % 4 != 0);
+  Wr(0x1535954, g() % 4 != 0);
+  // The sun: the world's (its point), its shader (now and then none) and
+  // quad, the flare's shader and parameters (cosines and their fractions
+  // mostly within -1..1); the cvars it is set up from (two names; floats);
+  // the shader lookup's answer (with up to 8 stages).
+  const uint32_t sun = a.Alloc(0x50);
+  for (uint32_t i = 0x44; i < 0x50; i += 4) Wr(sun + i, RandFloat(g));
+  Wr(Rd(0x1535A34) + 0x114, g() % 4 ? sun : 0);
+  Wr(0x11CE798, g() % 4 ? Rd(0x1535B5C) : 0);
+  Wr(0x11CE7E0, g() % 4 ? Rd(0x1535B5C) : 0);
+  for (uint32_t i = 0x11CE79C; i < 0x11CE828; i += 4) Wr(i, unit());
+  Wr(0x11CE7F8, g());
+  Wr(0x11CE7FC, g());
+  for (uint32_t cv : {0x15343CCu, 0x15346C0u}) {
+    Wr(cv, Cvar(a, g, 0));
+    Wr(Rd(cv) + 4, Str(a, g() % 3 ? "sun" : ""));
+  }
+  for (uint32_t cv : {0x1534700u, 0x15343C0u, 0x1534688u, 0x15346B4u, 0x1534538u, 0x1534508u,
+                      0x1534498u, 0x15344FCu, 0x15343E4u, 0x153453Cu, 0x1534518u, 0x153449Cu,
+                      0x15343F4u, 0x153458Cu, 0x153454Cu, 0x1534718u, 0x1534450u, 0x1534494u})
+    Wr(cv, Cvar(a, g, 0));
+  // The view facing the sun by a sum that cancels in its order (the view's
+  // axis (1, -1, 1), the sun's direction (2^60, 2^60, 1)); the sun near
+  // vertical, z^2 above 0.99 or between 0.98 and 0.99.
+  if (g() % 8 == 0) {
+    for (uint32_t i = 0; i < 12; i += 4) Wr(0x1549834 + i, Float(i == 4 ? -1.0f : 1.0f));
+    for (uint32_t i = 0; i < 12; i += 4) Wr(0x15364B0 + i, Float(i == 8 ? 1.0f : 0x1p60f));
+  }
+  if (g() % 4 == 0) Wr(0x15364B8, Pick(g, {Float(1.0f), Float(-0.999f), Float(0.9925f), Float(-0.9925f)}));
+  recomp::gen::g_found = a.Alloc(0x180);
+  for (uint32_t i = 0; i < 8; i++) {
+    const uint32_t st = i < g() % 10 ? a.Alloc(0x690) : 0;
+    if (st) Wr(st + 0x684, uint32_t(g()));
+    Wr(recomp::gen::g_found + 0x154 + 4 * i, st);
+  }
+  // The view: its number and portal number, the frame, its corner and
+  // size, the projection and model matrices, the viewer's origin and axes
+  // and the world's model matrix and projection (moderate values, now and
+  // then special); the flares (some the view's, some of the free list).
+  Wr(0x1549934, g() % 2);
+  Wr(0x154992C, g() % 2);
+  Wr(0x1549938, g());
+  Wr(0x1549950, g() % 8 ? g() % 640 : uint32_t(g()));
+  Wr(0x1549954, g() % 8 ? g() % 480 : uint32_t(g()));
+  Wr(0x154995C, g() % 8 ? g() % 1200 : uint32_t(g()));
+  auto moderate = [&] { return g() % 16 ? Float(float(int(g() % 4001) - 2000) / 1000.0f) : RandFloat(g); };
+  for (uint32_t i = 0; i < 0x40; i += 4) {
+    Wr(0x1549970 + i, moderate());
+    Wr(0x1549AC4 + i, moderate());
+    Wr(0x15360E8 + i, moderate());
+    Wr(0x1536178 + i, moderate());
+  }
+  for (uint32_t i = 0; i < 0x30; i += 4) Wr(0x1536030 + i, moderate());
+  for (uint32_t list : {0x154B0ECu, 0x154D700u}) {
+    uint32_t head = 0;
+    for (uint32_t n = g() % 4; n; n--) {
+      const uint32_t f = a.Alloc(0x4C);
+      for (uint32_t i = 4; i < 0x48; i += 4) Wr(f + i, g());
+      Wr(f, head);
+      Wr(f + 0x48, g() % 4);
+      Wr(f + 0xC, g() % 2);
+      Wr(f + 8, g() % 2);
+      head = f;
+    }
+    Wr(list, head);
+  }
+  Wr(0x1549B28, g());
+  // The shaders by sort index and the glyphs' shaders (4 each); the
+  // entities a portal's test reads (types 0-3 and portals 0xB, origins
+  // within 100 of 0, now and then their old origin the same).
+  for (uint32_t i = 0; i < 4; i++) {
+    Wr(0x154052C + 4 * i, Pick(g, {Rd(0x17F0C70), Rd(0x1535B5C)}));
+    Wr(0x153C52C + 4 * i, Pick(g, {Rd(0x17F0C70), Rd(0x1535B5C)}));
+  }
+  const uint32_t ents = a.Alloc(4 * 0x2B8);
+  for (uint32_t e = 0; e < 4; e++) {
+    const uint32_t en = ents + 0x2B8 * e;
+    Wr(en, Pick(g, {0, 1, 2, 3, 0xB, 0xB}));
+    for (uint32_t i = 0x1C; i < 0x60; i += 4)
+      Wr(en + i, g() % 8 ? Float(float(int(g() % 20001) - 10000) / 100.0f) : RandFloat(g));
+    if (g() % 2)
+      for (uint32_t i = 0; i < 12; i += 4) Wr(en + 0x54 + i, Rd(en + 0x44 + i));
+  }
+  Wr(0x1536470, ents);
+  Wr(0x153646C, g() % 8 ? g() % 5 : uint32_t(g()) | 0x80000000u);
+  Wr(0x1534790, g() % 2);
+  Wr(0x1549598, g());
 }
 
 // Triangles that continue a strip (the next triangle on the shared edge,
@@ -2417,6 +2665,266 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
           k.edi = g();
           break;
       }
+      break;
+    }
+    case 0x4C9340:
+    case 0x4C9250:
+    case 0x4C9440: {
+      // Points and matrices of mixed magnitudes (now and then special),
+      // the view's size for the window.
+      auto floats = [&](uint32_t n) {
+        const uint32_t v = a.Alloc(4 * n);
+        for (uint32_t i = 0; i < n; i++) Wr(v + 4 * i, g() % 4 ? Mixed(g) : RandFloat(g));
+        return v;
+      };
+      if (kEntries[k.entry].va == 0x4C9440) {
+        k.eax = floats(4);
+        k.edx = a.Alloc(0x138);
+        Wr(k.edx + 0x130, g() % 8 ? g() % 2000 : uint32_t(g()));
+        Wr(k.edx + 0x134, g() % 8 ? g() % 2000 : uint32_t(g()));
+        k.ecx = a.Alloc(12);
+        k.esi = a.Alloc(12);
+      } else {
+        k.eax = a.Alloc(16);
+        k.edx = floats(16);
+        k.ecx = g() % 4 ? floats(16) : k.edx;
+        k.esi = floats(4);
+        k.edi = a.Alloc(16);
+      }
+      break;
+    }
+    case 0x4CEC60:
+    case 0x4CF210: {
+      // A flare's description (its id one the list may hold, a point within
+      // 2 of 0 or any, a w of 0 or not, a size of 0 or a few pixels), a
+      // normal or none; the sun's flare from its arguments.
+      auto coord = [&] { return g() % 8 ? Float(float(int(g() % 4001) - 2000) / 1000.0f) : RandFloat(g); };
+      if (kEntries[k.entry].va == 0x4CF210) {
+        k.eax = g();
+        k.args = {coord(), coord(), g() % 4 ? Float(float(g() % 200)) : RandFloat(g), uint32_t(g()), uint32_t(g())};
+        break;
+      }
+      const uint32_t f = a.Alloc(0x3C);
+      Wr(f, g() % 4);
+      Wr(f + 4, g());
+      for (uint32_t i = 8; i < 0x14; i += 4) Wr(f + i, coord());
+      Wr(f + 0x14, g() % 2 ? 0 : coord());
+      for (uint32_t i = 0x18; i < 0x2C; i += 4) Wr(f + i, coord());
+      Wr(f + 0x2C, g() % 2 ? 0 : g() % 8 ? g() % 64 : uint32_t(g()));
+      for (uint32_t i = 0x30; i < 0x3C; i += 4) Wr(f + i, g());
+      uint32_t normal = 0;
+      if (g() % 2) {
+        normal = a.Alloc(12);
+        for (uint32_t i = 0; i < 12; i += 4) Wr(normal + i, coord());
+      }
+      k.args = {f, normal};
+      break;
+    }
+    case 0x4DD3F0:
+    case 0x4DCB90:
+      k.args = {g() % 4 ? Float(float(int(g() % 2401) - 1200) / 1000.0f) : RandFloat(g)};
+      break;
+    case 0x4DCB40:
+      k.eax = Str(a, "sun");
+      break;
+    case 0x4C97D0:
+      // The view's first axis (1, -1, 1) and origin (2^60, 2^60, 1): its
+      // translation cancels in its order.
+      if (g() % 4 == 0)
+        for (uint32_t i = 0; i < 0x18; i += 4) Wr(0x1536030 + i, Float(i == 0x10 ? -1.0f : i < 8 ? 0x1p60f : 1.0f));
+      break;
+    case 0x4DB9F0:
+    case 0x4DD6E0:
+      // At most 48 indexes, the vertices within 2 of the view (for the
+      // sky iterator finite: special ones give its clouds special extents,
+      // above; RB_ClipSkyPolygons' own case has them).
+      Wr(0x17F0C84, g() % 49);
+      for (uint32_t i = 0; i < 0x1000; i += 4)
+        Wr(0x1630C40 + i, g() % 16 || kEntries[k.entry].va == 0x4DD6E0
+                              ? Float(float(int(g() % 4001) - 2000) / 1000.0f)
+                              : RandFloat(g));
+      for (uint32_t i = 0; i < 12; i += 4) Wr(0x1549828 + i, Float(float(int(g() % 2001) - 1000) / 1000.0f));
+      k.esi = 0x1618C40;
+      if (kEntries[k.entry].va == 0x4DB9F0) break;
+      // The box locks its arrays with glUnlockArraysEXT there too.
+      for (int i = 0; i < kNumGl; i++)
+        if (kGl[i].ptr == 0x1534C2C && Rd(0x1534DDC)) Wr(0x1534C2C, kGlTarget + 0x10 * uint32_t(i));
+      break;
+    case 0x4DBAF0:
+      k.eax = g() % 6;
+      k.edx = a.Alloc(16);
+      k.esi = g() % 4 ? a.Alloc(8) : 0;
+      k.args = {g() % 4 ? Float(float(int(g() % 2401) - 1200) / 1000.0f) : RandFloat(g),
+                g() % 4 ? Float(float(int(g() % 2401) - 1200) / 1000.0f) : RandFloat(g)};
+      break;
+    case 0x4DC190: {
+      // A side's grid within -4..4 (its maxs at least its mins less 1),
+      // from up to 40 vertices or near 0x2000 (ri.Error).
+      const uint32_t mins = a.Alloc(8), maxs = a.Alloc(8);
+      for (uint32_t i = 0; i < 8; i += 4) {
+        const int lo = int(g() % 9) - 4;
+        Wr(mins + i, uint32_t(lo));
+        Wr(maxs + i, uint32_t(lo - 1 + int(g() % uint32_t(6 - lo))));
+      }
+      if (g() % 16 == 0) Wr(0x17F0C88, 0x2000 - g() % 8);
+      Wr(0x17F0C84, g() % 64);
+      k.args = {mins, maxs, uint32_t(g() % 6), uint32_t(g() % 2)};
+      break;
+    }
+    case 0x4DC3E0:
+      Wr(0x17F0C88, 0);
+      Wr(0x17F0C84, 0);
+      k.args = {Rd(0x17F0C70), uint32_t(g() % 2)};
+      break;
+    case 0x4DC600:
+      k.edi = 0x1618C40;
+      break;
+    case 0x4DBC40:
+      k.args = {Rd(0x17F0C70), uint32_t(g() % 2)};
+      for (uint32_t i = 0; i < 0x60; i += 4)
+        if (g() % 8 == 0) Wr(0x11CD800 + i, RandFloat(g));
+      // The box locks its arrays with glUnlockArraysEXT there too.
+      for (int i = 0; i < kNumGl; i++)
+        if (kGl[i].ptr == 0x1534C2C && Rd(0x1534DDC)) Wr(0x1534C2C, kGlTarget + 0x10 * uint32_t(i));
+      break;
+    case 0x4C9580:
+    case 0x4CA170:
+    case 0x4CA770:
+    case 0x4CA8D0: {
+      // A surface: a triangle (type 0x18 on, its points and indexes), a
+      // polygon (2, three points or up to 20), or another (nothing, or
+      // for the portal's test the bad or skipped surface); an entity's
+      // orientation of the view or another; a draw surface's sort key (a
+      // shader of 4, an entity of 4 or the world's, any mode).
+      auto coord = [&] { return g() % 8 ? Float(float(int(g() % 20001) - 10000) / 100.0f) : RandFloat(g); };
+      const uint32_t surf = a.Alloc(0x50);
+      const uint32_t type = Pick(g, {0, 1, 2, 2, 0x18, 0x1A, uint32_t(g())});
+      Wr(surf, type);
+      const uint32_t pts = a.Alloc(0x20 * 20);
+      for (uint32_t i = 0; i < 0x20 * 20; i += 4) Wr(pts + i, i % 0x20 < 0x1C ? coord() : uint32_t(g()));
+      Wr(surf + 8, g() % 8 ? 3 + g() % 18 : g() % 3);
+      Wr(surf + 0xC, pts);
+      Wr(surf + 0x40, pts);
+      g_mem.write<uint16_t>(surf + 0x48, uint16_t(g() % 4));
+      g_mem.write<uint16_t>(surf + 0x4A, uint16_t(4 + g() % 4));
+      g_mem.write<uint16_t>(surf + 0x4C, uint16_t(8 + g() % 4));
+      if (Rd(0x17F0C88) > 20) Wr(0x17F0C88, g() % 21);
+      const uint32_t ds = a.Alloc(8);
+      const uint32_t ent = g() % 4 ? g() % 4 : 0x7FE;
+      Wr(ds, (g() % 4) << 30 | (g() % 4) << 18 | ent << 7 | (g() & 0x7F));
+      Wr(ds + 4, surf);
+      Wr(0x1536474, g() % 4 ? 0 : g() % 3);  // the polygon's dlights
+      if (type > 2 && kEntries[k.entry].va == 0x4CA8D0) Wr(surf, g() % 2);  // the table's 0-25 only
+      switch (kEntries[k.entry].va) {
+        case 0x4C9580: {
+          const uint32_t en = a.Alloc(0x2B8);
+          for (uint32_t i = 0x1C; i < 0x50; i += 4) Wr(en + i, coord());
+          if (g() % 2) Wr(en + 0x40, 0);
+          if (g() % 4 == 0)  // axes of equal lengths
+            for (uint32_t i = 0x1C; i < 0x40; i += 4) Wr(en + i, Pick(g, {Float(2.0f), Float(-2.0f), 0}));
+          else if (g() % 4 == 0)  // or of lengths 1, 1.0006 and 1.0012 (each next within 0.001)
+            for (uint32_t i = 0x1C; i < 0x41; i += 4)
+              Wr(en + i, i == 0x1C ? Float(1.0f) : i == 0x2C ? Float(1.0006f) : i == 0x3C ? Float(1.0012f) : i == 0x40 ? Float(1.0f) : 0);
+          k.eax = a.Alloc(0x7C);
+          k.ebx = g() % 2 ? 0x1536030 : a.Alloc(0xF8);
+          if (k.ebx != 0x1536030)
+            for (uint32_t i = 0; i < 0xF8; i += 4) Wr(k.ebx + i, coord());
+          k.edi = en;
+          break;
+        }
+        case 0x4CA170:
+          k.ecx = surf;  // (0 would be random)
+          k.esi = a.Alloc(0x14);
+          break;
+        case 0x4CA770:
+          k.ecx = Pick(g, {0x7FE, 1, 2, 3});  // (0 would be random)
+          k.args = {ds};
+          if (g() % 8 == 0) {
+            // The plane x - y = 1 (a polygon), the entity's origin (2^60,
+            // 2^60, 0) cancelling in the distance's order, a portal at
+            // (46, -45, 0): 63.6 from the plane, 64.3 had the distance
+            // lost its 0.707.
+            Wr(surf, 2);
+            Wr(surf + 8, 3);
+            for (uint32_t i = 0; i < 0x60; i += 4) Wr(pts + i, 0);
+            for (uint32_t i : {0x00u, 0x20u, 0x28u, 0x40u}) Wr(pts + i, Float(1.0f));
+            Wr(pts + 0x40, Float(2.0f));
+            Wr(pts + 0x44, Float(1.0f));
+            const uint32_t en = a.Alloc(2 * 0x2B8) + 0x2B8;
+            for (uint32_t i = 0; i < 0x2B8; i += 4) Wr(en - 0x2B8 + i, 0);
+            Wr(en, 0xB);
+            Wr(en + 0x44, Float(46.0f));
+            Wr(en + 0x48, Float(-45.0f));
+            Wr(en + 0x4C, 0);
+            for (uint32_t i = 0; i < 12; i += 4) Wr(en + 0x54 + i, Rd(en + 0x44 + i));
+            Wr(0x1536470, en - 0x2B8);
+            Wr(0x153646C, 2);
+            Wr(0x15360AC, Float(0x1p60f));
+            Wr(0x15360B0, Float(0x1p60f));
+            Wr(0x15360B4, 0);
+            k.ecx = 1;
+          }
+          break;
+        case 0x4CA8D0:
+          k.args = {ds};
+          if (g() % 4 == 0) {
+            // A vertex on a clip plane: the view's axes the identity at 0
+            // (the eye's y the point's z, its w 1), the projection's y and
+            // w those, the points' z 1 or 2.
+            for (uint32_t i = 0; i < 0x30; i += 4) Wr(0x1536030 + i, i == 0xC || i == 0x1C || i == 0x2C ? Float(1.0f) : 0);
+            for (uint32_t i = 0; i < 0x40; i += 4) Wr(0x1536178 + i, i == 0x14 || i == 0x3C ? Float(1.0f) : 0);
+            for (uint32_t i = 0; i < 0x20 * 20; i += 4) Wr(pts + i, Float(float(1 + g() % 2)));
+          }
+          break;
+        default:
+          k.args = {ds};
+          break;
+      }
+      break;
+    }
+    case 0x4ACF50: {
+      // Up to 3 strings (now and then none or a negative count) of up to
+      // 8 characters, colours now and then outside 0..1; the font (now and
+      // then to load), its glyphs' sizes, offsets, texture coordinates and
+      // shaders (of 4).
+      const uint32_t n = g() % 8 ? g() % 4 : g() % 2 ? 0 : uint32_t(g()) | 0x80000000u;
+      const uint32_t strs = a.Alloc(0x80 * 3);
+      auto coord = [&] { return g() % 8 ? Float(float(int(g() % 20001) - 10000) / 100.0f) : RandFloat(g); };
+      for (uint32_t t = 0; t < 3; t++) {
+        const uint32_t st = strs + 0x80 * t;
+        for (uint32_t i = 0; i < 0xC; i += 4) Wr(st + i, coord());
+        for (uint32_t i = 0xC; i < 0x1C; i += 4)
+          Wr(st + i, g() % 4 ? Float(float(int(g() % 1501) - 250) / 1000.0f) : RandFloat(g));
+        Wr(st + 0x1C, g() % 4 ? Float(float(g() % 400) / 100.0f) : RandFloat(g));
+        const uint32_t len = g() % 9;
+        for (uint32_t i = 0; i < 0x60; i++)
+          g_mem.write<uint8_t>(st + 0x20 + i, i < len ? uint8_t(1 + g() % 255) : 0);
+      }
+      if (g() % 8) {
+        const uint32_t font = a.Alloc(0x5048);
+        for (uint32_t ch = 0; ch < 256; ch++) {
+          const uint32_t gl = font + 0x50 * ch;
+          Wr(gl + 8, coord());
+          Wr(gl + 0x10, coord());
+          Wr(gl + 0x14, g() % 32);
+          Wr(gl + 0x18, g() % 32);
+          for (uint32_t i = 0x1C; i < 0x2C; i += 4) Wr(gl + i, RandFloat(g));
+          Wr(gl + 0x2C, g() % 4);
+        }
+        Wr(0x1549598, font);
+      } else {
+        // Loaded by the stubs: no glyphs to read.
+        Wr(0x1549598, 0);
+        for (uint32_t t = 0; t < 3; t++) g_mem.write<uint8_t>(strs + 0x80 * t + 0x20, 0);
+      }
+      if (Rd(0x17F0C88) > 20) Wr(0x17F0C88, g() % 21);
+      // No optimised batch for its flushes to draw first: its iterators
+      // read locals they leave unwritten, here what the original's _ftol2
+      // calls left on the stack where the native code converts inline.
+      Wr(0x1830C94, 0);
+      Wr(0x1830C98, 0);
+      k.eax = n;
+      k.args = {strs};
       break;
     }
   }

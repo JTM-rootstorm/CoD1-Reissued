@@ -56,7 +56,8 @@ on gfx::Device" below).
   12, an entity's surfaces by its type layer 13, the tessellator's begin,
   RB_CheckOverflow, the immediate-mode batch and the debug draws layer 14,
   the leaves those layers still called lifted layer 15, the 2D commands
-  layer 16.
+  layer 16, the sky, the sun, the flares' adding, a portal surface's tests
+  and the debug text layer 17.
 - Layer 4, the stages and the flush: a stage's draw 0x4F5DE0 (EAX stage,
   EBX indexes, count on the stack: colours, ComputeTexCoords, the colour
   array, then all units when the second bundle has an image or the first
@@ -534,6 +535,68 @@ on gfx::Device" below).
   loop constants of RB_ShowImages, RB_SwapBuffers' stencil sum), which
   the calls under RB_EndSurface see. 0x4CD500 (a stretched picture
   command, as 0x4CD300) has no callers.
+- Layer 17, the sky, the sun, the flares' adding, a portal surface's tests
+  and the debug text (2026-11-08): what RB_EndSurface's sky iterator and
+  the draw surface loop's helpers still ran lifted. RB_StageIteratorSky
+  0x4DD6E0 (its log line names it; the fast sky cvar 0x153457C draws only
+  the sun; none in a portal view 0x154D734 without the refdef's flag 8,
+  nor without a sky, 0x1549A78/7C or the world fog count 0x13F9CF8 with
+  0x1535954; then in the sky, 0x15496EC's 0x40, RB_ClipSkyPolygons
+  0x4DB9F0 (ESI the tessellator; the extents 0x11CD800-0x11CD85F cleared by
+  0x4DB9B0 to +-9999, each triangle less the view's origin into
+  ClipSkyPolygon 0x4DB660), glDepthRange at the far plane (0..0 for the
+  cvar 0x15346CC), fog off, the outer box (shader +0x64, 0x4DBC40 with
+  0), the sun (r_drawSun 0x153445C; the sky's shader begun again after it),
+  the clouds (0x4DC600, drawn by the triangles' iterator 0x1549570), the
+  inner box (+0x7C, 0x4DBC40 with 1, blended), fog again, glDepthRange
+  0..1, 0x1549B48 set). The box 0x4DBC40: the box's vertex arrays
+  0x11CE790 (mode +0; kind +4: 0 memory with glLockArraysEXT(0, 0x1E6),
+  1 a vertex buffer, 2 an ATI array object (+8, +0xC), 3 memory; positions
+  4 floats after 2 texture coordinates, 0x18 bytes a vertex), state
+  0x100, front-sided culling, 0x4CBBE0(0x401), identityLight; per side the
+  extents snapped to quarters by the CRT's floor (0x51AB30) and ceil
+  (0x51A7A0), through _ftol within -4..4, as GL_QUADS of the 9 x 9 grid's
+  indexes on the stack (the image by the side order 0x5643C0), again in
+  white lines for r_showtris 0x15343E8. The clouds 0x4DC600 (EDI the
+  tessellator; for a cloud height +0x60, each stage of 0x1830CA4) through
+  0x4DC3E0 (the sides but the bottom, the same snap but to the nearest by
+  FISTP through 0x13F96D8) and 0x4DC190 (a side's grid: 16-bit counters,
+  each point by 0x4DBAF0 with the texture coordinates of 0x11CD860, 9 x 9
+  a side, "SHADER_MAX_VERTEXES hit in FillCloudySkySide()" past 0x2000
+  vertices; the triangles' indexes for stage 0). 0x4DBAF0 a point on the
+  box (EAX the side; s, t and 1 to its axes by the table 0x564508; the
+  texture coordinates within 0x11CE834 and 0x11CD060). The sun: 0x4DD600
+  (for a world sun +0x114; its parameters again with the cvar 0x15343FC;
+  with the view facing it, 0x1549834 . 0x15364B0 > 0, its quad and flare),
+  the quad 0x4DD2D0 (the shader 0x11CE798 begun with 4, not 3, the
+  triangles' iterator, the quad 0x11CE79C, RB_EndSurface as its tail
+  call), the flare 0x4DD3F0 (the flare shader 0x11CE7E0 past the cosine
+  0x11CE7E8, scaled up to 0x11CE7F0), the parameters 0x4DCDF0 (shaders by
+  the names of 0x15343CC (0x4DCB40: lightmap -3, its stages' flag 0x100 at
+  +0x684 cleared) and 0x15346C0, through 0x4F1810, left lifted; the quad
+  from 0x4DCB90 (two axes across the sun's direction, VectorNormalize,
+  x 0.001311093); cosines by FCOS, times in ms by FISTP after the 2^-30
+  nudge) and the sun flare 0x4CF210 into 0x4CEC60, which adds a flare
+  (counted in 0x1549B28; found by id and view in 0x154B0EC, else taken from
+  the free list 0x154D700 when on the screen; the point through the view's
+  matrices by 0x4C9340 and to the window by 0x4C9440, rounded by the
+  CRT's floor; a w pulls it 12 x w toward the view). A portal surface:
+  off the screen 0x4CA8D0 (the viewer's orientation 0x4C97D0, the surface
+  through the surface table into the tessellator, every vertex through
+  0x4C9250 outside one clip plane, or no triangle facing the view, or not
+  a mirror and farther than the shader's portal range +0xA4), a mirror
+  0x4CA770 (its plane by 0x4CA170 through 0x429650, in the entity's space
+  by 0x4C9580 for types 0-2; the first portal entity, type 0xB, within 64
+  of it; a mirror when its old origin is its origin), an entity's
+  orientation 0x4C9580 (EAX, EBX the view, EDI the entity; GL_NORMALIZE or
+  GL_RESCALE_NORMAL with 0x1534790 for non-normalised axes). The debug
+  text 0x4ACF50 (EAX the count; strings of 0x80 bytes in
+  "fonts/normalFont", loaded on first use by 0x42A480 and 0x4D5520, left
+  lifted; glLoadMatrixf 0x1534D00 of the view's world and projection,
+  glDepthRange 0..0; per glyph two quads through 0x500F20, a black shadow
+  and the colour; RB_EndSurface). 0x500920 (the item 2 list had it) is the
+  front end's: it adds the world's surfaces (R_AddDrawSurf) under
+  0x4CB210 and begins no surface; it stays lifted.
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -723,6 +786,23 @@ on gfx::Device" below).
   the clamp's >= for > and against the unrounded time (where they differ
   the clamp writes the value already stored), and the return address of
   RB_EndSurface's call, below ESP and never read.
+  With layer 17: 200000 cases over 166 entries, 6.62M calls out, 0
+  mismatches (the shader lookup 0x4F1810, answering with the case's
+  shader, and the font's load 0x4D5520 stubbed; glLoadMatrixf recorded,
+  glDrawElements' indexes hashed when they are on the stack; the surface
+  table's targets run lifted under a portal's test; the debug text's case
+  has no optimised batch for its flushes, whose iterators read what the
+  original's _ftol2 calls left on the stack). Its mutations: 112, 107
+  fail the oracle (six after cases with sums that cancel in their order
+  (the sun's facing, the viewer's translation, a mirror plane's
+  distance), the sun at z^2 between 0.98 and 0.99, an entity's axis
+  lengths in a chain each within 0.001 of the next, a vertex on a clip
+  plane); 4 cannot change a result: two swaps of a sum's first two terms,
+  the cosine's product of three floats in another order (exact at 53 bits
+  before its one rounding), and the sky's index count cleared before the
+  sun, which 0x4DC600 clears again before any read; 1 is a gap that needs
+  a value at a rounding midpoint: an entity axis's length summed in
+  another order.
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -827,6 +907,15 @@ on gfx::Device" below).
   identical against 47 for two layer 15 runs, the rest the 2D text and
   whole frames by the walk's timing (+43 to +77 and +116 to +141), which a
   third layer 15 run shows against both.
+  With layer 17 (2026-11-08): the walk reaches the sky iterator, its
+  clipping, the outer box, the sun, the clouds and the viewer's
+  orientation 1640 times each, the sky points 486, an entity's
+  orientation 63486, the debug text 3620, the sun's parameters, shader
+  and axes once (under gdb, on the layer 17 build), not the sun's quad
+  and flare, the flares' adding, the cloud stages and sides, nor a
+  portal's tests. Against the layer 16 build: all 13 loading and briefing
+  frames shared, 180 of 1802 in-level frames identical, 208 for a second
+  layer 17 run, 180 between the two layer 17 runs: the walk's timing.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),
