@@ -101,7 +101,10 @@ replace 0042B0A0
 # entity's surfaces by its type; the tessellator's begin, RB_CheckOverflow,
 # the immediate-mode batch and the debug draws; the register combiners,
 # the vertex program, TableForFunc, the noise, the water texture (its
-# spectrum, FFT and texels) and the debug draws' DXF file.
+# spectrum, FFT and texels) and the debug draws' DXF file; the 2D
+# commands: RB_SetGL2D, the client arrays by mode, the stretched pictures
+# (plain, rotated, by corners), the flares, RB_DrawSurfs, RB_DrawBuffer,
+# RB_ShowImages, the screen's copy and fade and RB_SwapBuffers.
 replace 004C89D0
 replace 004C8A20
 replace 004CB3B0
@@ -230,6 +233,19 @@ replace 004FC4E0
 replace 004FCAE0
 replace 004F4260
 replace 004F41C0
+replace 004CCC10
+replace 005040D0
+replace 004CD300
+replace 004CD540
+replace 004CD740
+replace 004CDA10
+replace 004CF470
+replace 004CE290
+replace 004CE2F0
+replace 004CE340
+replace 004CE5C0
+replace 004CE650
+replace 004CE730
 
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0

@@ -55,7 +55,8 @@ on gfx::Device" below).
   that fill or draw the flush layer 11, the surface table's others layer
   12, an entity's surfaces by its type layer 13, the tessellator's begin,
   RB_CheckOverflow, the immediate-mode batch and the debug draws layer 14,
-  the leaves those layers still called lifted layer 15.
+  the leaves those layers still called lifted layer 15, the 2D commands
+  layer 16.
 - Layer 4, the stages and the flush: a stage's draw 0x4F5DE0 (EAX stage,
   EBX indexes, count on the stack: colours, ComputeTexCoords, the colour
   array, then all units when the second bundle has an image or the first
@@ -483,6 +484,56 @@ on gfx::Device" below).
   lifted) of 0x15498E0 with 0x4F41C0 (a point through a 4x4 matrix with the
   divide by w, z stored as a float first). Not reproduced: the stack
   cookies' checks (0x523CD9), which only fail on a corrupted frame.
+- Layer 16, the 2D commands (2026-11-07), which the command loop 0x4CEA70
+  runs (its jump table: set colour inline, 0x4CD300 for a stretched
+  picture from its fields, 0x4CD540, 0x4CD740, 0x4CDA10 with EDI the
+  command, StretchRaw 0x4CDCC0, RB_DrawSurfs 0x4CE290 with EBX,
+  RB_DrawBuffer 0x4CE2F0 and the fade 0x4CE650 with ESI, the screen copy
+  0x4CE5C0 and RB_SwapBuffers 0x4CE730 with the command on the stack;
+  each returns the next command in EAX). RB_SetGL2D 0x4CCC10 (into 2D
+  0x1549B50, one unit, glViewport and glScissor of the screen 0x15347C4 x
+  0x15347C8, glOrtho(0, W, H, 0, 0, 1), identity matrices, GL_State
+  0x10065, fog and culling off, GL_CLIP_PLANE0 off, the 2D time
+  0x15496E8 from ri.Milliseconds and in seconds 0x15496F0). The pictures
+  begin the tessellator for their shader when it holds another (what it
+  holds drawn first, the entity 0x1549B5C, the client arrays switched to
+  the mode 0x1549548 by 0x5040D0 with the NV vertex array range 0x153479C
+  or else 0x4F4A20 with 0x15347B8, positions 3 floats apart), check its
+  limits for a quad (signed, RB_CheckOverflow) and add one (indexes v + 3,
+  v, v + 2, v + 2, v, v + 1 with v the vertex count's low 16 bits;
+  positions 12 bytes apart): 0x4CD300 (EBX the shader; stack x, y, w, h,
+  s1, t1, s2, t2, the colour's address), RB_StretchPic 0x4CD540 (top
+  vertices in the 2D colour 0x1549B54, bottom ones the command's +0x28),
+  the rotated picture 0x4CD740 (the angle +0x28 in degrees by FSINCOS about
+  the centre) and the corners' picture 0x4CDA10. 0x5040D0 (ESI the mode;
+  from mode 3 its array 0x851D on, to it off; modes 1 and 2 their ranges
+  by glVertexArrayRangeNV, else the tessellator's arrays). The flare
+  0x4CF470 (under 0x4CF730; EDI: shader +0x18, point +0x28 as integers,
+  colour times tr.identityLight through _ftol2, size +0x40 x 0.0015625 x
+  the view's height 0x1549958, depth the cvar 0x15347E4; the world entity,
+  no limits check, RB_EndSurface as its tail call). RB_DrawSurfs copies
+  the refdef and view in and calls the draw surface loop 0x4CC670 (left
+  lifted; EAX the surfaces, their count on the stack). RB_DrawBuffer
+  (glDrawBuffer; with r_clear 0x15344EC glClearColor(identityLight, 0,
+  identityLight / 2, 1) and glClear). RB_ShowImages 0x4CE340 (the screen
+  copied to 0x1535AD0, each image of 0x153A520 not +0x68 drawn at once
+  through the shader 0x1535B60 in a 32 x 24 grid, scaled by its upload
+  size / 1024 for r_showimages 2; "%i msec to draw all images"). The
+  screen copy 0x4CE5C0 (glCopyTexSubImage2D into 0x1535AD0, its time
+  0x1535ADC and the part filled 0x1535AE0/0x1535AE4) and the fade 0x4CE650
+  (the copy through 0x1535AF0 over the screen, white with alpha
+  pow(0.01, elapsed / duration) by the CRT's 0x52E2D0, at most 0.99, x
+  255 + 2^-30 by FISTP). RB_SwapBuffers (its log banner; the hooks
+  0x1426E20/24 with 0x1439370, 0x4AD5C0 and 0x40F5E0(0) left lifted,
+  RB_ShowImages, r_measureOverdraw 0x15343EC: from 2 the stencil read into
+  temporary memory and summed into 0x1549B1C, other than 2 its 14 levels
+  (0x564650) drawn in their colours (0x5645A8) through the immediate-mode
+  batch; glFinish unless 0x1534628; GLimp_EndFrame 0x4FFB40 left lifted,
+  or glFlush with 0x1534710; out of 2D). The natives hold the registers
+  the originals hold at the tessellator's calls (the mode, the shader, the
+  loop constants of RB_ShowImages, RB_SwapBuffers' stencil sum), which
+  the calls under RB_EndSurface see. 0x4CD500 (a stretched picture
+  command, as 0x4CD300) has no callers.
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -652,6 +703,21 @@ on gfx::Device" below).
   the row before for sizes that are powers of two (the FFT needs them);
   1 is a gap that needs a value at a rounding midpoint: the texel
   normal's length summed in another order.
+  With layer 16: 200000 cases over 141 entries, 6.07M calls out, 0
+  mismatches (the draw surface loop, 0x4AD5C0, 0x40F5E0 and
+  GLimp_EndFrame stubbed; the 2D GL calls, ri.Milliseconds, the temporary
+  memory, the swap hooks and RB_ShowImages' time recorded; EAX compared
+  for the commands; the screen small; the shaders the commands begin the
+  tessellator with have the recorded stage iterator). Its mutations: 77,
+  69 fail the oracle (some after cases at the tessellator's limits, with
+  negative counts, mixed magnitudes, a flare colour by n / 255, a third
+  row of images, r_showimages 3 and the fade at its duration); 5 cannot
+  change a result: RB_SetGL2D's fog bit after GL_State has cleared it, its
+  0.001 for the constant 0.001, mode 3 never taking a range, i % 32 for i
+  & 31 of a non-negative index, and the signed limits test of the index
+  count, which RB_CheckOverflow repeats; 3 are gaps that need a rounding
+  midpoint: the rotated picture's sums in other orders (two) and the
+  fade's 2^-30 before FISTP.
   Its mutations: 45, 41 fail the oracle (one, the batch vertex's signed
   test, after a negative capacity was added); 4 cannot change a result:
   the clamp's >= for > and against the unrounded time (where they differ
@@ -753,6 +819,14 @@ on gfx::Device" below).
   gdb, on the layer 15 build); only the oracle covers them. Standing,
   against the layer 14 build: all loading and briefing frames shared, 46
   of 1640 in-level frames identical, as layer 14 against 13.
+  With layer 16 (2026-11-07): the walk reaches RB_SetGL2D, RB_DrawBuffer
+  and RB_SwapBuffers 1802 times each, RB_DrawSurfs 1628, 0x4CD300 90185
+  and 0x4CDA10 21686 (under gdb, on the layer 16 build), not the others.
+  Against the layer 15 build (runs under load from a mutation run): the
+  same 13 loading and briefing frames, 43 of 1640 in-level frames
+  identical against 47 for two layer 15 runs, the rest the 2D text and
+  whole frames by the walk's timing (+43 to +77 and +116 to +141), which a
+  third layer 15 run shows against both.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),

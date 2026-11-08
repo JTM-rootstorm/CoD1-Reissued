@@ -131,6 +131,24 @@ constexpr Gl kGl[] = {
     {0x1534AA4, "glProgramLocalParameter4fvARB", 3, false, 2, 4},
     {0x1534D24, "glProgramLocalParameter4fARB", 6},
     {0x1534E4C, "glTexSubImage2D", 9},
+    {0x1535480, "glViewport", 4},
+    {0x1535220, "glScissor", 4},
+    {0x1534D6C, "glMatrixMode", 1},
+    {0x1534804, "glLoadIdentity", 0},
+    {0x1534AA0, "glOrtho", 12},
+    {0x1535384, "glClear", 1},
+    {0x153534C, "glFinish", 0},
+    {0x1534EBC, "glFlush", 0},
+    {0x15357D8, "glCopyTexSubImage2D", 8},
+    {0x1534F14, "glReadPixels", 7},
+    {0x1535278, "glDrawBuffer", 1},
+    {0x1535518, "glClearColor", 4},
+    {0x15355BC, "glVertexArrayRangeNV", 2},
+    {0x1549608, "ri.Milliseconds", 0, true},
+    {0x1549610, "ri.Hunk_AllocateTempMemory", 1, true},
+    {0x154961C, "ri.Hunk_FreeTempMemory", 1, true},
+    {0x1426E20, "hook 0x1426E20", 2, true},
+    {0x1426E24, "hook 0x1426E24", 2, true},
 };
 constexpr int kNumGl = sizeof(kGl) / sizeof(kGl[0]);
 constexpr uint32_t kGlTarget = 0x7FFD0000;  // + 0x10 * index
@@ -139,7 +157,7 @@ constexpr uint32_t kGlTarget = 0x7FFD0000;  // + 0x10 * index
 constexpr uint32_t kSkyIterator = 0x4DD6E0;
 
 struct CallRec {
-  uint32_t target, ret, esp, args[11];
+  uint32_t target, ret, esp, args[12];
   uint32_t data[4];
   uint32_t regs[7];  // stubs: the registers their callee reads
   bool operator==(const CallRec&) const = default;
@@ -189,6 +207,12 @@ COD1_STUB(0051D45A, kSaved, 3)
 // Under the combiners and the DXF file: GL_CheckErrors (the caller's
 // name) and FS_Write (buffer, length, file).
 COD1_STUB(004A5440, 0, 1)
+// Under the 2D commands: the draw surface loop (EAX the surfaces; their
+// count) and RB_SwapBuffers' calls before and after.
+COD1_STUB(004CC670, kEax | kSaved, 1)
+COD1_STUB(004AD5C0, kSaved, 0)
+COD1_STUB(0040F5E0, kSaved, 1)
+COD1_STUB(004FFB40, kSaved, 0)
 COD1_STUB(004230E0, 0, 3)
 #undef COD1_STUB
 // sprintf (buffer, format, ...: the DXF file's face, its number, or its
@@ -206,6 +230,9 @@ void f_0051A70E(Ctx& c) {
 uint32_t g_batch = 0;
 // The CRT's thread data (TlsGetValue's answer).
 uint32_t g_tiddata = 0;
+// The temporary memory ri.Hunk_AllocateTempMemory answers (the screen's
+// size).
+uint32_t g_temp = 0;
 void f_0042A480(Ctx& c) {
   Stub(c, 0x42A480, kSaved, 1);
   c.eax = g_batch;
@@ -226,6 +253,15 @@ void f_0051B3DD_lifted(Ctx& c);
 void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 void f_0042B0A0_lifted(Ctx& c);
 void f_0042B0A0(Ctx& c) { f_0042B0A0_lifted(c); }
+// 0x4C94D0, 0x4D42A0 and RE_StretchRaw 0x4CDCC0, native in the game
+// (src/render.cpp, src/screen2d.cpp): here only the draw surface loop's
+// lifted body reaches them.
+void f_004C94D0_lifted(Ctx& c);
+void f_004C94D0(Ctx& c) { f_004C94D0_lifted(c); }
+void f_004D42A0_lifted(Ctx& c);
+void f_004D42A0(Ctx& c) { f_004D42A0_lifted(c); }
+void f_004CDCC0_lifted(Ctx& c);
+void f_004CDCC0(Ctx& c) { f_004CDCC0_lifted(c); }
 // The originals...
 void f_004C89D0_lifted(Ctx& c);
 void f_004C8A20_lifted(Ctx& c);
@@ -355,6 +391,19 @@ void f_004FC4E0_lifted(Ctx& c);
 void f_004FCAE0_lifted(Ctx& c);
 void f_004F4260_lifted(Ctx& c);
 void f_004F41C0_lifted(Ctx& c);
+void f_004CCC10_lifted(Ctx& c);
+void f_005040D0_lifted(Ctx& c);
+void f_004CD300_lifted(Ctx& c);
+void f_004CD540_lifted(Ctx& c);
+void f_004CD740_lifted(Ctx& c);
+void f_004CDA10_lifted(Ctx& c);
+void f_004CF470_lifted(Ctx& c);
+void f_004CE290_lifted(Ctx& c);
+void f_004CE2F0_lifted(Ctx& c);
+void f_004CE340_lifted(Ctx& c);
+void f_004CE5C0_lifted(Ctx& c);
+void f_004CE650_lifted(Ctx& c);
+void f_004CE730_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -485,6 +534,19 @@ void f_004FCA50(Ctx& c) { f_004FCA50_lifted(c); }
 void f_004FC4E0(Ctx& c) { f_004FC4E0_lifted(c); }
 void f_004FCAE0(Ctx& c) { f_004FCAE0_lifted(c); }
 void f_004F41C0(Ctx& c) { f_004F41C0_lifted(c); }
+void f_004CCC10(Ctx& c) { f_004CCC10_lifted(c); }
+void f_005040D0(Ctx& c) { f_005040D0_lifted(c); }
+void f_004CD300(Ctx& c) { f_004CD300_lifted(c); }
+void f_004CD540(Ctx& c) { f_004CD540_lifted(c); }
+void f_004CD740(Ctx& c) { f_004CD740_lifted(c); }
+void f_004CDA10(Ctx& c) { f_004CDA10_lifted(c); }
+void f_004CF470(Ctx& c) { f_004CF470_lifted(c); }
+void f_004CE290(Ctx& c) { f_004CE290_lifted(c); }
+void f_004CE2F0(Ctx& c) { f_004CE2F0_lifted(c); }
+void f_004CE340(Ctx& c) { f_004CE340_lifted(c); }
+void f_004CE5C0(Ctx& c) { f_004CE5C0_lifted(c); }
+void f_004CE650(Ctx& c) { f_004CE650_lifted(c); }
+void f_004CE730(Ctx& c) { f_004CE730_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -613,6 +675,19 @@ void n_004FC4E0(Ctx& c);
 void n_004FCAE0(Ctx& c);
 void n_004F4260(Ctx& c);
 void n_004F41C0(Ctx& c);
+void n_004CCC10(Ctx& c);
+void n_005040D0(Ctx& c);
+void n_004CD300(Ctx& c);
+void n_004CD540(Ctx& c);
+void n_004CD740(Ctx& c);
+void n_004CDA10(Ctx& c);
+void n_004CF470(Ctx& c);
+void n_004CE290(Ctx& c);
+void n_004CE2F0(Ctx& c);
+void n_004CE340(Ctx& c);
+void n_004CE5C0(Ctx& c);
+void n_004CE650(Ctx& c);
+void n_004CE730(Ctx& c);
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
@@ -631,7 +706,11 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
   r.esp = c.esp;
   r.ret = Rd(c.esp);
   // ri.Error's texture environment message has the environment after it.
-  const int n = gl.ptr == 0x1549604 && Rd(c.esp + 8) == 0x54303C ? 3 : gl.args;
+  // RB_ShowImages' time has its milliseconds after it.
+  const int n = (gl.ptr == 0x1549604 && Rd(c.esp + 8) == 0x54303C) ||
+                        (gl.ptr == 0x1549600 && Rd(c.esp + 8) == 0x542F70)
+                    ? 3
+                    : gl.args;
   for (int k = 0; k < n; k++) r.args[k] = Rd(c.esp + 4 + 4 * uint32_t(k));
   if (gl.ptr_arg >= 0)
     for (int k = 0; k < gl.floats; k++) r.data[k] = Rd(r.args[gl.ptr_arg] + 4 * uint32_t(k));
@@ -655,6 +734,7 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
   c.ecx = junk ^ 1;
   c.edx = junk ^ 2;
   if (gl.ptr == 0x5330F4) c.eax = recomp::gen::g_tiddata;
+  if (gl.ptr == 0x1549610) c.eax = recomp::gen::g_temp;
   // A stage iterator now and then leaves no indexes.
   if (gl.ptr == 0x1830CA0 && (Rd(0x17F0C88) & 1)) Wr(0x17F0C84, 0);
   c.esp += 4 + (gl.cdecl ? 0 : 4 * uint32_t(gl.args));
@@ -778,6 +858,13 @@ const Entry kEntries[] = {
     COD1_ENTRY(004FC960, "water spectrum"),   COD1_ENTRY(004FCA50, "water transform", 0, 8),
     COD1_ENTRY(004FC4E0, "FFT", 0, 8),        COD1_ENTRY(004FCAE0, "water texels"),
     COD1_ENTRY(004F4260, "DXF", 0, 8),        COD1_ENTRY(004F41C0, "projection"),
+    COD1_ENTRY(004CCC10, "set GL2D"),         COD1_ENTRY(005040D0, "arrays by mode"),
+    COD1_ENTRY(004CD300, "stretch pic"),      COD1_ENTRY(004CD540, "stretch pic cmd"),
+    COD1_ENTRY(004CD740, "rotated pic"),      COD1_ENTRY(004CDA10, "corner pic"),
+    COD1_ENTRY(004CF470, "flare"),            COD1_ENTRY(004CE290, "draw surfs"),
+    COD1_ENTRY(004CE2F0, "draw buffer"),      COD1_ENTRY(004CE340, "show images"),
+    COD1_ENTRY(004CE5C0, "screen copy"),      COD1_ENTRY(004CE650, "screen fade"),
+    COD1_ENTRY(004CE730, "swap buffers"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -895,7 +982,10 @@ void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
   bool ok = cn.esp == cl.esp && cn.ebp == cl.ebp && cn.ebx == cl.ebx && cn.esi == cl.esi &&
             cn.edi == cl.edi && cn.fpu.top == cl.fpu.top && cn.fpu.empty == cl.fpu.empty &&
             cn.fpu.cw == cl.fpu.cw &&
-            ((e.va != 0x4F3330 && e.va != 0x508940) || cn.eax == cl.eax);
+            ((e.va != 0x4F3330 && e.va != 0x508940 && e.va != 0x4CD540 && e.va != 0x4CD740 &&
+              e.va != 0x4CDA10 && e.va != 0x4CE290 && e.va != 0x4CE2F0 && e.va != 0x4CE5C0 &&
+              e.va != 0x4CE650 && e.va != 0x4CE730) ||
+             cn.eax == cl.eax);
   // The x87 registers in use (the noise's value; the caller's below).
   for (int r = 0; r < 8; r++)
     if (!(cl.fpu.empty & (1 << r)) &&
@@ -1294,7 +1384,7 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(0x17F0C8C, g() % 1000);
   Wr(0x17F0C90, g() % 4 ? g() % 1000 : 0);
   if (g() % 3 == 0) Wr(0x1534DB0, 0);  // no glDrawRangeElementsEXT
-  const uint32_t tris = a.Alloc(0x160);
+  const uint32_t tris = a.Alloc(0x180);
   Wr(tris + 0xA8, g() % 3);
   Wr(tris + 0x154, Stage(a, g));
   Wr(0x1535B5C, tris);
@@ -1360,11 +1450,47 @@ void Randomize(Arena& a, std::mt19937& g) {
   Wr(normals + 4, Str(a, kShowNormals[g() % 7]));
   Wr(0x1534698, normals);
   Wr(0x1830CA0, g() % 4 ? Rd(0x1830CA0) : kSkyIterator);
+  // The stage iterator the tessellator's begin takes from a shader, for
+  // the shaders the 2D commands begin it with.
+  for (uint32_t sh : {Rd(0x17F0C70), Rd(0x1535B5C)}) Wr(sh + 0x174, Rd(0x1830CA0));
   Wr(0x154D708, g() % 2);
   Wr(0x1830C94, g() % 2 ? g() % 1000 : 0);
   Wr(0x1830C98, g() % 1000);
   Wr(0x1549B08, g());
   StageLight(a, g);
+  // The 2D state: the screen (small: RB_SwapBuffers reads its stencil
+  // into temporary memory), the screen copy's texture, its time and
+  // part, the shaders of the fade and of RB_ShowImages (the tessellator's),
+  // the flares' depth cvar and the view's height; the 2D colour.
+  Wr(0x15347C4, g() % 16 ? 1 + g() % 96 : 0);
+  Wr(0x15347C8, g() % 16 ? 1 + g() % 96 : 0);
+  recomp::gen::g_temp = a.Alloc(Rd(0x15347C4) * Rd(0x15347C8) + 16);
+  for (uint32_t i = 0; i < Rd(0x15347C4) * Rd(0x15347C8); i += 4) Wr(recomp::gen::g_temp + i, g());
+  Wr(0x1535AD0, Image(a, g));
+  Wr(0x1535AD4, g() % 16 ? 1 + g() % 512 : uint32_t(g()) % 3);
+  Wr(0x1535AD8, g() % 16 ? 1 + g() % 512 : uint32_t(g()) % 3);
+  Wr(0x1535ADC, g() % 2 ? Rd(0x15496E8) - g() % 2000 : uint32_t(g()));
+  Wr(0x1535AE0, RandFloat(g));
+  Wr(0x1535AE4, RandFloat(g));
+  Wr(0x1535AF0, Rd(0x17F0C70));
+  Wr(0x1535B60, Rd(0x17F0C70));
+  Wr(0x15347E4, Cvar(a, g, 0));
+  Wr(0x1549958, g() % 8 ? g() % 1200 : uint32_t(g()));
+  Wr(0x1549B54, g());
+  Wr(0x1549B50, g() % 2);
+  Wr(0x1549548, g() % 8 ? g() % 4 : uint32_t(g()));
+  for (uint32_t i = 0x1549530; i < 0x1549544; i += 4) Wr(i, g());
+  Wr(0x16E8C40, g());
+  // The images RB_ShowImages draws (some it skips; now and then past one
+// or two rows of 32), with upload sizes.
+  Wr(0x153A51C, g() % 4 ? g() % 6 : g() % 2 ? 33 + g() % 40 : uint32_t(g()) | 0x80000000u);
+  for (uint32_t i = 0; i < 72; i++) {
+    const uint32_t im = Image(a, g);
+    Wr(im + 0x68, g() % 4 == 0);
+    g_mem.write<uint16_t>(im + 0x44, uint16_t(g()));
+    g_mem.write<uint16_t>(im + 0x46, uint16_t(g()));
+    Wr(0x153A520 + 4 * i, im);
+  }
   // The tessellator's entity (the DXF file's): one of the entities.
   Wr(0x15497F8, a.Alloc(4 * 0x2B8));
   Wr(0x17F0C7C, Rd(0x15497F8) + 0x2B8 * (g() % 4));
@@ -1544,6 +1670,23 @@ void Light(Arena& a, std::mt19937& g) {
     for (uint32_t i = 0; i < 0x30; i += 4) Wr(0x1549A88 + i, Power(g));  // the entity's origin and axes
   if (g() % 2) Wr(l + 0x50, g() % 2 ? 0 : 0x80000000);
   Wr(0x1549B40, l);
+}
+
+// The tessellator for a 2D quad: now and then at its limits (one quad
+// from them or just past), or with a negative index count, or a negative
+// vertex count for a quad of the shader it holds (no flush or begin, so
+// true: the caller's shader is the tessellator's).
+bool Limits2D(std::mt19937& g) {
+  switch (g() % 8) {
+    case 0: Wr(0x17F0C88, 0x1FFC - g() % 2); break;
+    case 1: Wr(0x17F0C84, 0xBFFA - g() % 2); break;
+    case 2: Wr(0x17F0C84, 0xFFFFFFF8 + g() % 8); break;
+    case 3:
+      Wr(0x17F0C88, 0xFFFF0000u | g() % 0x40);
+      Wr(0x17F0C84, 0);
+      return true;
+  }
+  return false;
 }
 
 void Cases(Arena& a, std::mt19937& g, Stats& s) {
@@ -2032,6 +2175,104 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       Wr(0x17F0C60, g() % 4 ? 8 : 4);  // positions 8 floats apart (4 are skipped)
       if (g() % 2) Wr(0x17F0C84, g() % 16);
       k.ebx = 0x1618C40;
+      break;
+    }
+    case 0x4CCC10:
+      break;
+    case 0x5040D0:
+      Wr(0x153465C, g() % 8 ? g() % 4 : uint32_t(g()));
+      Wr(0x153479C, g() % 3);
+      k.esi = g() % 8 ? g() % 4 : uint32_t(g());
+      break;
+    case 0x4CD300: {
+      // A picture: its shader (now and then the tessellator's), place,
+      // size and texture coordinates (now and then special), its colour.
+      k.ebx = g() % 4 ? Rd(0x17F0C70) : Rd(0x1535B5C);
+      const uint32_t col = a.Alloc(4);
+      Wr(col, g());
+      k.args = {};
+      for (int i = 0; i < 8; i++) k.args.push_back(g() % 4 ? Float(float(int(g() % 2001) - 1000) / 7.0f) : RandFloat(g));
+      k.args.push_back(col);
+      if (Limits2D(g)) k.ebx = Rd(0x17F0C70);
+      break;
+    }
+    case 0x4CD540:
+    case 0x4CD740:
+    case 0x4CDA10: {
+      // A command: its shader, then floats (the rotated one's angle now
+      // and then past FSINCOS's range), the bottom colour.
+      const uint32_t cmd = a.Alloc(0x48);
+      Wr(cmd + 4, g() % 4 ? Rd(0x17F0C70) : Rd(0x1535B5C));
+      const bool mixed = g() % 4 == 0;  // sums whose order shows
+      for (uint32_t i = 8; i < 0x48; i += 4)
+        Wr(cmd + i, mixed ? Mixed(g) : g() % 4 ? Float(float(int(g() % 2001) - 1000) / 7.0f) : RandFloat(g));
+      if (Limits2D(g)) Wr(cmd + 4, Rd(0x17F0C70));
+      if (kEntries[k.entry].va == 0x4CD540) Wr(cmd + 0x28, g());
+      if (kEntries[k.entry].va == 0x4CD740 && g() % 8 == 0) Wr(cmd + 0x28, Float(1e30f));
+      k.edi = cmd;
+      break;
+    }
+    case 0x4CF470: {
+      // A flare: shader, alpha, point (integers), colour, size.
+      const uint32_t f = a.Alloc(0x44);
+      for (uint32_t i = 0; i < 0x44; i += 4) Wr(f + i, g() % 4 ? Float(float(g() % 1001) / 1000.0f) : RandFloat(g));
+      Wr(f + 0x18, Rd(0x17F0C70));
+      Wr(f + 0x28, g() % 8 ? g() % 1280 : uint32_t(g()));
+      Wr(f + 0x2C, g() % 8 ? g() % 1024 : uint32_t(g()));
+      Wr(f + 0x40, g() % 4 ? Float(float(g() % 100)) : RandFloat(g));
+      if (g() % 2) Wr(0x17F0C88, g() % 64);  // the vertices it adds to
+      // Now and then a colour whose product with tr.identityLight lands
+      // by n / 255, where rounding it to a float first moves _ftol's
+      // integer.
+      if (g() % 4 == 0) {
+        const float il = float(1 + g() % 999) / 1000.0f;
+        Wr(0x1536290, Float(il));
+        Wr(f + 0x34, Float(float(g() % 256) / (255.0f * il)));
+      }
+      k.edi = f;
+      break;
+    }
+    case 0x4CE290: {
+      // RB_DrawSurfs: its refdef and view (anything), surfaces and count.
+      const uint32_t cmd = a.Alloc(0x3F4);
+      for (uint32_t i = 0; i < 0x3F4; i += 4) Wr(cmd + i, g());
+      k.ebx = cmd;
+      break;
+    }
+    case 0x4CE2F0: {
+      const uint32_t cmd = a.Alloc(8);
+      Wr(cmd + 4, g());
+      Wr(0x15344EC, Cvar(a, g, g() % 2));
+      k.esi = cmd;
+      break;
+    }
+    case 0x4CE340:
+      Wr(0x153439C, Cvar(a, g, 1 + g() % 3));
+      break;
+    case 0x4CE5C0:
+      k.args = {a.Alloc(8)};
+      break;
+    case 0x4CE650: {
+      // The fade: its duration (now and then 0 or negative).
+      const uint32_t cmd = a.Alloc(8);
+      Wr(cmd + 4, g() % 8 ? g() % 3000 : uint32_t(g()));
+      if (g() % 8 == 0) Wr(cmd + 4, Rd(0x15496E8) - Rd(0x1535ADC));  // just over
+      k.esi = cmd;
+      break;
+    }
+    case 0x4CE730: {
+      // RB_SwapBuffers: the hooks, r_showimages, r_measureOverdraw, the
+      // finish and swap cvars and the log.
+      Wr(0x1439370, g() % 2);
+      Wr(0x1439458, g() % 2 ? 0 : uint32_t(g()));
+      Wr(0x1439454, g());
+      Wr(0x1439468, g() % 2 ? 0 : uint32_t(g()));
+      Wr(0x1439464, g());
+      Wr(0x153439C, Cvar(a, g, g() % 4 == 0 ? 1 + g() % 3 : 0));
+      Wr(0x15343EC, Cvar(a, g, g() % 2 ? 0 : g() % 8 ? g() % 4 : uint32_t(g())));
+      Wr(0x1534628, g() % 2);
+      Wr(0x1534710, Cvar(a, g, g() % 2));
+      k.args = {a.Alloc(8)};
       break;
     }
     case 0x5033B0:

@@ -16,10 +16,10 @@
 // they add; the tessellator's begin and RB_CheckOverflow, the
 // immediate-mode batch and the debug draws; and the leaves below: the
 // register combiners, the vertex program, TableForFunc, the noise, the
-// water texture and the debug draws' DXF file. Replacements of lifted
-// functions named with `replace` in manifest/CoDSP.manifest; FINDINGS.md
-// "Renderer back end". Names and evidence are in the Ghidra plate
-// comments.
+// water texture and the debug draws' DXF file; and the 2D commands.
+// Replacements of lifted functions named with `replace` in
+// manifest/CoDSP.manifest; FINDINGS.md "Renderer back end". Names and
+// evidence are in the Ghidra plate comments.
 //
 // The GL calls go through the renderer's qgl function pointers (set by
 // its QGL_Init from opengl32's exports and wglGetProcAddress; the names
@@ -89,6 +89,16 @@ void f_004FCA50(Ctx& c);
 void f_004FC4E0(Ctx& c);
 void f_004FCAE0(Ctx& c);
 void f_004F41C0(Ctx& c);
+void f_004CC670(Ctx& c);  // the draw surface loop (EAX surfaces; their count)
+void f_004AD5C0(Ctx& c);  // RB_SwapBuffers' first call
+void f_0040F5E0(Ctx& c);  // RB_SwapBuffers' second call (0)
+void f_004FFB40(Ctx& c);  // GLimp_EndFrame
+void f_0052E2D0(Ctx& c);  // the CRT's pow (ST1, ST0)
+// The 2D commands.
+void f_004CCC10(Ctx& c);
+void f_005040D0(Ctx& c);
+void f_004CD300(Ctx& c);
+void f_004CE340(Ctx& c);
 // The tessellator's begin and overflow, the immediate-mode batch and the
 // debug draws.
 void f_004F4AB0(Ctx& c);
@@ -6099,6 +6109,616 @@ void f_004F4260(Ctx& c) {
   c.esi = esi;
   c.edi = edi;
   c.ebp = ebp;
+  c.esp = e + 4;
+}
+
+// ---- the 2D commands -----------------------------------------------------------
+
+namespace {
+
+constexpr uint32_t kglViewport = 0x1535480, kglScissor = 0x1535220, kglMatrixMode = 0x1534D6C,
+                   kglLoadIdentity = 0x1534804, kglOrtho = 0x1534AA0, kglClear = 0x1535384,
+                   kglFinish = 0x153534C, kglFlush = 0x1534EBC,
+                   kglCopyTexSubImage2D = 0x15357D8, kglReadPixels = 0x1534F14,
+                   kglDrawBuffer = 0x1535278, kglClearColor = 0x1535518,
+                   kglVertexArrayRangeNV = 0x15355BC;
+// ri.Milliseconds, ri.Hunk_AllocateTempMemory and ri.Hunk_FreeTempMemory
+// (cdecl).
+constexpr uint32_t kMilliseconds = 0x1549608, kTempAlloc = 0x1549610, kTempFree = 0x154961C;
+// The screen's width and height, in 2D (0x1549B50), the 2D colour, the
+// tessellator's colours and texture coordinates.
+constexpr uint32_t kWidth = 0x15347C4, kHeight = 0x15347C8, kIn2D = 0x1549B50,
+                   kColor2D = 0x1549B54;
+
+// The tessellator for a 2D shader (ret: the calls' returns: RB_EndSurface,
+// 0x5040D0, 0x4F4A20, the begin): what it holds drawn (but for flares)
+// at ESP end, the entity set, the client arrays switched to the mode
+// 0x1549548 when they are another (0x5040D0 with the NV vertex array range,
+// else 0x4F4A20 with 0x15347B8), at ESP arrays, and the tessellator begun
+// with positions 3 floats apart; the mode held in the register hold, as
+// the original holds it (until its caller restores it).
+void Begin2D(Ctx& c, uint32_t shader, uint32_t entity, uint32_t end, uint32_t arrays,
+             const uint32_t (&ret)[4], uint32_t Ctx::*hold) {
+  if (end) {
+    c.esp = end;
+    if (U32(kTessIndexCount)) Call(c, f_004F7D00, ret[0]);
+  }
+  const uint32_t mode = U32(0x1549548);
+  Put(kEntity, entity);
+  c.*hold = mode;
+  c.esp = arrays;
+  if (mode != U32(0x153465C)) {
+    if (U32(0x153479C)) {
+      c.esi = mode;
+      Call(c, f_005040D0, ret[1]);
+    } else if (U32(0x15347B8)) {
+      c.eax = mode;
+      Call(c, f_004F4A20, ret[2]);
+    }
+    Put(0x153465C, mode);
+  }
+  Push(c, 3);
+  c.ecx = shader;
+  Call(c, f_004F4AB0, ret[3]);
+}
+
+// RB_CheckOverflow for a quad (ESP at the pushes; ret: its call's return),
+// signed.
+void Overflow2D(Ctx& c, uint32_t esp, uint32_t ret) {
+  if (I32(kTessVerts) + 4 >= 0x2000 || I32(kTessIndexCount) + 6 >= 0xC000) {
+    c.esp = esp;
+    Push(c, 6);
+    Push(c, 4);
+    Call(c, f_00500A60, ret);
+  }
+}
+
+// A 2D quad's indexes (v + 3, v, v + 2; v + 2, v, v + 1) and four
+// vertices taken; the first vertex.
+uint32_t Quad2D() {
+  const uint32_t v = U32(kTessVerts), i = U32(kTessIndexCount);
+  Put(kTessVerts, v + 4);
+  Put(kTessIndexCount, i + 6);
+  static constexpr uint16_t kIdx[6] = {3, 0, 2, 2, 0, 1};
+  for (uint32_t k = 0; k < 6; k++) Wr<uint16_t>(g_guest_base, kTessIndexes + 2 * (i + k), uint16_t(v + kIdx[k]));
+  return v & 0xFFFF;
+}
+
+// Its four colours, positions (x, y, 0 each, 12 bytes apart from the
+// vertex at the tessellator's stride) and texture coordinates.
+void Quad2DColors(uint32_t v, uint32_t c01, uint32_t c23) {
+  Put(kVertColors + 4 * v, c01);
+  Put(kVertColors + 4 * v + 4, c01);
+  Put(kVertColors + 4 * v + 8, c23);
+  Put(kVertColors + 4 * v + 12, c23);
+}
+uint32_t Quad2DXyz(uint32_t v) { return kTessXyz + 4 * (v * U32(kXyzStride)); }
+void Quad2DSt(uint32_t v, std::initializer_list<uint32_t> st) {
+  uint32_t a = kTessTexCoords + 8 * v;
+  for (uint32_t x : st) Put(a, x), a += 4;
+}
+void Quad2DXy(uint32_t xyz, std::initializer_list<uint32_t> xy) {
+  uint32_t k = 0;
+  for (uint32_t x : xy) {
+    Put(xyz + 0xC * (k / 2) + 4 * (k % 2), x);
+    if (k % 2) Put(xyz + 0xC * (k / 2) + 8, 0u);
+    k++;
+  }
+}
+
+}  // namespace
+
+// RB_SetGL2D: in 2D (0x1549B50), one texture unit, the viewport and
+// scissor the screen, an orthographic projection of it (y down) and an
+// identity modelview, the state bits 0x10065, fog and culling off, the
+// clip plane off, and the 2D time (0x15496E8, ri.Milliseconds; in seconds
+// 0x15496F0).
+void f_004CCC10(Ctx& c) {
+  const uint32_t e = c.esp;
+  Put(kIn2D, 1u);
+  Call(c, f_004F4090, 0x4CCC1F);
+  for (uint32_t ptr : {kglViewport, kglScissor}) {
+    Push(c, U32(kHeight));
+    Push(c, U32(kWidth));
+    Push(c, 0);
+    Push(c, 0);
+    CallPtr(c, ptr, ptr == kglViewport ? 0x4CCC30 : 0x4CCC47);
+  }
+  Push(c, 0x1701);
+  CallPtr(c, kglMatrixMode, 0x4CCC52);
+  CallPtr(c, kglLoadIdentity, 0x4CCC58);
+  const uint64_t w = std::bit_cast<uint64_t>(double(I32(kWidth))),
+                 h = std::bit_cast<uint64_t>(double(I32(kHeight)));
+  for (uint32_t v : {0x3FF00000u, 0u, 0u, 0u, 0u, 0u, uint32_t(h >> 32), uint32_t(h),
+                     uint32_t(w >> 32), uint32_t(w), 0u, 0u})
+    Push(c, v);
+  CallPtr(c, kglOrtho, 0x4CCC87);
+  Push(c, 0x1700);
+  CallPtr(c, kglMatrixMode, 0x4CCC92);
+  CallPtr(c, kglLoadIdentity, 0x4CCC98);
+  c.eax = 0x10065;
+  Call(c, f_004CB710, 0x4CCCA8);
+  if (U32(kStateBits) & 0x200000) {
+    Disable(c, 0xB60, 0x4CCCB9);
+    Put(kStateBits, U32(kStateBits) & 0xFFDFFFFF);
+  }
+  if (U32(kCullType) != 2) {
+    Disable(c, 0xB44, 0x4CCCD7);
+    Put(kCullType, 2u);
+  }
+  Disable(c, 0x3000, 0x4CCCEC);
+  CallPtr(c, kMilliseconds, 0x4CCCF2);
+  Put(0x15496E8, c.eax);
+  Put(0x15496F0, Fst(FromInt(I32(0x15496E8)) * Ld(0x55B58C)));
+  c.esp = e + 4;
+}
+
+// The client arrays for a mode (ESI; 0x153465C the current): from 3 (the
+// NV vertex array range's own) the range's array on; to 3 its array off
+// (0x851D for the range 0x153479C at 1, else 0x8533); then for modes 1 and
+// 2 their ranges (0x1549540 and 0x1549534, sizes 0x154953C and 0x1549530),
+// else the tessellator's arrays.
+void f_005040D0(Ctx& c) {
+  const uint32_t e = c.esp, mode = c.esi;
+  bool ranges = true;
+  if (U32(0x153465C) == 3) {
+    Push(c, 0x851D);
+    CallPtr(c, kglEnableClientState, 0x5040DE);
+  } else if (mode == 3) {
+    Push(c, U32(0x153479C) == 1 ? 0x851D : 0x8533);
+    CallPtr(c, kglDisableClientState, 0x504114);
+    ranges = false;
+  }
+  if (ranges && mode == 1) {
+    Push(c, U32(0x154953C));
+    Push(c, U32(0x1549540));
+    CallPtr(c, kglVertexArrayRangeNV, 0x5040FA);
+  } else if (ranges && mode == 2) {
+    Push(c, U32(0x1549530));
+    Push(c, U32(0x1549534));
+    CallPtr(c, kglVertexArrayRangeNV, 0x504189);
+  } else {
+    for (uint32_t v : {kTessXyz, 0u, 0x1406u, U32(kXyzStride)}) Push(c, v);
+    CallPtr(c, kglVertexPointer, 0x50412D);
+    for (uint32_t v : {kTessNormals, 0u, 0x1406u}) Push(c, v);
+    CallPtr(c, kglNormalPointer, 0x50413F);
+    for (uint32_t v : {U32(0x16E8C40), 0u, 0x1406u, 2u}) Push(c, v);
+    CallPtr(c, kglTexCoordPointer, 0x504155);
+    for (uint32_t v : {kColors, 0u, 0x1401u, 4u}) Push(c, v);
+    CallPtr(c, kglColorPointer, 0x504169);
+  }
+  c.esp = e + 4;
+}
+
+// A stretched picture (EBX the shader; stack: x, y, width, height, s1,
+// t1, s2, t2, the colour's address) into the tessellator, in 2D.
+void f_004CD300(Ctx& c) {
+  const uint32_t e = c.esp, shader = c.ebx, esi = c.esi, edi = c.edi;
+  if (!U32(kIn2D)) Call(c, f_004CCC10, 0x4CD30E);
+  if (shader != U32(kTessShader)) {
+    Begin2D(c, shader, 0x1549B5C, e - 4, e - 8, {0x4CD325, 0x4CD350, 0x4CD361, 0x4CD370}, &Ctx::edi);
+    c.edi = edi;
+  }
+  Overflow2D(c, e - 4, 0x4CD39D);
+  const uint32_t v = Quad2D(), x = Arg(c, e, 1), y = Arg(c, e, 2), col = U32(Arg(c, e, 9));
+  Quad2DColors(v, col, col);
+  const F32 xw = Fst(St(Ld(e + 4)) + Ld(e + 0xC)), yh = Fst(St(Ld(e + 8)) + Ld(e + 0x10));
+  Quad2DXy(Quad2DXyz(v), {x, y, xw.bits, y, xw.bits, yh.bits, x, yh.bits});
+  Quad2DSt(v, {Arg(c, e, 5), Arg(c, e, 6), Arg(c, e, 7), Arg(c, e, 6), Arg(c, e, 7), Arg(c, e, 8),
+               Arg(c, e, 5), Arg(c, e, 8)});
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// RB_StretchPic (EDI the command: shader +4, x, y, width, height +8..,
+// s1, t1, s2, t2 +0x18..; EAX the next): the top two vertices the 2D
+// colour 0x1549B54, the bottom two the command's +0x28.
+void f_004CD540(Ctx& c) {
+  const uint32_t e = c.esp, cmd = c.edi, ebx = c.ebx, ebp = c.ebp, esi = c.esi;
+  if (!U32(kIn2D)) Call(c, f_004CCC10, 0x4CD54E);
+  c.ebp = U32(cmd + 4);
+  if (c.ebp != U32(kTessShader)) {
+    Begin2D(c, c.ebp, 0x1549B5C, e - 8, e - 0xC, {0x4CD56A, 0x4CD595, 0x4CD5A6, 0x4CD5B5}, &Ctx::ebx);
+    c.ebx = ebx;
+  }
+  Overflow2D(c, e - 8, 0x4CD5E2);
+  const uint32_t v = Quad2D();
+  Quad2DColors(v, U32(kColor2D), U32(cmd + 0x28));
+  const uint32_t x = U32(cmd + 8), y = U32(cmd + 0xC);
+  const F32 xw = Fst(St(Ld(cmd + 0x10)) + Ld(cmd + 8)), yh = Fst(St(Ld(cmd + 0xC)) + Ld(cmd + 0x14));
+  Quad2DXy(Quad2DXyz(v), {x, y, xw.bits, y, xw.bits, yh.bits, x, yh.bits});
+  Quad2DSt(v, {U32(cmd + 0x18), U32(cmd + 0x1C), U32(cmd + 0x20), U32(cmd + 0x1C), U32(cmd + 0x20),
+               U32(cmd + 0x24), U32(cmd + 0x18), U32(cmd + 0x24)});
+  c.ebp = ebp;
+  c.esi = esi;
+  c.eax = cmd + 0x30;
+  c.esp = e + 4;
+}
+
+// A rotated stretched picture (EDI the command: as RB_StretchPic's, the
+// angle in degrees +0x28; EAX the next): the corners about the centre by
+// FSINCOS of the angle, each sum in the original's order, in the 2D
+// colour.
+void f_004CD740(Ctx& c) {
+  const uint32_t e = c.esp, cmd = c.edi, ebx = c.ebx, ebp = c.ebp, esi = c.esi;
+  const uint32_t s = e - 0x34;  // ESP after the saves
+  c.esp = s;
+  if (!U32(kIn2D)) Call(c, f_004CCC10, 0x4CD754);
+  c.ebp = U32(cmd + 4);
+  if (c.ebp != U32(kTessShader))
+    Begin2D(c, c.ebp, 0x1549B5C, s, s, {0x4CD76D, 0x4CD797, 0x4CD7A8, 0x4CD7B7}, &Ctx::ebx);
+  Overflow2D(c, s, 0x4CD7E3);
+  const uint32_t v = Quad2D();
+  Quad2DColors(v, U32(kColor2D), U32(kColor2D));
+  Quad2DSt(v, {U32(cmd + 0x18), U32(cmd + 0x1C), U32(cmd + 0x20), U32(cmd + 0x1C), U32(cmd + 0x20),
+               U32(cmd + 0x24), U32(cmd + 0x18), U32(cmd + 0x24)});
+  const F32 hw = Fst(St(Ld(cmd + 0x10)) * Ld(0x55B590)), hh = Fst(St(Ld(cmd + 0x14)) * Ld(0x55B590));
+  const F32 cx = Fst(St(hw) + Ld(cmd + 8)), cy = Fst(St(hh) + Ld(cmd + 0xC));
+  Put(s + 0x1C, Fst(St(Ld(cmd + 0x28)) * Ld(0x55B700) * Ld(0x55B814)));
+  SinCos(c, s + 0x1C, s + 0x10, s + 0xC);
+  const F32 co = Ld(s + 0x10), si = Ld(s + 0xC);
+  const St a = St(co) * hw, b = St(si) * hw;
+  const F32 p = Fst(-(St(si) * hh)), q = Fst(St(co) * hh);
+  const St ax = St(cx) - a, by = St(cy) - b;
+  const F32 a0 = Fst(ax), b0 = Fst(by);
+  const uint32_t xyz = Quad2DXyz(v);
+  Quad2DXy(xyz, {Fst(ax - p).bits, Fst(by - q).bits, Fst(a + cx - p).bits, Fst(St(cy) + b - q).bits,
+                 Fst(St(p) + a + cx).bits, Fst(St(q) + b + cy).bits, Fst(St(a0) + p).bits,
+                 Fst(St(b0) + q).bits});
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.eax = cmd + 0x2C;
+  c.esp = e + 4;
+}
+
+// A picture by its corners (EDI the command: shader +4, four x, y +8..,
+// four s, t +0x28..; EAX the next), in the 2D colour.
+void f_004CDA10(Ctx& c) {
+  const uint32_t e = c.esp, cmd = c.edi, ebx = c.ebx, ebp = c.ebp, esi = c.esi;
+  if (!U32(kIn2D)) Call(c, f_004CCC10, 0x4CDA1E);
+  c.ebp = U32(cmd + 4);
+  if (c.ebp != U32(kTessShader)) {
+    Begin2D(c, c.ebp, 0x1549B5C, e - 8, e - 0xC, {0x4CDA3A, 0x4CDA65, 0x4CDA76, 0x4CDA85}, &Ctx::ebx);
+    c.ebx = ebx;
+  }
+  Overflow2D(c, e - 8, 0x4CDAB2);
+  const uint32_t v = Quad2D();
+  Quad2DColors(v, U32(kColor2D), U32(kColor2D));
+  for (uint32_t k = 0; k < 8; k++) Put(kTessTexCoords + 8 * v + 4 * k, U32(cmd + 0x28 + 4 * k));
+  Quad2DXy(Quad2DXyz(v), {U32(cmd + 8), U32(cmd + 0xC), U32(cmd + 0x10), U32(cmd + 0x14),
+                          U32(cmd + 0x18), U32(cmd + 0x1C), U32(cmd + 0x20), U32(cmd + 0x24)});
+  c.ebp = ebp;
+  c.esi = esi;
+  c.eax = cmd + 0x48;
+  c.esp = e + 4;
+}
+
+// A flare (EDI: its shader +0x18, x and y +0x28 as integers, colour
+// +0x34 times tr.identityLight and alpha +0x24, size +0x40 x 0.0015625 x
+// the view's height 0x1549958): a quad about the point at the depth of the
+// cvar 0x15347E4, drawn at once (RB_EndSurface as the tail call); counted
+// in 0x1549B30. No overflow check.
+void f_004CF470(Ctx& c) {
+  const uint32_t e = c.esp, f = c.edi, ebx = c.ebx, ebp = c.ebp, esi = c.esi;
+  Put(0x1549B30, U32(0x1549B30) + 1);
+  const St r = St(Ld(kIdentityLight)) * Ld(f + 0x34);
+  const F32 g = Fst(St(Ld(kIdentityLight)) * Ld(f + 0x38)), b = Fst(St(Ld(kIdentityLight)) * Ld(f + 0x3C));
+  const uint32_t col = uint32_t(Ftol(r * Ld(0x55B5FC)) & 0xFF) |
+                       uint32_t(Ftol(St(g) * Ld(0x55B5FC)) & 0xFF) << 8 |
+                       uint32_t(Ftol(St(b) * Ld(0x55B5FC)) & 0xFF) << 16 |
+                       uint32_t(Ftol(St(Ld(f + 0x24)) * Ld(0x55B5FC)) & 0xFF) << 24;
+  const F32 half = Fst(St(Ld(f + 0x40)) * Ld(0x55B754) * FromInt(I32(0x1549958)));
+  Begin2D(c, U32(f + 0x18), kWorldEntity, 0, e - 0x20, {0, 0x4CF52C, 0x4CF53D, 0x4CF54D}, &Ctx::ebx);
+  const uint32_t v = U32(kTessVerts), xyz = kTessXyz + 4 * (U32(kXyzStride) * v);
+  const St x = FromInt(I32(f + 0x28)), y = FromInt(I32(f + 0x2C));
+  const uint32_t z = U32(U32(0x15347E4) + 0x1C);
+  const uint32_t xs[4] = {Fst(x - half).bits, Fst(x - half).bits, Fst(x + half).bits, Fst(x + half).bits};
+  const uint32_t ys[4] = {Fst(y - half).bits, Fst(y + half).bits, Fst(y + half).bits, Fst(y - half).bits};
+  static constexpr uint32_t kSt[8] = {0, 0, 0, 0x3F800000, 0x3F800000, 0x3F800000, 0x3F800000, 0};
+  for (uint32_t k = 0; k < 4; k++) {
+    Put(xyz + 0xC * k, xs[k]);
+    Put(xyz + 0xC * k + 4, ys[k]);
+    Put(xyz + 0xC * k + 8, z);
+    Put(kTessTexCoords + 8 * v + 8 * k, kSt[2 * k]);
+    Put(kTessTexCoords + 8 * v + 8 * k + 4, kSt[2 * k + 1]);
+    Put(kVertColors + 4 * (v + k), col);
+  }
+  static constexpr uint32_t kIdx[6] = {0, 1, 2, 0, 2, 3};
+  for (uint32_t k = 0; k < 6; k++) {
+    Wr<uint16_t>(g_guest_base, kTessIndexes + 2 * U32(kTessIndexCount), uint16_t(U32(kTessVerts) + kIdx[k]));
+    Put(kTessIndexCount, U32(kTessIndexCount) + 1);
+  }
+  Put(kTessVerts, U32(kTessVerts) + 4);
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.esp = e;
+  f_004F7D00(c);
+}
+
+// RB_DrawSurfs (EBX the command; EAX the next): what the tessellator holds
+// drawn, the command's refdef (+4, 0x62 dwords) and view (+0x18C, 0x98
+// dwords) copied in, then the draw surface loop 0x4CC670 (EAX the
+// surfaces +0x3F0; their count +0x3EC on the stack), ESI and EDI left past
+// the copies.
+void f_004CE290(Ctx& c) {
+  const uint32_t e = c.esp, cmd = c.ebx, esi = c.esi, edi = c.edi;
+  c.esp = e - 0xC;
+  if (U32(kTessIndexCount)) Call(c, f_004F7D00, 0x4CE2A1);
+  for (uint32_t i = 0; i < 0x62; i++) Put(0x15496A0 + 4 * i, U32(cmd + 4 + 4 * i));
+  for (uint32_t i = 0; i < 0x98; i++) Put(0x1549828 + 4 * i, U32(cmd + 0x18C + 4 * i));
+  c.esi = cmd + 0x3EC;
+  c.edi = 0x1549A88;
+  c.ecx = 0;
+  Push(c, U32(cmd + 0x3EC));
+  c.eax = U32(cmd + 0x3F0);
+  Call(c, f_004CC670, 0x4CE2D4);
+  c.esi = esi;
+  c.edi = edi;
+  c.eax = cmd + 0x3F4;
+  c.esp = e + 4;
+}
+
+// RB_DrawBuffer (ESI the command; EAX the next): glDrawBuffer of +4, and
+// with r_clear (0x15344EC) the colour and depth cleared to (identityLight,
+// 0, identityLight / 2).
+void f_004CE2F0(Ctx& c) {
+  const uint32_t e = c.esp, cmd = c.esi;
+  Push(c, U32(cmd + 4));
+  CallPtr(c, kglDrawBuffer, 0x4CE2F4);
+  if (CvarInt(0x15344EC)) {
+    Push(c, 0x3F800000);
+    Push(c, Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits);
+    Push(c, 0);
+    Push(c, U32(kIdentityLight));
+    CallPtr(c, kglClearColor, 0x4CE325);
+    Push(c, 0x4100);
+    CallPtr(c, kglClear, 0x4CE330);
+  }
+  c.eax = cmd + 8;
+  c.esp = e + 4;
+}
+
+// RB_ShowImages: the screen cleared and copied to 0x1535AD0, then each of
+// the images (0x153A520, 0x153A51C of them) not +0x68 as the stage image
+// of the shader 0x1535B60 in a cell of a 32 x 24 grid (by r_showimages
+// 0x153439C 2 scaled by its upload size / 1024), drawn at once; the time
+// it took printed.
+void f_004CE340(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  c.esp = e - 0xC;
+  if (!U32(kIn2D)) Call(c, f_004CCC10, 0x4CE351);
+  c.esp = e - 0x14;
+  Push(c, 0x4000);
+  CallPtr(c, kglClear, 0x4CE358);
+  CallPtr(c, kglFinish, 0x4CE35E);
+  CallPtr(c, kMilliseconds, 0x4CE364);
+  const uint32_t start = c.eax;
+  c.esi = U32(0x1535AD0);
+  Call(c, f_004CB3B0, 0x4CE379);
+  for (uint32_t v : {U32(kHeight), U32(kWidth), 0u, 0u, 0u, 0u, 0u, 0xDE1u}) Push(c, v);
+  CallPtr(c, kglCopyTexSubImage2D, 0x4CE395);
+  c.esi = 0;
+  if (I32(0x153A51C) > 0) {
+    c.esp = e - 0x1C;
+    c.edi = 3;
+    c.ebx = 2;
+    c.ebp = 1;
+    for (int32_t i = 0; i < I32(0x153A51C); i++, c.esi++) {
+      const uint32_t image = U32(0x153A520 + 4 * uint32_t(i));
+      if (U32(image + 0x68)) continue;
+      Put(U32(U32(0x1535B60) + 0x154) + 4, image);
+      Push(c, 3);
+      c.ecx = U32(0x1535B60);
+      Call(c, f_004F4AB0, 0x4CE3ED);
+      c.esp += 4;
+      St w = FromInt(I32(kWidth)) * Ld(0x55B5C0), h = FromInt(I32(kHeight)) * Ld(0x55B810);
+      const F32 x = Fst(FromInt(i % 32) * w);
+      const St y = FromInt(i / 32) * h;
+      if (CvarInt(0x153439C) == 2) {
+        const uint32_t im = U32(0x153A520 + 4 * uint32_t(i));
+        w = w * FromInt(U16(im + 0x44)) * Ld(0x55B788);
+        h = h * FromInt(U16(im + 0x46)) * Ld(0x55B788);
+      }
+      const F32 xr = Fst(St(x) + w), yb = Fst(y + h);
+      Quad2DXy(kTessXyz, {x.bits, Fst(y).bits, xr.bits, Fst(y).bits, xr.bits, yb.bits, x.bits, yb.bits});
+      Quad2DSt(0, {0, 0, 0x3F800000, 0, 0x3F800000, 0x3F800000, 0, 0x3F800000});
+      static constexpr uint16_t kIdx[6] = {0, 1, 3, 3, 1, 2};
+      for (uint32_t k = 0; k < 6; k++) Wr<uint16_t>(g_guest_base, kTessIndexes + 2 * k, kIdx[k]);
+      Put(kTessIndexCount, 6u);
+      Put(kTessVerts, 4u);
+      Call(c, f_004F7D00, 0x4CE57D);
+    }
+    c.esp = e - 0x14;
+    c.ebx = ebx;
+    c.ebp = ebp;
+  }
+  CallPtr(c, kglFinish, 0x4CE58D);
+  CallPtr(c, kMilliseconds, 0x4CE593);
+  Push(c, c.eax - start);
+  Push(c, 0x542F70);
+  Push(c, 0);
+  CallPtr(c, kPrintf, 0x4CE5A5);
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The screen into the texture 0x1535AD0 (the command on the stack; EAX
+// the next): what the tessellator holds (by its vertices) drawn, the
+// screen copied, its time (0x1535ADC) and the part of the texture it
+// fills (0x1535AE0, 0x1535AE4: the screen over the texture's size).
+void f_004CE5C0(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi;
+  if (!U32(kIn2D)) Call(c, f_004CCC10, 0x4CE5CE);
+  if (U32(kTessVerts)) Call(c, f_004F7D00, 0x4CE5DC);
+  c.esp = e - 4;
+  Call(c, f_004F4090, 0x4CE5E2);
+  c.esi = U32(0x1535AD0);
+  Call(c, f_004CB3B0, 0x4CE5ED);
+  for (uint32_t v : {U32(kHeight), U32(kWidth), 0u, 0u, 0u, 0u, 0u, 0xDE1u}) Push(c, v);
+  CallPtr(c, kglCopyTexSubImage2D, 0x4CE609);
+  Put(0x1535ADC, U32(0x15496E8));
+  Put(0x1535AE0, Fst(FromInt(I32(kWidth)) / FromInt(I32(0x1535AD4))));
+  Put(0x1535AE4, Fst(FromInt(I32(kHeight)) / FromInt(I32(0x1535AD8))));
+  c.eax = Arg(c, e, 1) + 4;
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// The screen's fade (ESI the command: its duration +4 in ms; EAX the
+// next): until the duration has passed since the copy (0x1535ADC), the
+// copied screen (shader 0x1535AF0) over all of it, white with alpha
+// pow(0.01, elapsed / duration) (the CRT's 0x52E2D0), at most 0.99, x 255
+// plus 2^-30 by FISTP.
+void f_004CE650(Ctx& c) {
+  const uint32_t e = c.esp, cmd = c.esi, ebx = c.ebx;
+  c.esp = e - 0x1C;
+  if (!U32(kIn2D)) Call(c, f_004CCC10, 0x4CE662);
+  const int32_t elapsed = I32(0x15496E8) - I32(0x1535ADC), dur = I32(cmd + 4);
+  if (elapsed < dur) {
+    x87::LoadF64(c.fpu, U32(0x55B820) | uint64_t(U32(0x55B824)) << 32);
+    x87::LoadF64(c.fpu, std::bit_cast<uint64_t>((FromInt(elapsed) / FromInt(dur)).v));
+    Call(c, f_0052E2D0, 0x4CE695);
+    St a = PopSt0(c);
+    if (a > Ld(0x55B78C)) a = Ld(0x55B78C);
+    const F32 a255 = Fst(a * Ld(0x55B5FC));
+    const uint32_t col = e - 0x14;
+    Put(col, 0x00FFFFFFu | uint32_t(Fistp(St(a255) + St(0x1p-30))) << 24);
+    c.ebx = U32(0x1535AF0);
+    for (uint32_t v : {col, 0u, U32(0x1535AE0), U32(0x1535AE4), 0u,
+                       Fst(FromInt(I32(kHeight))).bits, Fst(FromInt(I32(kWidth))).bits, 0u, 0u})
+      Push(c, v);
+    Call(c, f_004CD300, 0x4CE71F);
+  }
+  c.ebx = ebx;
+  c.eax = cmd + 8;
+  c.esp = e + 4;
+}
+
+// RB_SwapBuffers (the command on the stack; EAX the next): what the
+// tessellator holds drawn, the two hooks at 0x1426E20/0x1426E24 when
+// 0x1439370 (each with its pointer and value), 0x4AD5C0, 0x40F5E0(0),
+// r_showimages (0x153439C) RB_ShowImages; r_measureOverdraw (0x15343EC):
+// at 2 or more the stencil read back and summed into 0x1549B1C, other
+// than 2 the overdraw shown, 14 stencil levels (0x564650..) each in its
+// colour (0x5645A8..) over the screen through the immediate-mode batch;
+// glFinish unless 0x1534628, the log's banner, then GLimp_EndFrame
+// (0x4FFB40) or, with 0x1534710, glFlush and 0x1549B4C; out of 2D.
+void f_004CE730(Ctx& c) {
+  const uint32_t e = c.esp;
+  c.esp = e - 4;
+  if (U32(kTessIndexCount)) Call(c, f_004F7D00, 0x4CE73F);
+  if (U32(0x1439370)) {
+    for (uint32_t k = 0; k < 2; k++) {
+      const uint32_t p = U32(0x1439458 + 0x10 * k);
+      if (!p) continue;
+      Push(c, U32(0x1439454 + 0x10 * k));
+      Push(c, p);
+      CallPtr(c, 0x1426E20 + 4 * k, k ? 0x4CE773 : 0x4CE759);
+      c.esp += 8;
+    }
+  }
+  Call(c, f_004AD5C0, 0x4CE781);
+  Push(c, 0);
+  Call(c, f_0040F5E0, 0x4CE788);
+  c.esp += 4;
+  if (CvarInt(0x153439C)) Call(c, f_004CE340, 0x4CE79C);
+  if (CvarInt(0x15343EC)) {
+    const uint32_t ebx = c.ebx, esi = c.esi, edi = c.edi;
+    c.esp = e - 0x10;
+    c.ebx = 2;  // as the original holds them (the sum in EDI)
+    c.edi = 0;
+    if (I32(U32(0x15343EC) + 0x20) >= 2) {
+      Push(c, U32(kHeight) * U32(kWidth));
+      CallPtr(c, kTempAlloc, 0x4CE7CD);
+      c.esp += 4;
+      const uint32_t buf = c.esi = c.eax;
+      for (uint32_t v : {buf, 0x1401u, 0x1901u, U32(kHeight), U32(kWidth), 0u, 0u}) Push(c, v);
+      CallPtr(c, kglReadPixels, 0x4CE7F2);
+      uint32_t sum = 0;
+      const int32_t n = int32_t(U32(kHeight) * U32(kWidth));
+      for (int32_t i = 0; i < n; i++) sum += U8(buf + uint32_t(i));
+      c.edi = sum;
+      Put(0x1549B1C, Fst(FromInt(int32_t(sum)) + Ld(0x1549B1C)));
+      Push(c, buf);
+      CallPtr(c, kTempFree, 0x4CE830);
+      c.esp += 4;
+    }
+    if (CvarInt(0x15343EC) != 2) {
+      Call(c, f_004CCC10, 0x4CE84C);
+      Call(c, f_004ADC20, 0x4CE851);
+      c.eax = 0x10012;
+      Call(c, f_004CB710, 0x4CE85B);
+      c.esi = U32(0x1535AC4);
+      Call(c, f_004CB3B0, 0x4CE866);
+      if (U32(kCullType) != 2) {
+        Disable(c, 0xB44, 0x4CE873);
+        Put(kCullType, 2u);
+      }
+      CallPtr(c, kglLoadIdentity, 0x4CE87F);
+      for (int k = 0; k < 3; k++) Push(c, 0x1E00);
+      CallPtr(c, kglStencilOp, 0x4CE894);
+      for (uint32_t ref = 0x564684, rgb = 0x56464C; int32_t(rgb) >= 0x5645B0; ref -= 4, rgb -= 0xC) {
+        Push(c, 0xFFFFFFFF);
+        Push(c, U32(ref));
+        Push(c, 0x206);
+        CallPtr(c, kglStencilFunc, 0x4CE8B0);
+        for (uint32_t k = 0; k < 3; k++)
+          Wr<uint8_t>(g_guest_base, 0x15495D8 + k, uint8_t(Ftol(St(Ld(rgb - 8 + 4 * k)) * Ld(0x55B5FC))));
+        Wr<uint8_t>(g_guest_base, 0x15495DBu, 0xFF);
+        Put(0x15495C8, 9u);
+        const uint32_t w = Fst(FromInt(I32(kWidth))).bits, h = Fst(FromInt(I32(kHeight))).bits;
+        static constexpr uint32_t kRet[4] = {0x4CE909, 0x4CE91F, 0x4CE93F, 0x4CE955};
+        const uint32_t xy[4][2] = {{0, 0}, {w, 0}, {w, h}, {0, h}};
+        for (uint32_t k = 0; k < 4; k++) {
+          Push(c, 0);
+          Push(c, xy[k][1]);
+          Push(c, xy[k][0]);
+          Call(c, f_004ADEC0, kRet[k]);
+          c.esp += 0xC;
+        }
+        Push(c, U32(0x15495E8));
+        Push(c, 0);
+        Push(c, U32(0x15495C8));
+        CallPtr(c, kglDrawArrays, 0x4CE967);
+        Put(0x15495E8, 0u);
+        Put(0x15495C8, 0u);
+      }
+      Put(0x15495C4, 0u);
+      if (!U32(kIn2D) && !(U32(kStateBits) & 0x200000) && CvarInt(0x15347F4)) {
+        const uint32_t fog = (U8(0x15496EC) & 8) ? U32(0x1535890) : U32(0x13F9CF8);
+        if (fog) {
+          Enable(c, 0xB60, 0x4CE9D0);
+          Put(kStateBits, U32(kStateBits) | 0x200000);
+        }
+      }
+      for (uint32_t v : {kTessXyz, 0u, 0x1406u, 3u}) Push(c, v);
+      CallPtr(c, kglVertexPointer, 0x4CE9EA);
+    }
+    c.ebx = ebx;
+    c.esi = esi;
+    c.edi = edi;
+    c.esp = e - 4;
+  }
+  if (!U32(0x1534628)) CallPtr(c, kglFinish, 0x4CE9FC);
+  if (U32(0x1830CE4)) {
+    Push(c, 0x542F38);
+    Push(c, 0x55B2B4);
+    Push(c, U32(0x1830CE4));
+    Call(c, f_0051D45A, 0x4CEA1B);
+    c.esp += 0xC;
+  }
+  if (!CvarInt(0x1534710)) {
+    Call(c, f_004FFB40, 0x4CEA30);
+  } else {
+    CallPtr(c, kglFlush, 0x4CEA43);
+    Put(0x1549B4C, 1u);
+  }
+  Put(kIn2D, 0u);
+  c.eax = Arg(c, e, 1) + 4;
   c.esp = e + 4;
 }
 
