@@ -18,7 +18,9 @@
 // register combiners, the vertex program, TableForFunc, the noise, the
 // water texture and the debug draws' DXF file; and the 2D commands; the
 // sky, the sun and its flare, adding a flare, a portal surface's tests
-// (with the transforms and orientations they use) and the debug text.
+// (with the transforms and orientations they use) and the debug text;
+// the draw surface loop with the view's begin, the entities' lights and
+// dlights, the command loop and the flares' render.
 // Replacements of lifted functions named with `replace` in
 // manifest/CoDSP.manifest; FINDINGS.md "Renderer back end". Names and
 // evidence are in the Ghidra plate comments.
@@ -102,6 +104,7 @@ void f_004D5520(Ctx& c);  // loads a font (name, size, its memory, ...)
 void f_00429650(Ctx& c);  // a plane through three points (EDX out; EDI, ECX, EAX)
 void f_004DB660(Ctx& c);  // ClipSkyPolygon (count, points, stage; src/render.cpp)
 void f_004C94D0(Ctx& c);  // the 4x4 matrix product (EAX, ECX into EDX; src/render.cpp)
+void f_004CDCC0(Ctx& c);  // a text command (EAX its string; src/screen2d.cpp)
 // The sky, the sun and its flare, a portal's test.
 void f_004DD600(Ctx& c);
 void f_004DD2D0(Ctx& c);
@@ -6476,9 +6479,9 @@ void f_004CF470(Ctx& c) {
 
 // RB_DrawSurfs (EBX the command; EAX the next): what the tessellator holds
 // drawn, the command's refdef (+4, 0x62 dwords) and view (+0x18C, 0x98
-// dwords) copied in, then the draw surface loop 0x4CC670 (EAX the
-// surfaces +0x3F0; their count +0x3EC on the stack), ESI and EDI left past
-// the copies.
+// dwords) copied in, then the draw surface loop 0x4CC670 (EAX the count
+// +0x3F0; the surfaces +0x3EC on the stack), ESI and EDI left past the
+// copies.
 void f_004CE290(Ctx& c) {
   const uint32_t e = c.esp, cmd = c.ebx, esi = c.esi, edi = c.edi;
   c.esp = e - 0xC;
@@ -8000,6 +8003,1068 @@ void f_004ACF50(Ctx& c) {
   for (uint32_t v : {0x3FF00000u, 0u, 0u, 0u}) Push(c, v);
   CallPtr(c, kglDepthRange, 0x4AD46B);
   done();
+}
+
+// ---- the draw surface loop, the command loop, the flares' render ----------
+
+namespace {
+
+constexpr uint32_t kglPushMatrix = 0x1534DA0, kglPopMatrix = 0x15353A8, kglLightfv = 0x15351EC,
+                   kglLightf = 0x1535534, kglLightModelfv = 0x1534BE0;
+// The view's orientation (tr.viewParms.world) and the one the entities'
+// surfaces are drawn in (tr.or), 0x7C bytes each; tr.or's model matrix.
+constexpr uint32_t kViewOr = 0x15498A4, kOr = 0x1549A88, kOrMatrix = 0x1549AC4;
+// The flares (a list by 0x154B0EC, the free ones by 0x154D700) and the
+// GL_NORMALIZE or GL_RESCALE_NORMAL that is on.
+constexpr uint32_t kFlares = 0x154B0EC, kFreeFlares = 0x154D700, kNormalize = 0x153466C;
+
+void CopyView() {
+  for (uint32_t k = 0; k < 0x7C; k += 4) Put(kOr + k, U32(kViewOr + k));
+}
+
+void PushDouble(Ctx& c, St v) {
+  const uint64_t d = std::bit_cast<uint64_t>(v.v);
+  Push(c, uint32_t(d >> 32));
+  Push(c, uint32_t(d));
+}
+
+// glDepthRange(0, far; far's high dword) from the call at va.
+void DepthRange(Ctx& c, uint32_t far_hi, uint32_t far_lo, uint32_t va) {
+  for (uint32_t v : {far_hi, far_lo, 0u, 0u}) Push(c, v);
+  CallPtr(c, kglDepthRange, va);
+}
+
+// glMatrixMode(GL_PROJECTION), glLoadMatrixf(m), glMatrixMode(GL_MODELVIEW)
+// from the calls at va (and the next two, 0xB and 0x16 on).
+void LoadProjection(Ctx& c, uint32_t m, uint32_t va) {
+  Push(c, 0x1701);
+  CallPtr(c, kglMatrixMode, va);
+  Push(c, m);
+  CallPtr(c, kglLoadMatrixf, va + 0xB);
+  Push(c, 0x1700);
+  CallPtr(c, kglMatrixMode, va + 0x16);
+}
+
+// GL_NORMALIZE or GL_RESCALE_NORMAL (cap; 0 none) on in place of the one
+// on (glDisable and glEnable from the calls at va_off and va_on).
+void Normalize(Ctx& c, uint32_t cap, uint32_t va_off, uint32_t va_on) {
+  const uint32_t old = U32(kNormalize);
+  if (cap == old) return;
+  if (old) Disable(c, old, va_off);
+  Put(kNormalize, cap);
+  if (cap) Enable(c, cap, va_on);
+}
+
+// The surface of a draw surface (its address at it) through the surface
+// table, from the call at va (7 bytes).
+void DrawSurface(Ctx& c, uint32_t it, uint32_t va) {
+  const uint32_t surf = U32(it);
+  Push(c, surf);
+  Push(c, va + 7);
+  Dispatch(c, U32(0x564270 + 4 * U32(surf)), va);
+}
+
+}  // namespace
+
+// Eases a value toward its target (stack: the value, the target, the
+// times to rise and to fall by 1 in ms, the ms elapsed): by the elapsed
+// time over the rise or fall time, not past the target (at once with a
+// time of 0 or less); the value as it moved also into the first
+// argument's slot; ST0 the result.
+void f_004C8CE0(Ctx& c) {
+  const uint32_t e = c.esp;
+  const F32 a = Ld(e + 4), b = Ld(e + 8);
+  const int32_t up = I32(e + 0xC), down = I32(e + 0x10);
+  F32 r = b;
+  if (St(a) < b) {
+    if (up > 0) {
+      const St t = FromInt(I32(e + 0x14)) / FromInt(up) + a;
+      Put(e + 4, Fst(t));
+      if (!(t > b)) r = Ld(e + 4);
+    }
+  } else if (!(St(a) > b)) {
+    r = a;
+  } else if (down > 0) {
+    const St t = a - FromInt(I32(e + 0x14)) / FromInt(down);
+    Put(e + 4, Fst(t));
+    if (!(t < b)) r = Ld(e + 4);
+  }
+  x87::LoadF32(c.fpu, r.bits);
+  c.esp = e + 4;
+}
+
+// The batch's colour (stack: red, green, blue, alpha; x 255 through
+// _ftol2 into 0x15495D8-DB); EAX the alpha's.
+void f_004ADFE0(Ctx& c) {
+  const uint32_t e = c.esp;
+  for (uint32_t k = 0; k < 4; k++) {
+    c.eax = uint32_t(Ftol(St(Ld(e + 4 + 4 * k)) * Ld(0x55B5FC)));
+    Wr<uint8_t>(g_guest_base, 0x15495D8 + k, uint8_t(c.eax));
+  }
+  c.esp = e + 4;
+}
+
+// The sun's glare and blinding (ESI and EDI their outputs; stack: the sun
+// flare's visibility): the view's facing of the sun (0x1549834 .
+// 0x15364B0) between each one's low and high bounds (0 at or below, 1 at
+// or above), times the visibility, eased by 0x4C8CE0 by the ms since the
+// last call (0x11CE830; 10 the first time) into its current value
+// (0x11CE828, 0x11CE82C), scaled (0 for a scale of 0 or less).
+void f_004DD480(Ctx& c) {
+  const uint32_t e = c.esp, s = e - 4, out1 = c.esi, out2 = c.edi;
+  const uint32_t now = U32(0x15496E8), dt = U32(0x11CE830) ? now - U32(0x11CE830) : 10;
+  Put(0x11CE830, now);
+  const F32 dot = Fst(Mul(0x154983C, 0x15364B8) + Mul(0x1549838, 0x15364B4) + Mul(0x1549834, 0x15364B0));
+  Put(s, dot);
+  auto part = [&](uint32_t p, uint32_t cur, uint32_t out, uint32_t ret) {
+    const uint32_t scale = p + 8, lo = p, hi = p + 4, up = p + 0xC, down = p + 0x10;
+    if (St(Ld(scale)) <= 0.0f) {
+      Put(out, 0u);
+      return;
+    }
+    St f = St(Ld(0x55B584));
+    if (!(St(dot) <= Ld(lo))) f = St(dot) >= Ld(hi) ? St(Ld(0x55B580)) : (St(dot) - Ld(lo)) / (St(Ld(hi)) - Ld(lo));
+    c.esp = s;
+    Push(c, dt);
+    Push(c, U32(down));
+    Push(c, U32(up));
+    Push(c, Fst(f * Ld(e + 4)).bits);
+    Push(c, U32(cur));
+    Call(c, f_004C8CE0, ret);
+    const St r = PopSt0(c);
+    Put(cur, Fst(r));
+    Put(out, Fst(r * Ld(scale)));
+  };
+  part(0x11CE800, 0x11CE828, out1, 0x4DD553);
+  part(0x11CE814, 0x11CE82C, out2, 0x4DD5EB);
+  c.esp = e + 4;
+}
+
+// A flare's visibility (stack: the flare): off the view by its radius
+// (+0x44) about its window point (+0x28, +0x2C) it is 1 for +0x1C bit 0,
+// else 0; on it, the share of the depths (glReadPixels into the stack, a
+// square of 2r + 1 within 1-65, cut to the view) at or beyond its depth
+// (+0x30); the sun's (id -1) into 0x13F9CF4; its intensity
+// (+0x24) eased toward it by 0x4C8CE0 with its rise and fall (+0x10,
+// +0x14) and the ms since its time (+0x20), which becomes now. Counted in
+// 0x1549B2C. __chkstk's probes are left out.
+void f_004CF2D0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, fl = Arg(c, e, 1), s = e - 0x4214;
+  const uint32_t buf = e - 0x4204, vis = e - 0x420C, area = e - 0x4208;
+  Put(0x1549B2C, U32(0x1549B2C) + 1);
+  const uint32_t r = U32(fl + 0x44), x = U32(fl + 0x28), y = U32(fl + 0x2C);
+  const int32_t w = I32(0x1549958), h = I32(0x154995C);
+  if (int32_t(x + r) < 0 || int32_t(x - r) >= w || int32_t(y + r) < 0 || int32_t(y - r) >= h) {
+    Put(vis, U8(fl + 0x1C) & 1 ? 0x3F800000u : 0u);
+  } else {
+    Put(0x1534628, 0u);
+    int32_t n = int32_t(2 * r + 1);
+    n = n > 0x41 ? 0x41 : n < 1 ? 1 : n;
+    int32_t x0 = int32_t(x) - n / 2, y0 = int32_t(y) - n / 2, nx = n, ny = n;
+    Put(area, uint32_t(n * n));
+    if (x0 < 0) {
+      nx = x0 + n;
+      x0 = 0;
+    } else if (n > w - x0) {
+      nx = w - x0;
+    }
+    if (y0 < 0) {
+      ny = y0 + n;
+      y0 = 0;
+    } else if (n > h - y0) {
+      ny = h - y0;
+    }
+    uint32_t count = 0;
+    if (nx > 0 && ny > 0) {
+      c.esp = s - 8;
+      for (uint32_t v : {buf, 0x1406u, 0x1902u, uint32_t(ny), uint32_t(nx), uint32_t(y0), uint32_t(x0)})
+        Push(c, v);
+      c.ebx = uint32_t(ny);
+      c.edi = uint32_t(nx);
+      c.esi = uint32_t(y0);
+      c.edx = uint32_t(x0);
+      CallPtr(c, kglReadPixels, 0x4CF3C0);
+      const St depth = Ld(fl + 0x30);
+      for (int32_t i = 0; i < nx * ny; i++)
+        if (depth <= Ld(buf + 4 * i)) count++;
+    }
+    Put(vis, Fst(FromInt(int32_t(count)) / FromInt(I32(area))));
+  }
+  if (I32(fl + 0x48) == -1) Put(0x13F9CF4, U32(vis));
+  c.esp = s;
+  Push(c, U32(0x15496E8) - U32(fl + 0x20));
+  Push(c, U32(fl + 0x14));
+  Push(c, U32(fl + 0x10));
+  Push(c, U32(vis));
+  Push(c, U32(fl + 0x24));
+  Call(c, f_004C8CE0, 0x4CF450);
+  Put(fl + 0x24, Fst(PopSt0(c)));
+  Put(fl + 0x20, U32(0x15496E8));
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+namespace {
+
+// A flare's description on the stack at f, as 0x4CEC60 takes it, with
+// what the two flare sources share: alpha 1, size 0, the fade times in
+// ms (r_flareFade 0x1534544 and 0x15346B8's, to the nearest by FISTP
+// after the nudge) and 1.
+void FlareTimes(uint32_t f) {
+  auto ms = [](uint32_t p) { return uint32_t(Nudged(Fst(St(Ld(U32(p) + 0x1C)) * Ld(0x55B658)))); };
+  Put(f + 0x24, 0x3F800000u);
+  Put(f + 0x2C, 0u);
+  Put(f + 0x30, ms(0x1534544));
+  Put(f + 0x34, ms(0x15346B8));
+  Put(f + 0x38, 1u);
+}
+
+}  // namespace
+
+// The dlights' flares (r_flares 2 or more): each of the view's dlights
+// (0x15497FC of 0x88 bytes at 0x1549804) into 0x4CEC60 with the shader
+// 0x1535AF8, ids from 0x800, its point (+0x44, four floats) and colour
+// (+4), the cvar 0x153444C's value.
+void f_004CEF90(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi, s = e - 0x5C, f = e - 0x3C;
+  if (I32(U32(0x15343AC) + 0x20) < 2) {
+    c.esp = e + 4;
+    return;
+  }
+  Put(f + 4, U32(0x1535AF8));
+  Put(f, 0x800u);
+  Put(f + 0x28, U32(U32(0x153444C) + 0x1C));
+  FlareTimes(f);
+  const uint32_t list = U32(0x1549804);
+  for (int32_t i = 0; i < I32(0x15497FC); i++) {
+    const uint32_t d = list + 0x88 * uint32_t(i);
+    for (uint32_t k = 0; k < 0x10; k += 4) Put(f + 8 + k, U32(d + 0x44 + k));
+    for (uint32_t k = 0; k < 0xC; k += 4) Put(f + 0x18 + k, U32(d + 4 + k));
+    c.esi = d + 0x48;
+    c.edi = uint32_t(i);
+    c.esp = s;
+    Push(c, 0);
+    Push(c, f);
+    Call(c, f_004CEC60, 0x4CF09C);
+    Put(f, U32(f) + 1);
+  }
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The world's flares (r_flares 1 or 3, with a world): each of 0x1549808
+// (0x30 bytes at 0x154980C: point, colour, intensity +0x24, id +0x28,
+// +0x2C bit 1 for the shader 0x1535AFC over 0x1535AF8) into 0x4CEC60 with
+// w 1, the intensity times the cvar 0x153444C.
+void f_004CF0C0(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi, s = e - 0x5C, f = e - 0x3C;
+  const int32_t mode = I32(U32(0x15343AC) + 0x20);
+  if ((mode != 1 && mode != 3) || !U32(0x1535A34)) {
+    c.esp = e + 4;
+    return;
+  }
+  Put(f + 0x14, 0x3F800000u);
+  FlareTimes(f);
+  const uint32_t list = U32(0x154980C);
+  for (int32_t i = 0; i < I32(0x1549808); i++) {
+    const uint32_t p = list + 0x30 * uint32_t(i);
+    Put(f, U32(p + 0x28));
+    Put(f + 4, U8(p + 0x2C) & 2 ? U32(0x1535AFC) : U32(0x1535AF8));
+    for (uint32_t k = 0; k < 0xC; k += 4) Put(f + 8 + k, U32(p + k));
+    for (uint32_t k = 0; k < 0xC; k += 4) Put(f + 0x18 + k, U32(p + 0xC + k));
+    Put(f + 0x28, Fst(St(Ld(U32(0x153444C) + 0x1C)) * Ld(p + 0x24)));
+    c.esi = p;
+    c.edi = uint32_t(i);
+    c.esp = s;
+    Push(c, 0);
+    Push(c, f);
+    Call(c, f_004CEC60, 0x4CF1F7);
+  }
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The flares' render (with r_flares 0x15343AC): the dlights' and world's
+// flares added (0x4CEF90, 0x4CF0C0); each flare of an older frame
+// (+4 before 0x1549938) freed when faded out (+0x24 at or below 0), else
+// reset (+0x1C 0, +0x30 2); each of this view (+0xC the view id 0x1549934,
+// +8 the portal 0x154992C) tested by 0x4CF2D0, freed when its intensity is
+// 0; the sun's glare and blinding (0x4DD480). With any of the view's or
+// either of those: clip plane 0 off in a portal, both matrices pushed and
+// an orthographic one of the view (depths +-100000), a quad over the
+// view in the glare's grey and the blinding's alpha (GL_State 0x10062,
+// modulate, the image 0x1535AC4, through the batch) and each flare of the
+// view not faded out drawn (0x4CF470); the matrices popped, glPopMatrix
+// the tail call.
+void f_004CF730(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi, s = e - 0x1C;
+  const uint32_t blind = e - 0xC, glare = e - 8;
+  auto restore = [&] {
+    c.ebx = ebx;
+    c.ebp = ebp;
+    c.esi = esi;
+    c.edi = edi;
+  };
+  if (!CvarInt(0x15343AC)) {
+    c.esp = e + 4;
+    return;
+  }
+  c.esp = s;
+  c.ebx = 0;
+  Call(c, f_004CEF90, 0x4CF74E);
+  Call(c, f_004CF0C0, 0x4CF753);
+  Put(0x13F9CF4, 0u);
+  bool any = false;
+  c.ebp = 0;
+  uint32_t prev = kFlares;
+  auto unlink = [&](uint32_t fl) {
+    Put(prev, U32(fl));
+    Put(fl, U32(kFreeFlares));
+    Put(kFreeFlares, fl);
+  };
+  for (uint32_t fl = U32(prev); fl; fl = U32(prev)) {
+    if (I32(fl + 4) < I32(0x1549938)) {
+      if (Ld(fl + 0x24) <= 0.0f) {
+        unlink(fl);
+        continue;
+      }
+      Put(fl + 0x1C, 0u);
+      Put(fl + 0x30, 0x40000000u);
+    }
+    if (U32(fl + 0xC) == U32(0x1549934) && U32(fl + 8) == U32(0x154992C)) {
+      c.esi = fl;
+      c.edi = prev;
+      Push(c, fl);
+      Call(c, f_004CF2D0, 0x4CF7C4);
+      c.esp = s;
+      if (Ld(fl + 0x24) == 0.0f) {
+        unlink(fl);
+        continue;
+      }
+      any = true;
+      c.ebp = 1;
+    }
+    prev = fl;
+  }
+  Push(c, U32(0x13F9CF4));
+  c.esi = blind;
+  c.edi = glare;
+  Call(c, f_004DD480, 0x4CF7FC);
+  c.esp = s;
+  if (!any && Ld(blind) <= 0.0f && Ld(glare) <= 0.0f) {
+    restore();
+    c.esp = e + 4;
+    return;
+  }
+  if (U32(0x154992C)) Disable(c, 0x3000, 0x4CF836);
+  CallPtr(c, kglPushMatrix, 0x4CF83C);
+  CallPtr(c, kglLoadIdentity, 0x4CF842);
+  Push(c, 0x1701);
+  CallPtr(c, kglMatrixMode, 0x4CF84D);
+  CallPtr(c, kglPushMatrix, 0x4CF853);
+  CallPtr(c, kglLoadIdentity, 0x4CF859);
+  const int32_t x = I32(0x1549950), y = I32(0x1549954);
+  const int32_t x1 = int32_t(U32(0x1549958) + uint32_t(x)), y1 = int32_t(U32(0x154995C) + uint32_t(y));
+  for (uint32_t v : {0x40F869F0u, 0u, 0xC0F869F0u, 0u}) Push(c, v);
+  PushDouble(c, FromInt(y1));
+  PushDouble(c, FromInt(y));
+  PushDouble(c, FromInt(x1));
+  PushDouble(c, FromInt(x));
+  CallPtr(c, kglOrtho, 0x4CF8B3);
+  if (!(Ld(blind) == 0.0f) || !(Ld(glare) == 0.0f)) {
+    Call(c, f_004ADC20, 0x4CF8E4);
+    c.esi = U32(0x1535AC4);
+    Call(c, f_004CB3B0, 0x4CF8EF);
+    c.eax = 0x10062;
+    Call(c, f_004CB710, 0x4CF8F9);
+    const uint32_t env = kTexEnv + 4 * U32(kUnit);
+    if (U32(env) != 0x2100) {
+      Push(c, 0x2100);
+      Push(c, 0x2200);
+      Push(c, 0x2300);
+      Put(env, 0x2100u);
+      CallPtr(c, kglTexEnvi, 0x4CF920);
+    }
+    for (uint32_t v : {U32(blind), U32(glare), U32(glare), U32(glare)}) Push(c, v);
+    Call(c, f_004ADFE0, 0x4CF937);
+    c.esp = s;
+    Put(0x15495C8, 7u);
+    auto vertex = [&](int32_t vx, int32_t vy, uint32_t ret) {
+      Push(c, 0);
+      Push(c, Fst(FromInt(vy)).bits);
+      Push(c, Fst(FromInt(vx)).bits);
+      Call(c, f_004ADEC0, ret);
+      c.esp = s;
+    };
+    vertex(x, y, 0x4CF95E);
+    vertex(x, y1, 0x4CF98A);
+    vertex(x1, y1, 0x4CF9C6);
+    vertex(x1, y, 0x4CF9F2);
+    Push(c, U32(0x15495E8));
+    Push(c, 0);
+    Push(c, U32(0x15495C8));
+    CallPtr(c, kglDrawArrays, 0x4CFA04);
+    Put(0x15495E8, 0u);
+    Put(0x15495C8, 0u);
+    Put(0x15495C4, 0u);
+    Call(c, f_004C89D0, 0x4CFA21);
+    for (uint32_t v : {0x1630C40u, 0u, 0x1406u, 3u}) Push(c, v);
+    CallPtr(c, kglVertexPointer, 0x4CFA2E);
+  }
+  if (any)
+    for (uint32_t fl = U32(kFlares); fl; fl = U32(fl))
+      if (U32(fl + 0xC) == U32(0x1549934) && U32(fl + 8) == U32(0x154992C) && !(Ld(fl + 0x24) == 0.0f)) {
+        c.edi = fl;
+        Call(c, f_004CF470, 0x4CFA6D);
+      }
+  CallPtr(c, kglPopMatrix, 0x4CFA73);
+  Push(c, 0x1700);
+  CallPtr(c, kglMatrixMode, 0x4CFA7E);
+  restore();
+  c.esp = e;
+  Dispatch(c, U32(kglPopMatrix), 0x4CFA8B);
+}
+
+// The view's clear for the refdef's flag 4: a grey of the 2D time's low
+// byte / 255 (0x55B5E0), the colour buffer; 0x1549B38 set.
+void f_004CBF90(Ctx& c) {
+  const uint32_t e = c.esp;
+  const uint32_t v = Fst(FromInt(int32_t(U32(0x15496E8) & 0xFF)) * Ld(0x55B5E0)).bits;
+  c.esp = e - 4;
+  for (uint32_t a : {0x3F800000u, v, v, v}) Push(c, a);
+  CallPtr(c, kglClearColor, 0x4CBFB9);
+  Push(c, 0x4000);
+  CallPtr(c, kglClear, 0x4CBFC4);
+  Put(0x1549B38, 1u);
+  c.esp = e + 4;
+}
+
+// The view's projection (0x1549970) and its viewport and scissor (x, y,
+// width, height at 0x1549950).
+void f_004CBFE0(Ctx& c) {
+  const uint32_t e = c.esp;
+  LoadProjection(c, 0x1549970, 0x4CBFE5);
+  for (uint32_t ptr : {kglViewport, kglScissor}) {
+    for (uint32_t k = 12; k != 0xFFFFFFFCu; k -= 4) Push(c, U32(0x1549950 + k));
+    CallPtr(c, ptr, ptr == kglViewport ? 0x4CC01B : 0x4CC03C);
+  }
+  c.esp = e + 4;
+}
+
+// RB_BeginDrawingView: glFinish with r_finish 1 once (0x1534628 set, also
+// by r_finish 0), out of 2D, the view's projection and viewport, GL_State
+// 0x100, no entity lit (0x1534664); the buffers cleared: depth, stencil
+// with r_shadows 2 or 0x15343EC (but in a portal view without the
+// refdef's flag 8), and colour by the view, the fog or the fast sky
+// (0x15344E0 depth only); the refdef's flag 4 clears it again (0x4CBF90,
+// the tail call), else 0x1549B38 and 0x1549B48 cleared.
+void f_004CC050(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi, s = e - 0xC;
+  c.esp = e - 8;
+  c.edi = 0;
+  if (CvarInt(0x15346A8) == 1 && !U32(0x1534628)) {
+    CallPtr(c, kglFinish, 0x4CC069);
+    Put(0x1534628, 1u);
+  }
+  if (!CvarInt(0x15346A8)) Put(0x1534628, 1u);
+  c.esp = s;
+  Put(kIn2D, 0u);
+  Call(c, f_004CBFE0, 0x4CC09A);
+  c.eax = 0x100;
+  Call(c, f_004CB710, 0x4CC0A4);
+  Put(0x1534664, 0u);
+  const uint32_t flags = U8(0x15496EC), portal = U32(0x154D734);
+  const bool fog = I32(0x13F9CF8) > 0 && U32(0x1535950);
+  uint32_t bits = 0;
+  if (CvarInt(0x15343D8) == 2 || (CvarInt(0x15343EC) && (!portal || (flags & 8)))) bits = 0x400;
+  auto clear = [&](uint32_t colour, uint32_t va) {
+    for (uint32_t k = 12; k != 0xFFFFFFFCu; k -= 4) Push(c, U32(colour + k));
+    CallPtr(c, kglClearColor, va);
+  };
+  auto grey = [&] {
+    const uint32_t v = Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits;
+    for (uint32_t a : {0x3F800000u, v, v, v}) Push(c, a);
+    CallPtr(c, kglClearColor, 0x4CC1D7);
+  };
+  if (CvarInt(0x15344E0)) {
+    bits = 0x100;
+  } else {
+    bits |= 0x100;
+    if (portal && (flags & 8)) {
+      if (!CvarInt(0x153457C) && !(flags & 1)) {
+        if (U32(0x1535890) && U32(0x1535898)) {
+          clear(0x1535870, 0x4CC2C2);
+          bits |= 0x4000;
+        }
+      } else {
+        bits |= 0x4000;
+        if (U32(0x1535890))
+          clear(0x1535870, 0x4CC17B);
+        else if (fog)
+          clear(0x1535930, 0x4CC1B0);
+        else
+          grey();
+      }
+    } else if (portal) {
+      if (fog && ((flags & 0x20) ? U32(0x1535920) == 0x2601 : !CvarInt(0x15346A4))) {
+        bits |= 0x4000;
+        clear(0x1535930, 0x4CC243);
+      }
+    } else if (!(flags & 1)) {
+      if (CvarInt(0x153457C)) {
+        bits |= 0x4000;
+        if (U32(0x1535950))
+          clear(0x1535930, 0x4CC293);
+        else
+          grey();
+      } else if (U32(0x1535950) && U32(0x1535958)) {
+        clear(0x1535930, 0x4CC2C2);
+        bits |= 0x4000;
+      }
+    }
+  }
+  if (bits) {
+    Push(c, bits);
+    CallPtr(c, kglClear, 0x4CC2D3);
+  }
+  c.esi = esi;
+  c.edi = edi;
+  if (U8(0x15496EC) & 4) {
+    c.esp = e;
+    return f_004CBF90(c);
+  }
+  Put(0x1549B38, 0u);
+  Put(0x1549B48, 0u);
+  c.esp = e + 4;
+}
+
+// A GL light (EBX its index, ESI the light; stack: a scale): its ambient
+// (+0x14) and diffuse (+0x24) colours (times the scale but for 1, alpha
+// 1, from the stack), specular (+0x34), position (+0x44) and spot
+// direction (+0x54), spot exponent and cutoff (+0x6C, +0x70) and
+// attenuations (+0x60-0x68); enabled when not among those on (0x1534660).
+void f_004CC300(Ctx& c) {
+  const uint32_t e = c.esp, edi = c.edi, light = c.esi, cap = 0x4000 + c.ebx;
+  const uint32_t amb = e - 0x20, dif = e - 0x10;
+  c.esp = e - 0x24;
+  c.edi = cap;
+  auto fv = [&](uint32_t pname, uint32_t p, uint32_t va) {
+    Push(c, p);
+    Push(c, pname);
+    Push(c, cap);
+    CallPtr(c, kglLightfv, va);
+  };
+  auto f = [&](uint32_t pname, uint32_t v, uint32_t va) {
+    Push(c, v);
+    Push(c, pname);
+    Push(c, cap);
+    CallPtr(c, kglLightf, va);
+  };
+  if (Ld(e + 4) == 1.0f) {
+    fv(0x1200, light + 0x14, 0x4CC38F);
+    fv(0x1201, light + 0x24, 0x4CC39F);
+  } else {
+    const St scale = Ld(e + 4);
+    for (uint32_t k = 0; k < 12; k += 4) {
+      Put(amb + k, Fst(scale * Ld(light + 0x14 + k)));
+      Put(dif + k, Fst(scale * Ld(light + 0x24 + k)));
+    }
+    Put(amb + 0xC, 0x3F800000u);
+    Put(dif + 0xC, 0x3F800000u);
+    fv(0x1200, amb, 0x4CC378);
+    fv(0x1201, dif, 0x4CC39F);
+  }
+  fv(0x1202, light + 0x34, 0x4CC3AF);
+  fv(0x1203, light + 0x44, 0x4CC3BF);
+  fv(0x1204, light + 0x54, 0x4CC3CF);
+  f(0x1205, U32(light + 0x6C), 0x4CC3DF);
+  f(0x1206, U32(light + 0x70), 0x4CC3EF);
+  f(0x1207, U32(light + 0x60), 0x4CC3FF);
+  f(0x1208, U32(light + 0x64), 0x4CC40F);
+  f(0x1209, U32(light + 0x68), 0x4CC41F);
+  if (int32_t(cap - 0x4000) >= I32(0x1534660)) Enable(c, cap, 0x4CC42E);
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The entity's GL lights (for a shader lit by them, +0x54 & 0x18), unless
+// set for this entity and kind (0x1534664, 0x1534668; EAX 0): the
+// ambient light the world's (+0xF8 x the entity's +0x110 + 0xD8; with
+// the entity's flag 0x20 raised to at least the cvar 0x15344A0 x
+// identityLight by its luminance) as the light model's; the entity's
+// lights (+0xCC of them at +0xD0: the light and a scale) sorted by their
+// first dword, then address (8 at most, on the stack) through 0x4CC300 in
+// the view's world matrix (EAX 1), the rest of those on before off.
+void f_004CC440(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi, s = e - 0x4C;
+  const uint32_t amb = e - 0x2C, keys = e - 0x20, ent = U32(kEntity);
+  const uint32_t kind = U32(U32(kTessShader) + 0x54) & 0x18;
+  if (U32(0x1534664) == ent && U32(0x1534668) == kind) {
+    c.eax = 0;
+    c.esp = e + 4;
+    return;
+  }
+  Put(0x1534664, ent);
+  Put(0x1534668, kind);
+  const uint32_t w = U32(0x1535A34);
+  for (uint32_t k = 0; k < 12; k += 4)
+    Put(amb + k, Fst(St(Ld(w + 0xF8 + k)) * Ld(ent + 0x110) + Ld(w + 0xD8 + k)));
+  if (U8(ent + 4) & 0x20) {
+    const F32 lum = Fst(Mul(amb + 8, 0x55B7A8) + Mul(amb + 4, 0x55B7A4) + Mul(amb, 0x55B7A0));
+    const St t = St(Ld(kIdentityLight)) * Ld(U32(0x15344A0) + 0x1C);
+    if (lum == 0.0f) {
+      for (uint32_t k = 0; k < 12; k += 4) Put(amb + k, Fst(t));
+    } else if (St(lum) < t) {
+      const St f = t / lum;
+      Put(amb, Fst(St(Ld(amb)) * f));
+      Put(amb + 4, Fst(St(Ld(amb + 4)) * f));
+      Put(amb + 8, Fst(f * Ld(amb + 8)));
+    }
+  }
+  c.esp = s;
+  Push(c, amb);
+  Push(c, 0xB53);
+  CallPtr(c, kglLightModelfv, 0x4CC56A);
+  const uint32_t lit = U32(kEntity);
+  const int32_t n = I32(lit + 0xCC);
+  for (int32_t i = 0; i < n; i++) {
+    const uint32_t cur = lit + 0xD0 + 8 * uint32_t(i);
+    int32_t j = i;
+    if (j > 0)
+      for (const int32_t key = I32(U32(cur)); j > 0; j--) {
+        const uint32_t pe = U32(keys + 4 * uint32_t(j - 1)), pl = U32(pe);
+        if (key > I32(pl) || U32(cur) > pl) break;
+        Put(keys + 4 * uint32_t(j), pe);
+      }
+    Put(keys + 4 * uint32_t(j), cur);
+  }
+  uint32_t r = 0;
+  if (n) {
+    Push(c, 0x15360E8);
+    CallPtr(c, kglLoadMatrixf, 0x4CC5EA);
+    r = 1;
+  }
+  int32_t i = 0;
+  for (; i < I32(U32(kEntity) + 0xCC); i++) {
+    const uint32_t entry = U32(keys + 4 * uint32_t(i));
+    Push(c, U32(entry + 4));
+    c.esi = U32(entry);
+    c.ebx = uint32_t(i);
+    Call(c, f_004CC300, 0x4CC616);
+    c.esp = s;
+  }
+  for (; i < I32(0x1534660); i++) Disable(c, 0x4000 + uint32_t(i), 0x4CC638);
+  Put(0x1534660, U32(U32(kEntity) + 0xCC));
+  c.eax = r;
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The dlights (EAX of them, 0x88 bytes at EDX) into an orientation (ECX:
+// origin, three axes): each one's point (+0x44, less the origin) or for w
+// (+0x50) 0 its direction, on the axes into +0x78. Unrolled by four,
+// whose directions sum in other orders than the rest's.
+void f_004AA0F0(Ctx& c) {
+  const int32_t n = int32_t(c.eax);
+  const uint32_t o = c.ecx;
+  uint32_t d = c.edx;
+  auto point = [&](bool unrolled) {
+    if (!(Ld(d + 0x50) == 0.0f)) {
+      const St x = St(Ld(d + 0x44)) - Ld(o), y = St(Ld(d + 0x48)) - Ld(o + 4),
+               z = St(Ld(d + 0x4C)) - Ld(o + 8);
+      Put(d + 0x78, Fst(x * Ld(o + 0xC) + z * Ld(o + 0x14) + y * Ld(o + 0x10)));
+      Put(d + 0x7C, Fst(x * Ld(o + 0x18) + z * Ld(o + 0x20) + y * Ld(o + 0x1C)));
+      Put(d + 0x80, Fst(z * Ld(o + 0x2C) + y * Ld(o + 0x28) + x * Ld(o + 0x24)));
+    } else if (unrolled) {
+      Put(d + 0x78, Fst(Mul(d + 0x48, o + 0x10) + Mul(o + 0xC, d + 0x44) + Mul(d + 0x4C, o + 0x14)));
+      Put(d + 0x7C, Fst(Mul(d + 0x48, o + 0x1C) + Mul(d + 0x4C, o + 0x20) + Mul(o + 0x18, d + 0x44)));
+      Put(d + 0x80, Fst(Mul(o + 0x2C, d + 0x4C) + Mul(d + 0x48, o + 0x28) + Mul(d + 0x44, o + 0x24)));
+    } else {
+      Put(d + 0x78, Fst(Mul(d + 0x4C, o + 0x14) + Mul(d + 0x48, o + 0x10) + Mul(o + 0xC, d + 0x44)));
+      Put(d + 0x7C, Fst(Mul(o + 0x18, d + 0x44) + Mul(o + 0x20, d + 0x4C) + Mul(o + 0x1C, d + 0x48)));
+      Put(d + 0x80, Fst(Mul(o + 0x2C, d + 0x4C) + Mul(o + 0x28, d + 0x48) + Mul(d + 0x44, o + 0x24)));
+    }
+    d += 0x88;
+  };
+  int32_t i = 0;
+  for (; i + 3 < n; i += 4)
+    for (int k = 0; k < 4; k++) point(true);
+  for (; i < n; i++) point(false);
+  c.edx = d;
+  c.esp += 4;
+}
+
+// RB_ShadowFinish: with r_shadows 2 and 4 or more stencil bits, a quad
+// (-100..100 at z -10, in front of the identity's eye) in 0x99 grey over
+// the stencil's non-zero pixels (glStencilFunc(GL_NOTEQUAL, 0, 0xFF)),
+// GL_State 0x113 through the batch with the image 0x1535AC4; clip plane 0
+// off, culling off (0x153462C 2), the stencil test off after.
+void f_005086A0(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, s = e - 4;
+  if (CvarInt(0x15343D8) != 2 || I32(0x1534768) < 4) {
+    c.esp = e + 4;
+    return;
+  }
+  c.esp = s;
+  Enable(c, 0xB90, 0x5086C8);
+  for (uint32_t v : {0xFFu, 0u, 0x205u}) Push(c, v);
+  CallPtr(c, kglStencilFunc, 0x5086DA);
+  Disable(c, 0x3000, 0x5086E5);
+  if (U32(kCullType) != 2) {
+    Disable(c, 0xB44, 0x5086F8);
+    Put(kCullType, 2u);
+  }
+  c.esi = U32(0x1535AC4);
+  Call(c, f_004CB3B0, 0x50870F);
+  CallPtr(c, kglLoadIdentity, 0x50870F);
+  Call(c, f_004ADC20, 0x50871A);
+  for (uint32_t k = 0; k < 4; k++) Wr<uint8_t>(g_guest_base, 0x15495D8 + k, k == 3 ? 0xFF : 0x99);
+  c.eax = 0x113;
+  Call(c, f_004CB710, 0x50873C);
+  Put(0x15495C8, 7u);
+  const uint32_t rets[4] = {0x50875A, 0x50876E, 0x508782, 0x508796};
+  const float xs[4] = {-100.0f, 100.0f, 100.0f, -100.0f}, ys[4] = {100.0f, 100.0f, -100.0f, -100.0f};
+  for (int i = 0; i < 4; i++) {
+    Push(c, 0xC1200000u);
+    Push(c, std::bit_cast<uint32_t>(ys[i]));
+    Push(c, std::bit_cast<uint32_t>(xs[i]));
+    Call(c, f_004ADEC0, rets[i]);
+  }
+  c.esp = s;
+  Push(c, U32(0x15495E8));
+  Push(c, 0);
+  Push(c, U32(0x15495C8));
+  CallPtr(c, kglDrawArrays, 0x5087A9);
+  Push(c, 0xB90);
+  Put(0x15495E8, 0u);
+  Put(0x15495C8, 0u);
+  CallPtr(c, kglDisable, 0x5087C8);
+  Put(0x15495C4, 0u);
+  Call(c, f_004C89D0, 0x5087DD);
+  for (uint32_t v : {0x1630C40u, 0u, 0x1406u, 3u}) Push(c, v);
+  CallPtr(c, kglVertexPointer, 0x5087EB);
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// RB_RenderDrawSurfList (EAX the count; stack: the draw surfaces, a sort
+// key and a surface each): the view begun (0x4CC050; the count added to
+// 0x1549B04); a surface of the last one's sort key added straight
+// through the surface table; else, for another shader, arrays mode
+// (sort >> 30), dlight bit (0) or bit 2, or a shader without +0x4C bit 2
+// on another entity, the tessellator flushed (RB_EndSurface) and begun
+// with the shader (the bits of +0x4C that changed kept); for another
+// entity ((sort >> 7) & 0x7FF; 0x7FE for bit 1, the world) its time
+// (0x15496F0 less its +0x78, the shader's +0x17C less into 0x17F0C78),
+// orientation (0x4C9580, or the view's) and dlights (0x4AA0F0, for +0x9C;
+// the world's with 0x15497FC), its GL lights (0x4CC440) and normalising
+// (+0x2AC) for a shader lit by them, its depth range by +4 & 0x18 (0:
+// 0..1; 8, the weapon's, 0..0.2 with the projection 0x15499B0; 0x10,
+// 0x18: 0..0.5), its matrix; the same entity gets its lights again and
+// its orientation when the shader's +0x4C bit 2 changed. The arrays back
+// to 0x1549548, the world's time, orientation, dlights and matrix, depth
+// 0..1 again, RB_ShadowFinish (0x5086A0); the flares (0x4CF730) the tail
+// call. The entity number lives in the argument's slot.
+void f_004CC670(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi, s = e - 0x40;
+  const int32_t n = int32_t(c.eax);
+  const uint32_t surfs = Arg(c, e, 1), orig = U32(0x15496F0);
+  // The registers as the original holds them at its calls, which the
+  // callees' stubs see: the view's copy (rep movs) leaves ESI and EDI
+  // past the two orientations.
+  uint32_t rbx = ebx, rsi = static_cast<uint32_t>(n), rdi = edi, rbp = ebp;
+  auto regs = [&] {
+    c.ebx = rbx;
+    c.esi = rsi;
+    c.edi = rdi;
+    c.ebp = rbp;
+  };
+  auto copy_view = [&] {
+    CopyView();
+    rsi = kViewOr + 0x7C;
+    rdi = kOr + 0x7C;
+  };
+  // The entity's (tr.or from 0x1549B3C's type 0-2 by 0x4C9580 with the
+  // view; the view's for others or a shader with +0x4C bit 2).
+  auto orientation = [&](uint32_t ret) {
+    const uint32_t ent = U32(kEntity);
+    if ((U8(U32(kTessShader) + 0x4C) & 4) || U32(ent) > 2) return copy_view();
+    rbx = 0x1549828;
+    rdi = ent;
+    regs();
+    c.eax = kOr;
+    Call(c, f_004C9580, ret);
+  };
+  auto dlights = [&](uint32_t count, uint32_t ret) {
+    regs();
+    c.eax = count;
+    c.edx = U32(0x1549804);
+    c.ecx = kOr;
+    Call(c, f_004AA0F0, ret);
+  };
+  // The entity's GL lights and normalising for a shader lit by them (the
+  // model matrix again from load_va when the lights loaded the view's);
+  // else normalising off.
+  auto lights = [&](uint32_t ret, uint32_t load_va, uint32_t va_off, uint32_t va_on, uint32_t va_none) {
+    if (!(U8(U32(kTessShader) + 0x54) & 0x18)) {
+      if (U32(kNormalize)) {
+        Disable(c, U32(kNormalize), va_none);
+        Put(kNormalize, 0u);
+      }
+      return;
+    }
+    regs();
+    Call(c, f_004CC440, ret);
+    if (load_va && c.eax) {
+      Push(c, kOrMatrix);
+      CallPtr(c, kglLoadMatrixf, load_va);
+    }
+    rsi = U32(U32(kEntity) + 0x2AC);
+    Normalize(c, rsi, va_off, va_on);
+  };
+  c.esp = s;
+  regs();
+  Call(c, f_004CC050, 0x4CC687);
+  Put(0x1549B04, U32(0x1549B04) + uint32_t(n));
+  Put(kEntity, kWorldEntity);
+  rbp = 0;
+  rbx = 0xFFFFFFFF;
+  uint32_t old_shader = 0, old_mode = 0, old_dl = 0, old_b2 = 0xFFFFFFFF, old_ent = 0xFFFFFFFF;
+  uint32_t old_depth = 0, depth = 0, changed = 0;
+  for (int32_t k = 0; k < n; k++) {
+    const uint32_t it = surfs + 4 + 8 * uint32_t(k), sort = U32(it - 4);
+    rdi = it;
+    if (sort == rbx) {
+      regs();
+      DrawSurface(c, it, 0x4CC6EC);
+      c.esp = s;
+      rdi = it + 8;
+      continue;
+    }
+    const uint32_t shader = U32(0x154052C + 4 * ((sort >> 18) & 0xFFF)), mode = sort >> 30;
+    const uint32_t dl = sort & 1, b2 = (sort >> 2) & 1;
+    uint32_t ent = (sort >> 7) & 0x7FF;
+    if (sort & 2) ent = 0x7FE;
+    Put(e + 4, ent);
+    rbx = dl;
+    rsi = mode;
+    rdi = b2;
+    rbp = shader;
+    const bool same = shader == old_shader && mode == old_mode && dl == old_dl && b2 == old_b2;
+    if (!(same && (ent == old_ent || (U8(shader + 0x4C) & 4)))) {
+      regs();
+      if (old_shader) {
+        Call(c, f_004F7D00, 0x4CC779);
+        changed = U32(old_shader + 0x4C) ^ U32(shader + 0x4C);
+      }
+      Put(kEntity, ent != 0x7FE ? U32(0x15497F8) + ent * 0x2B8 : kWorldEntity);
+      SwitchArrays(c, mode, 0x4CC7CA, 0x4CC7DC);
+      Push(c, 3);
+      c.ecx = shader;
+      Call(c, f_004F4AB0, 0x4CC7EB);
+      c.esp = s;
+      old_shader = shader;
+      old_dl = dl;
+      old_b2 = b2;
+      old_mode = mode;
+    }
+    if (ent != old_ent) {
+      depth = 0;
+      rbx = 0;
+      rbp = 0;
+      if (ent != 0x7FE) {
+        const uint32_t ep = U32(0x15497F8) + ent * 0x2B8;
+        Put(kEntity, ep);
+        rdi = ep;
+        const St t = St(F32{orig}) - Ld(ep + 0x78);
+        Put(0x15496F0, Fst(t));
+        Put(0x17F0C78, Fst(t - Ld(U32(kTessShader) + 0x17C)));
+        orientation(0x4CC88E);
+        if (U32(U32(kEntity) + 0x9C)) dlights(U32(0x1549800), 0x4CC8B1);
+        depth = U32(U32(kEntity) + 4) & 0x18;
+        lights(0x4CC8D1, 0, 0x4CC8EB, 0x4CC8FC, 0x4CC93E);
+      } else {
+        Put(0x15496F0, orig);
+        Put(kEntity, kWorldEntity);
+        copy_view();
+        Put(0x17F0C78, Fst(St(F32{orig}) - Ld(U32(kTessShader) + 0x17C)));
+        dlights(U32(0x15497FC), 0x4CC997);
+        if (U32(kNormalize)) {
+          Disable(c, U32(kNormalize), 0x4CC9A5);
+          Put(kNormalize, 0u);
+        }
+      }
+      rbx = depth;
+      Push(c, kOrMatrix);
+      CallPtr(c, kglLoadMatrixf, 0x4CC90B);
+      rsi = old_depth;
+      if (old_depth != depth) {
+        if (depth == 0) {
+          DepthRange(c, 0x3FF00000, 0, 0x4CC9F2);
+        } else if (depth == 8) {
+          LoadProjection(c, 0x15499B0, 0x4CC9C2);
+          DepthRange(c, 0x3FC99999, 0xA0000000, 0x4CC9F2);
+        } else {
+          DepthRange(c, 0x3FE00000, 0, 0x4CC9F2);
+        }
+        if (old_depth == 8) LoadProjection(c, 0x1549970, 0x4CCA02);
+        old_depth = depth;
+      }
+      old_ent = U32(e + 4);
+    } else {
+      lights(0x4CCA40, 0x4CCA49, 0x4CCA68, 0x4CCA79, 0x4CCA8B);
+      if (ent != 0x7FE && (changed & 4)) {
+        orientation(0x4CCAF2);
+        Push(c, kOrMatrix);
+        CallPtr(c, kglLoadMatrixf, 0x4CCAF7);
+      }
+    }
+    regs();
+    DrawSurface(c, it, 0x4CCB06);
+    c.esp = s;
+    rbx = sort;
+    rdi = it + 8;
+    rbp = 0;
+  }
+  if (old_shader) {
+    regs();
+    Call(c, f_004F7D00, 0x4CCB3B);
+  }
+  const uint32_t mode = U32(0x1549548);
+  rdi = mode;
+  regs();
+  SwitchArrays(c, mode, 0x4CCB59, 0x4CCB68);
+  rsi = c.esi;
+  Put(0x15496F0, orig);
+  Put(kEntity, kWorldEntity);
+  copy_view();
+  dlights(U32(0x15497FC), 0x4CCBA8);
+  Push(c, 0x15498E0);
+  CallPtr(c, kglLoadMatrixf, 0x4CCBAD);
+  if (depth) DepthRange(c, 0x3FF00000, 0, 0x4CCBC1);
+  regs();
+  Call(c, f_005086A0, 0x4CCBCC);
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e;
+  f_004CF730(c);
+}
+
+// RB_ExecuteRenderCommands (EAX the commands): timed by ri.Milliseconds
+// into 0x1549B34; GLimp_EndFrame's pending call first (0x1549B4C); the
+// frame's counters reset (0x154A0D0-EC; 0x154A0D8 from 0x154954C, its
+// peak kept in 0x1549550); each command by its id (1-11; others end):
+// set the 2D colour (inline), a stretched picture (0x4CD300 from its
+// fields, EBX the shader), RB_StretchPic, the rotated and the corners'
+// pictures (EDI the command), text (0x4CDCC0, EAX its string at +0x25;
+// its length returned, the command padded to 4 bytes),
+// RB_DrawSurfs (EBX), RB_DrawBuffer (ESI), the screen copy (stack), the
+// fade (ESI), RB_SwapBuffers (stack); each returns the next. EAX the
+// peak's new count.
+void f_004CEA70(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi, s = e - 0x14;
+  uint32_t cmd = c.eax;
+  c.esp = s;
+  c.edi = cmd;
+  CallPtr(c, kMilliseconds, 0x4CEA77);
+  const uint32_t t0 = c.eax;
+  c.ebp = t0;
+  c.esi = 0;
+  if (U32(0x1549B4C)) {
+    Put(0x1549B4C, 0u);
+    Call(c, f_004FFB40, 0x4CEA95);
+  }
+  Put(0x154A0E8, U32(0x154A0D0));
+  Put(0x154A0E0, 0u);
+  Put(0x154A0E4, 1u);
+  Put(0x154A0EC, 0xFFFFFFFFu);
+  Put(0x154A0D4, 0u);
+  Put(0x154A0D8, U32(0x154954C));
+  for (;;) {
+    c.edi = cmd;
+    const uint32_t id = U32(cmd);
+    if (id - 1 > 10) break;
+    switch (id) {
+      case 1:
+        Put(kColor2D, U32(cmd + 4));
+        cmd += 8;
+        continue;
+      case 2:
+        c.ebx = U32(cmd + 4);
+        Push(c, kColor2D);
+        for (uint32_t k = 0x24; k >= 8; k -= 4) Push(c, U32(cmd + k));
+        c.eax = U32(cmd + 0xC);
+        c.ecx = U32(cmd + 8);
+        c.edx = U32(cmd + 0x10);
+        Call(c, f_004CD300, 0x4CEB1C);
+        c.esp = s;
+        cmd += 0x28;
+        continue;
+      case 3:
+        Call(c, f_004CD540, 0x4CEB29);
+        break;
+      case 4:
+        Call(c, f_004CD740, 0x4CEB30);
+        break;
+      case 5:
+        Call(c, f_004CDA10, 0x4CEB37);
+        break;
+      case 6:
+        for (uint32_t v : {U32(cmd + 0x1C), U32(cmd + 0x18), uint32_t(U8(cmd + 0x24)), U32(cmd + 0x20),
+                           cmd + 0x14, U32(cmd + 0x10), U32(cmd + 0xC), U32(cmd + 8), U32(cmd + 4)})
+          Push(c, v);
+        c.eax = cmd + 0x25;
+        c.ecx = U32(cmd + 4);
+        c.edx = U32(cmd + 8);
+        Call(c, f_004CDCC0, 0x4CEB67);
+        c.esp = s;
+        cmd += (c.eax + 0x29) & ~3u;
+        continue;
+      case 7:
+        c.ebx = cmd;
+        Call(c, f_004CE290, 0x4CEB7B);
+        break;
+      case 8:
+        c.esi = cmd;
+        Call(c, f_004CE2F0, 0x4CEB84);
+        break;
+      case 9:
+        Push(c, cmd);
+        Call(c, f_004CE5C0, 0x4CEB8C);
+        c.esp = s;
+        break;
+      case 10:
+        c.esi = cmd;
+        Call(c, f_004CE650, 0x4CEB95);
+        break;
+      case 11:
+        Push(c, cmd);
+        Call(c, f_004CE730, 0x4CEB9D);
+        c.esp = s;
+        break;
+    }
+    cmd = c.eax;
+  }
+  CallPtr(c, kMilliseconds, 0x4CEBAE);
+  Put(0x1549B34, c.eax - t0);
+  const uint32_t peak = U32(0x1549550), count = U32(0x154A0D8);
+  if (int32_t(peak) < int32_t(count)) Put(0x1549550, count);
+  c.eax = count;
+  c.ecx = peak;
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
 }
 
 }  // namespace recomp::gen

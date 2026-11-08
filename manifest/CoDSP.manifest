@@ -108,7 +108,10 @@ replace 0042B0A0
 # (RB_StageIteratorSky, RB_ClipSkyPolygons, the box, the clouds), the sun
 # (its parameters, quad and flare), adding a flare, the transforms to clip
 # space and the window, the viewer's and an entity's orientation, a portal
-# surface's plane, mirror and off-screen tests, and the debug text.
+# surface's plane, mirror and off-screen tests, and the debug text; the draw
+# surface loop (with the view's begin and clear, the entities' GL lights and
+# the dlights' transform, RB_ShadowFinish), the command loop and the
+# flares' render (their sources, visibility, the sun's glare and blinding).
 replace 004C89D0
 replace 004C8A20
 replace 004CB3B0
@@ -275,6 +278,22 @@ replace 004CA770
 replace 004C9580
 replace 004CA170
 replace 004ACF50
+replace 004CC670
+replace 004CEA70
+replace 004CF730
+replace 004CEF90
+replace 004CF0C0
+replace 004CF2D0
+replace 004DD480
+replace 004C8CE0
+replace 004ADFE0
+replace 004CC050
+replace 004CBF90
+replace 004CBFE0
+replace 004CC300
+replace 004CC440
+replace 004AA0F0
+replace 005086A0
 
 # CPU skinning into the tessellator, SSE versions: native (src/skinning.cpp).
 replace 005070E0

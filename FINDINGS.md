@@ -57,7 +57,8 @@ on gfx::Device" below).
   RB_CheckOverflow, the immediate-mode batch and the debug draws layer 14,
   the leaves those layers still called lifted layer 15, the 2D commands
   layer 16, the sky, the sun, the flares' adding, a portal surface's tests
-  and the debug text layer 17.
+  and the debug text layer 17, the draw surface loop, the command loop and
+  the flares' render layer 18.
 - Layer 4, the stages and the flush: a stage's draw 0x4F5DE0 (EAX stage,
   EBX indexes, count on the stack: colours, ComputeTexCoords, the colour
   array, then all units when the second bundle has an image or the first
@@ -597,6 +598,94 @@ on gfx::Device" below).
   and the colour; RB_EndSurface). 0x500920 (the item 2 list had it) is the
   front end's: it adds the world's surfaces (R_AddDrawSurf) under
   0x4CB210 and begins no surface; it stays lifted.
+- Layer 18, the draw surface loop, the command loop and the flares' render
+  (2026-11-08), the last of the back end's frame. RB_ExecuteRenderCommands
+  0x4CEA70 (EAX the commands): timed by ri.Milliseconds into 0x1549B34, a
+  pending GLimp_EndFrame (0x1549B4C) first, the frame's counters
+  0x154A0D0-EC reset (0x154A0D8 from 0x154954C, its peak kept in
+  0x1549550 and returned in EAX), then each command by its id (1-11, the
+  jump table 0x4CEBD8; others end it) as layer 16 lists them, the text
+  command 0x4CDCC0 with EAX its string at +0x25 and the next command
+  after its length plus 0x29, to 4 bytes. RB_RenderDrawSurfList 0x4CC670
+  (EAX the count, the surfaces on the stack, a sort key and a surface
+  each; layer 16's note on RB_DrawSurfs had the two swapped): the view
+  begun by RB_BeginDrawingView 0x4CC050 (the count added to 0x1549B04);
+  a surface with the last one's sort key straight through the surface
+  table; else the tessellator flushed (RB_EndSurface) and begun again
+  for another shader (0x154052C by (sort >> 18) & 0xFFF), arrays mode
+  (sort >> 30), bit 0 or bit 2, or for another entity with a shader
+  without +0x4C bit 2 (the +0x4C bits that changed kept); for another
+  entity ((sort >> 7) & 0x7FF; 0x7FE, the world's, for bit 1, the number
+  kept in the argument's slot) its time (0x15496F0 less its +0x78, less
+  the shader's +0x17C into 0x17F0C78), orientation (0x4C9580 for types
+  0-2, else the view's), dlights (0x4AA0F0 with 0x1549800 of them, for
+  +0x9C; the world's 0x15497FC), GL lights (0x4CC440, for a shader lit by
+  them, +0x54 & 0x18) with GL_NORMALIZE or GL_RESCALE_NORMAL by +0x2AC
+  (the one on in 0x153466C), the model matrix 0x1549AC4 and the depth
+  range by +4 & 0x18 (0: 0..1; 8, the weapon's: 0..0.2 with the
+  projection 0x15499B0, 0x1549970 again after; 0x10, 0x18: 0..0.5); the
+  same entity's lights again and, when the shader's +0x4C bit 2 changed,
+  its orientation. After the list: the arrays to 0x1549548, the world's
+  time, orientation, dlights and matrix 0x15498E0, depth 0..1 again for a
+  last entity's range, RB_ShadowFinish 0x5086A0 (r_shadows 0x15343D8 2
+  with 4 or more stencil bits 0x1534768: a 0x99 grey quad, -100..100 at z
+  -10, over the stencil's non-zero pixels, through the batch with the
+  image 0x1535AC4 and GL_State 0x113; clip plane 0 and culling off) and
+  the flares 0x4CF730 as the tail call. RB_BeginDrawingView: glFinish
+  with r_finish 0x15346A8 1 once (0x1534628, set also by r_finish 0); out
+  of 2D; the projection 0x1549970, viewport and scissor of the view
+  0x1549950 (0x4CBFE0); GL_State 0x100; no entity lit (0x1534664); glClear
+  of depth (alone for 0x15344E0), stencil (r_shadows 2, or 0x15343EC
+  unless a portal view lacks the refdef's flag 8) and colour: in a portal
+  view with flag 8 the view's clear colour 0x1535870 (0x1535890, without
+  the fast sky 0x153457C or flag 1 only with 0x1535898), the fog's
+  0x1535930 or identityLight / 2; in one without, the fog's for 0x1535920
+  GL_EXP2 (flag 0x20) or 0x15346A4 0; else (but flag 1) with the fast sky
+  the fog's or the grey, without it the fog's for 0x1535950 and 0x1535958;
+  the refdef's flag 4 clears again to a grey of the 2D time's low byte /
+  255 (0x4CBF90, its tail call), else 0x1549B38 and 0x1549B48 cleared.
+  An entity's GL lights 0x4CC440 (EAX 1 when it set them): once per
+  entity and kind (0x1534664, 0x1534668); the light model's ambient the
+  world's +0xF8 x the entity's +0x110 + the world's +0xD8, with the
+  entity's flag 0x20 raised by its luminance (0x55B7A0-A8) to at least
+  the cvar 0x15344A0 x identityLight; its lights (+0xCC, a light and a
+  scale each at +0xD0) sorted by their first dword, then address, into 8
+  slots on the stack, each by 0x4CC300 (EBX the index, ESI the light:
+  glLightfv of ambient and diffuse, scaled with alpha 1 unless the scale
+  is 1, specular, position and spot direction, glLightf of the spot's
+  exponent and cutoff and the three attenuations; enabled when not among
+  the 0x1534660 on) in the view's world matrix 0x15360E8, those after
+  them off. The dlights' transform 0x4AA0F0 (EAX the count, EDX the
+  dlights of 0x88 bytes, ECX the orientation): a point (+0x44) less the
+  origin or, for w (+0x50) 0, a direction, on the axes into +0x78;
+  unrolled by four, whose directions sum in other orders than the rest's.
+  The flares' render 0x4CF730 (r_flares 0x15343AC): the dlights' flares
+  (0x4CEF90, r_flares 2 or more: ids from 0x800, the shader 0x1535AF8) and
+  the world's (0x4CF0C0, r_flares 1 or 3 with a world: 0x1549808 of 0x30
+  bytes at 0x154980C, the shader 0x1535AFC for +0x2C bit 1) added by
+  0x4CEC60 with their fade times (0x1534544, 0x15346B8) in ms; each flare
+  of an older frame freed when faded out, else reset (+0x1C 0, +0x30 2);
+  each of this view tested by 0x4CF2D0 and freed at 0: counted in
+  0x1549B2C, its visibility off the view (by its radius +0x44 about its
+  window point) 1 for +0x1C bit 0, else 0, on it the share of the depths
+  at or beyond its own (+0x30) that glReadPixels reads into a square of 2r
+  + 1 (1-65) on the stack, cut to the view; the sun's (id -1) into
+  0x13F9CF4; its intensity eased toward it by 0x4C8CE0. Then the sun's
+  glare and blinding 0x4DD480 (ESI, EDI: the view's facing of the sun
+  between bounds, 0..1, times the sun flare's visibility, eased into
+  0x11CE828 and 0x11CE82C by the ms since the last call 0x11CE830 and
+  scaled; 0 for a scale of 0 or less). With a flare of the view or either
+  of those: clip plane 0 off in a portal, both matrices pushed and an
+  orthographic projection of the view (depths +-100000), a quad over the
+  view in the glare's grey and the blinding's alpha (0x4ADFE0, the batch's
+  colour x 255 by _ftol2; GL_State 0x10062, modulate, the image
+  0x1535AC4) and each flare of the view not faded out drawn (0x4CF470);
+  the matrices popped, the last glPopMatrix the tail call. 0x4C8CE0 eases
+  a value toward a target by the ms elapsed over a rise or fall time (at
+  once for 0 or less), not past it, and returns it in ST0. The natives
+  hold EBX, ESI, EDI and EBP as the originals do at their calls (the draw
+  surface loop's ESI and EDI left past the view's orientation by its rep
+  movs), which the stubs under RB_EndSurface see.
 - Oracle: random cached state, cvars, images, bundles, stages, fogs,
   tessellator vertices, entities and fog colours with special values, and
   index lists whose triangles continue or break strips; 200000 cases over
@@ -803,6 +892,35 @@ on gfx::Device" below).
   sun, which 0x4DC600 clears again before any read; 1 is a gap that needs
   a value at a rounding midpoint: an entity axis's length summed in
   another order.
+  With layer 18: 200000 cases over 182 entries, 5.82M calls out, 0
+  mismatches (the draw surface loop no longer stubbed: RB_DrawSurfs' and
+  the command loop's cases build its command from the refdef and view as
+  they are, with draw surfaces of the bad, skipped and polygon kinds,
+  entities with GL lights and dlights, flares of the view and of others;
+  glPushMatrix, glPopMatrix, glLightfv, glLightf and glLightModelfv
+  recorded, the light model's three floats only, its alpha being whatever
+  the stack holds; glReadPixels answers a flare's depths, quarters from 0
+  to 1, by its arguments; no optimised batch for the flushes, whose
+  iterators read what other callees left on the stack; no text command
+  in the command loop's cases, whose fonts they do not set up; EAX
+  compared also for the GL lights, the command loop and the batch's
+  colour; the frame's counters 0x154A0D0 compared). Its mutations: 166,
+  156 fail the oracle (16 after cases with sums that cancel in their
+  order: the luminance, the dlights' points and directions, four, five
+  and nine of them; a luminance of -0, easing steps that land on a target
+  of -0, lights at addresses out of order and a negative count of them,
+  the entities' dlight count above the world's, the frame's count and
+  peak at random); 8 cannot change a result: the fall's subtraction with
+  the value as a register (it runs only for a value above its target,
+  never a NaN), the flare test's cut at n = w - x0 (either gives n), the
+  overlay's texture environment test (the batch's begin has set unit 0 to
+  GL_MODULATE), the flares' draw without the faded test (those were
+  freed) or without `any` (no flare of the view is left then), the
+  normalising of none for none, the last entity by its number or the
+  argument's slot, and the last depth range by the depth or the old one
+  (equal after each entity); 2 are gaps: ESI where only a flush inside a
+  surface's add (RB_CheckOverflow) would show it to the stubs, which the
+  cases' few points never reach.
 - Frames (the recipe in "Run log" 2026-10-19 renderer): native against
   base as base against base: all loading and briefing frames shared, 46-47
   of 740 in-level frames identical, the rest differing only in the
@@ -916,6 +1034,17 @@ on gfx::Device" below).
   portal's tests. Against the layer 16 build: all 13 loading and briefing
   frames shared, 180 of 1802 in-level frames identical, 208 for a second
   layer 17 run, 180 between the two layer 17 runs: the walk's timing.
+  With layer 18 (2026-11-08): the walk reaches the command loop 2798
+  times, the draw surface loop, RB_BeginDrawingView, its projection,
+  RB_ShadowFinish, the flares' render, the dlights' and the world's
+  flares and the sun's glare 1640 times each, the easing 3280, the
+  entities' GL lights 54127 and their lights 156693, the dlights'
+  transform 8450 (under gdb, on the layer 18 build); not the flare test,
+  the overlay's colour nor the flag 4 clear (training's walk has no flare
+  of the view and no glare). Against the layer 17 build: all 13 loading
+  and briefing frames shared, 172 of 1798 in-level frames identical, 176
+  for a second layer 18 run and 176 between the two layer 18 runs: the
+  walk's timing.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),

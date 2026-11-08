@@ -167,4 +167,20 @@
 #define f_004C9580 n_004C9580
 #define f_004CA170 n_004CA170
 #define f_004ACF50 n_004ACF50
+#define f_004CC670 n_004CC670
+#define f_004CEA70 n_004CEA70
+#define f_004CF730 n_004CF730
+#define f_004CEF90 n_004CEF90
+#define f_004CF0C0 n_004CF0C0
+#define f_004CF2D0 n_004CF2D0
+#define f_004DD480 n_004DD480
+#define f_004C8CE0 n_004C8CE0
+#define f_004ADFE0 n_004ADFE0
+#define f_004CC050 n_004CC050
+#define f_004CBF90 n_004CBF90
+#define f_004CBFE0 n_004CBFE0
+#define f_004CC300 n_004CC300
+#define f_004CC440 n_004CC440
+#define f_004AA0F0 n_004AA0F0
+#define f_005086A0 n_005086A0
 #include "../src/render_backend.cpp"

@@ -150,6 +150,13 @@ constexpr Gl kGl[] = {
     {0x1426E20, "hook 0x1426E20", 2, true},
     {0x1426E24, "hook 0x1426E24", 2, true},
     {0x1534D00, "glLoadMatrixf", 1, false, 0, 4},
+    {0x1534DA0, "glPushMatrix", 0},
+    {0x15353A8, "glPopMatrix", 0},
+    {0x15351EC, "glLightfv", 3, false, 2, 4},
+    {0x1535534, "glLightf", 3},
+    // The ambient light's alpha is whatever the stack holds after its
+    // three floats.
+    {0x1534BE0, "glLightModelfv", 2, false, 1, 3},
 };
 constexpr int kNumGl = sizeof(kGl) / sizeof(kGl[0]);
 constexpr uint32_t kGlTarget = 0x7FFD0000;  // + 0x10 * index
@@ -208,9 +215,7 @@ COD1_STUB(0051D45A, kSaved, 3)
 // Under the combiners and the DXF file: GL_CheckErrors (the caller's
 // name) and FS_Write (buffer, length, file).
 COD1_STUB(004A5440, 0, 1)
-// Under the 2D commands: the draw surface loop (EAX the surfaces; their
-// count) and RB_SwapBuffers' calls before and after.
-COD1_STUB(004CC670, kEax | kSaved, 1)
+// Under the 2D commands: RB_SwapBuffers' calls before and after.
 COD1_STUB(004AD5C0, kSaved, 0)
 COD1_STUB(0040F5E0, kSaved, 1)
 COD1_STUB(004FFB40, kSaved, 0)
@@ -263,9 +268,8 @@ void f_0051B3DD_lifted(Ctx& c);
 void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 void f_0042B0A0_lifted(Ctx& c);
 void f_0042B0A0(Ctx& c) { f_0042B0A0_lifted(c); }
-// 0x4C94D0, 0x4D42A0 and RE_StretchRaw 0x4CDCC0, native in the game
-// (src/render.cpp, src/screen2d.cpp): here only the draw surface loop's
-// lifted body reaches them.
+// 0x4C94D0, 0x4D42A0 and the text command 0x4CDCC0, native in the game
+// (src/render.cpp, src/screen2d.cpp): here only lifted bodies reach them.
 void f_004C94D0_lifted(Ctx& c);
 void f_004C94D0(Ctx& c) { f_004C94D0_lifted(c); }
 void f_004D42A0_lifted(Ctx& c);
@@ -445,6 +449,22 @@ void f_004CA770_lifted(Ctx& c);
 void f_004C9580_lifted(Ctx& c);
 void f_004CA170_lifted(Ctx& c);
 void f_004ACF50_lifted(Ctx& c);
+void f_004CC670_lifted(Ctx& c);
+void f_004CEA70_lifted(Ctx& c);
+void f_004CF730_lifted(Ctx& c);
+void f_004CEF90_lifted(Ctx& c);
+void f_004CF0C0_lifted(Ctx& c);
+void f_004CF2D0_lifted(Ctx& c);
+void f_004DD480_lifted(Ctx& c);
+void f_004C8CE0_lifted(Ctx& c);
+void f_004ADFE0_lifted(Ctx& c);
+void f_004CC050_lifted(Ctx& c);
+void f_004CBF90_lifted(Ctx& c);
+void f_004CBFE0_lifted(Ctx& c);
+void f_004CC300_lifted(Ctx& c);
+void f_004CC440_lifted(Ctx& c);
+void f_004AA0F0_lifted(Ctx& c);
+void f_005086A0_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_backend_native.cpp
 // renames its entries).
 void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
@@ -613,6 +633,22 @@ void f_004CA770(Ctx& c) { f_004CA770_lifted(c); }
 void f_004C9580(Ctx& c) { f_004C9580_lifted(c); }
 void f_004CA170(Ctx& c) { f_004CA170_lifted(c); }
 void f_004ACF50(Ctx& c) { f_004ACF50_lifted(c); }
+void f_004CC670(Ctx& c) { f_004CC670_lifted(c); }
+void f_004CEA70(Ctx& c) { f_004CEA70_lifted(c); }
+void f_004CF730(Ctx& c) { f_004CF730_lifted(c); }
+void f_004CEF90(Ctx& c) { f_004CEF90_lifted(c); }
+void f_004CF0C0(Ctx& c) { f_004CF0C0_lifted(c); }
+void f_004CF2D0(Ctx& c) { f_004CF2D0_lifted(c); }
+void f_004DD480(Ctx& c) { f_004DD480_lifted(c); }
+void f_004C8CE0(Ctx& c) { f_004C8CE0_lifted(c); }
+void f_004ADFE0(Ctx& c) { f_004ADFE0_lifted(c); }
+void f_004CC050(Ctx& c) { f_004CC050_lifted(c); }
+void f_004CBF90(Ctx& c) { f_004CBF90_lifted(c); }
+void f_004CBFE0(Ctx& c) { f_004CBFE0_lifted(c); }
+void f_004CC300(Ctx& c) { f_004CC300_lifted(c); }
+void f_004CC440(Ctx& c) { f_004CC440_lifted(c); }
+void f_004AA0F0(Ctx& c) { f_004AA0F0_lifted(c); }
+void f_005086A0(Ctx& c) { f_005086A0_lifted(c); }
 void n_004C89D0(Ctx& c);
 void n_004C8A20(Ctx& c);
 void n_004CB3B0(Ctx& c);
@@ -779,6 +815,22 @@ void n_004CA770(Ctx& c);
 void n_004C9580(Ctx& c);
 void n_004CA170(Ctx& c);
 void n_004ACF50(Ctx& c);
+void n_004CC670(Ctx& c);
+void n_004CEA70(Ctx& c);
+void n_004CF730(Ctx& c);
+void n_004CEF90(Ctx& c);
+void n_004CF0C0(Ctx& c);
+void n_004CF2D0(Ctx& c);
+void n_004DD480(Ctx& c);
+void n_004C8CE0(Ctx& c);
+void n_004ADFE0(Ctx& c);
+void n_004CC050(Ctx& c);
+void n_004CBF90(Ctx& c);
+void n_004CBFE0(Ctx& c);
+void n_004CC300(Ctx& c);
+void n_004CC440(Ctx& c);
+void n_004AA0F0(Ctx& c);
+void n_005086A0(Ctx& c);
 }  // namespace gen
 
 bool CallEntry(Ctx& c, uint32_t target);
@@ -825,6 +877,17 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
     for (uint32_t i = 0; i < std::min(r.args[1], 0x400u); i++)
       h = (h ^ g_mem.read<uint16_t>(r.args[3] + 2 * i)) * 16777619u;
     r.data[0] = h;
+  }
+  // The depths glReadPixels answers a flare's test with (at most 65 x 65
+  // floats from 0 to 1 in quarters, by the call's arguments).
+  if (gl.ptr == 0x1534F14 && r.args[4] == 0x1902) {
+    uint32_t h = 2166136261u;
+    for (int k = 0; k < 4; k++) h = (h ^ r.args[k]) * 16777619u;
+    const uint32_t n = std::min(r.args[2] * r.args[3], 65u * 65u);
+    for (uint32_t i = 0; i < n; i++) {
+      h = (h ^ i) * 16777619u;
+      Wr(r.args[6] + 4 * i, std::bit_cast<uint32_t>(float((h >> 7) % 5) / 4.0f));
+    }
   }
   // The tessellator's shader, stages and their count it draws with.
   if (gl.ptr == 0x1549570) {
@@ -982,6 +1045,14 @@ const Entry kEntries[] = {
     COD1_ENTRY(004C9250, "point to clip"),    COD1_ENTRY(004CA770, "mirror"),
     COD1_ENTRY(004C9580, "entity orientation"), COD1_ENTRY(004CA170, "surface plane"),
     COD1_ENTRY(004ACF50, "debug text", 0, 7),
+    COD1_ENTRY(004CC670, "draw surf list", 0, 8), COD1_ENTRY(004CEA70, "commands", 0, 8),
+    COD1_ENTRY(004CF730, "flares", 0, 8),     COD1_ENTRY(004CEF90, "dlight flares"),
+    COD1_ENTRY(004CF0C0, "world flares"),     COD1_ENTRY(004CF2D0, "flare test"),
+    COD1_ENTRY(004DD480, "sun glare"),        COD1_ENTRY(004C8CE0, "ease"),
+    COD1_ENTRY(004ADFE0, "batch colour"),     COD1_ENTRY(004CC050, "begin view"),
+    COD1_ENTRY(004CBF90, "view clear"),       COD1_ENTRY(004CBFE0, "view projection"),
+    COD1_ENTRY(004CC300, "GL light"),         COD1_ENTRY(004CC440, "entity lights"),
+    COD1_ENTRY(004AA0F0, "dlight transform"), COD1_ENTRY(005086A0, "shadow finish"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -1034,8 +1105,8 @@ const Window kGlobals[] = {
     {0x162FC40, 0x1000}, {0x1650840, 0x800}, {0x1670440, 0x1000},
     {0x1660A40, 0x400}, {0x1680A40, 0x400}, {0x1698B40, 0x200},
     // The sky's extents, the clouds' texture coordinates and the sun's
-    // quad and parameters; the flares' list.
-    {0x11CD000, 0x1840}, {0x154B000, 0x100},
+    // quad and parameters; the flares' list; the frame's counters.
+    {0x11CD000, 0x1840}, {0x154B000, 0x100}, {0x154A0D0, 0x20},
 };
 
 struct Stats {
@@ -1121,7 +1192,7 @@ void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
             ((e.va != 0x4F3330 && e.va != 0x508940 && e.va != 0x4CD540 && e.va != 0x4CD740 &&
               e.va != 0x4CDA10 && e.va != 0x4CE290 && e.va != 0x4CE2F0 && e.va != 0x4CE5C0 &&
               e.va != 0x4CE650 && e.va != 0x4CE730 && e.va != 0x4DCB40 && e.va != 0x4CA770 &&
-              e.va != 0x4CA8D0) ||
+              e.va != 0x4CA8D0 && e.va != 0x4CC440 && e.va != 0x4CEA70 && e.va != 0x4ADFE0) ||
              cn.eax == cl.eax);
   // The x87 registers in use (the noise's value; the caller's below).
   for (int r = 0; r < 8; r++)
@@ -1924,6 +1995,197 @@ void Light(Arena& a, std::mt19937& g) {
 // from them or just past), or with a negative index count, or a negative
 // vertex count for a quad of the shader it holds (no flush or begin, so
 // true: the caller's shader is the tessellator's).
+
+// A flare of the list RB's flares keep: of this view or another, this
+// frame or an older one, its fade times, the image 0x17F0C70's shader, its
+// time, intensity (now and then faded out), window point within 80 of the
+// view, depth, colour, size, radius and id (-1 the sun's).
+uint32_t FlareOf(Arena& a, std::mt19937& g, uint32_t next) {
+  const uint32_t f = a.Alloc(0x4C);
+  auto unit = [&] { return g() % 8 ? Float(float(g() % 5) / 4.0f) : RandFloat(g); };
+  Wr(f, next);
+  Wr(f + 4, Rd(0x1549938) - g() % 2);
+  Wr(f + 8, g() % 4 ? Rd(0x154992C) : Rd(0x154992C) ^ 1);
+  Wr(f + 0xC, g() % 4 ? Rd(0x1549934) : Rd(0x1549934) + 1);
+  for (uint32_t i : {0x10u, 0x14u}) Wr(f + i, Pick(g, {0, 1, 100, 500, 3000, 0xFFFFFFFF, uint32_t(g())}));
+  Wr(f + 0x18, Rd(0x17F0C70));
+  Wr(f + 0x1C, g() % 4);
+  Wr(f + 0x20, Rd(0x15496E8) - g() % 3000);
+  Wr(f + 0x24, Pick(g, {0, 0x80000000, Float(0.5f), Float(1.0f), unit()}));
+  Wr(f + 0x28, uint32_t(int32_t(Rd(0x1549950)) - 80 + int32_t(g() % 800)));
+  Wr(f + 0x2C, uint32_t(int32_t(Rd(0x1549954)) - 80 + int32_t(g() % 640)));
+  for (uint32_t i = 0x30; i < 0x40; i += 4) Wr(f + i, unit());
+  Wr(f + 0x40, g() % 4 ? Float(float(g() % 100)) : RandFloat(g));
+  Wr(f + 0x44, g() % 8 ? g() % 40 : uint32_t(int32_t(g() % 5) - 4));
+  Wr(f + 0x48, Pick(g, {0xFFFFFFFF, 0, 1, 0x800}));
+  return f;
+}
+
+// What the draw surface loop, the flares and the command loop read: the
+// view (place and size, ids, frame), cvars, the clear colours and fog,
+// the shaders' flags, the entities (types, flags, times, axes, GL lights
+// of at most 8 each, normalising, dlights), the world's ambient light
+// and the world entity's lights, the dlights and the world's flares, the
+// flare lists, the sun's glare and blinding, the stencil bits. No
+// optimised batch for the flushes to draw first: its iterators read locals
+// they leave unwritten, here what other callees left on the stack.
+void DrawState(Arena& a, std::mt19937& g) {
+  Wr(0x1830C94, 0);
+  Wr(0x1830C98, 0);
+  Wr(0x1549950, g() % 8 ? g() % 100 : uint32_t(g()));
+  Wr(0x1549954, g() % 8 ? g() % 100 : uint32_t(g()));
+  Wr(0x1549958, g() % 8 ? 1 + g() % 640 : g() % 2);
+  Wr(0x154995C, g() % 8 ? 1 + g() % 480 : g() % 2);
+  Wr(0x1549934, g() % 2);
+  Wr(0x154992C, g() % 2);
+  Wr(0x1549938, 5 + g() % 2);
+  for (uint32_t cv : {0x15346A8u, 0x15343D8u, 0x15343ECu, 0x15344E0u, 0x153457Cu, 0x15346A4u})
+    Wr(cv, Cvar(a, g, g() % 4 ? g() % 3 : uint32_t(g())));
+  Wr(0x15343AC, Cvar(a, g, g() % 5));
+  for (uint32_t cv : {0x153444Cu, 0x1534544u, 0x15346B8u, 0x15344A0u}) {
+    Wr(cv, Cvar(a, g, 0));
+    if (g() % 4) Wr(Rd(cv) + 0x1C, Float(float(g() % 2001) / 1000.0f));
+  }
+  Wr(0x1534628, g() % 2);
+  Wr(0x1534768, g() % 9);
+  Wr(0x15496EC, g() % 4 ? g() & 0x2F : g());
+  Wr(0x154D734, g() % 2);
+  for (uint32_t v : {0x1535890u, 0x1535898u, 0x1535950u, 0x1535958u}) Wr(v, g() % 2);
+  Wr(0x1535920, g() % 2 ? 0x2601 : 0x800);
+  Wr(0x13F9CF8, g() % 3);
+  for (uint32_t i = 0; i < 0x10; i += 4) {
+    Wr(0x1535870 + i, RandFloat(g));
+    Wr(0x1535930 + i, RandFloat(g));
+  }
+  for (uint32_t sh : {Rd(0x17F0C70), Rd(0x1535B5C)}) {
+    g_mem.write<uint8_t>(sh + 0x4C, uint8_t(g() % 2 ? 0 : 4));
+    g_mem.write<uint8_t>(sh + 0x54, uint8_t(Pick(g, {0, 0, 8, 0x10, 0x18})));
+    Wr(sh + 0x17C, g() % 4 ? Float(float(g() % 1000) / 100.0f) : RandFloat(g));
+  }
+  Wr(0x1535AC4, Image(a, g));
+  Wr(0x1535AF8, Rd(0x17F0C70));
+  Wr(0x1535AFC, Rd(0x1535B5C));
+  auto unit = [&] { return g() % 8 ? Float(float(int(g() % 2001) - 1000) / 1000.0f) : RandFloat(g); };
+  // GL lights: a sort key (ties), colours, position, spot, attenuations;
+  // at addresses in any order; now and then a negative count.
+  auto lights = [&](uint32_t ent) {
+    const uint32_t n = g() % 4 ? g() % 4 : g() % 9;
+    Wr(ent + 0xCC, g() % 16 ? n : 0xFFFFFFFF - g() % 2);
+    std::vector<uint32_t> ls;
+    for (uint32_t i = 0; i < n; i++) ls.push_back(a.Alloc(0x74));
+    std::shuffle(ls.begin(), ls.end(), g);
+    for (uint32_t i = 0; i < n; i++) {
+      const uint32_t l = ls[i];
+      Wr(l, g() % 3);
+      for (uint32_t k = 4; k < 0x74; k += 4) Wr(l + k, unit());
+      Wr(ent + 0xD0 + 8 * i, l);
+      Wr(ent + 0xD4 + 8 * i, Pick(g, {Float(1.0f), Float(1.0f), unit()}));
+    }
+  };
+  const uint32_t ents = a.Alloc(4 * 0x2B8);
+  Wr(0x15497F8, ents);
+  for (uint32_t e = 0; e < 4; e++) {
+    const uint32_t en = ents + 0x2B8 * e;
+    Wr(en, g() % 4 ? g() % 3 : g() % 12);
+    Wr(en + 4, g() % 2 ? 0 : g() & 0x3C);
+    for (uint32_t i = 0x1C; i < 0x60; i += 4) Wr(en + i, g() % 8 ? Float(float(int(g() % 20001) - 10000) / 100.0f) : RandFloat(g));
+    if (g() % 2) Wr(en + 0x40, 0);
+    Wr(en + 0x78, g() % 4 ? Float(float(g() % 10000) / 10.0f) : RandFloat(g));
+    Wr(en + 0x9C, g() % 2);
+    Wr(en + 0x110, unit());
+    Wr(en + 0x2AC, Pick(g, {0, 0, 0xBA1, 0x803A}));
+    lights(en);
+  }
+  lights(0x1535D6C);
+  Wr(0x1535D6C + 0x2AC, Pick(g, {0, 0xBA1}));
+  Wr(0x1535D6C + 4, g() % 2 ? 0 : g() & 0x3C);
+  Wr(0x1535D6C + 0x110, unit());
+  for (uint32_t i = 0xD8; i < 0x104; i += 4) Wr(Rd(0x1535A34) + i, unit());
+  Wr(0x1534660, g() % 9);
+  Wr(0x1534664, g() % 4 ? 0 : 0x1535D6C);
+  Wr(0x1534668, g() % 4 ? 0 : 8);
+  Wr(0x153466C, Pick(g, {0, 0, 0xBA1, 0x803A}));
+  Wr(0x1549B04, g());
+  // The dlights (a point or, w 0, a direction), as many for the world
+  // and the entities, each count of either; and the world's flares.
+  const uint32_t nd = g() % 4 ? g() % 6 : g() % 10, ne = g() % 6;
+  const uint32_t dl = a.Alloc(0x88 * std::max(std::max(nd, ne), 1u));
+  for (uint32_t i = 0; i < 0x88 * std::max(nd, ne); i += 4) Wr(dl + i, unit());
+  for (uint32_t i = 0; i < std::max(nd, ne); i++)
+    if (g() % 2) Wr(dl + 0x88 * i + 0x50, g() % 2 ? 0 : 0x80000000);
+  Wr(0x15497FC, nd);
+  Wr(0x1549800, ne);
+  Wr(0x1549804, dl);
+  const uint32_t nf = g() % 4, wf = a.Alloc(0x30 * std::max(nf, 1u));
+  for (uint32_t i = 0; i < 0x30 * nf; i += 4) Wr(wf + i, unit());
+  for (uint32_t i = 0; i < nf; i++) {
+    Wr(wf + 0x30 * i + 0x28, g() % 8);
+    Wr(wf + 0x30 * i + 0x2C, g() % 4);
+  }
+  Wr(0x1549808, nf);
+  Wr(0x154980C, wf);
+  if (g() % 4 == 0) Wr(0x1535A34, 0);
+  uint32_t head = 0;
+  for (uint32_t n = g() % 4; n; n--) head = FlareOf(a, g, head);
+  Wr(0x154B0EC, head);
+  head = 0;
+  for (uint32_t n = g() % 3; n; n--) head = FlareOf(a, g, head);
+  Wr(0x154D700, head);
+  // The sun's glare and blinding: bounds, scales, times, values, the last
+  // call's time.
+  for (uint32_t p : {0x11CE800u, 0x11CE814u}) {
+    const float lo = float(int(g() % 21) - 10) / 10.0f;
+    Wr(p, g() % 8 ? Float(lo) : RandFloat(g));
+    Wr(p + 4, g() % 8 ? Float(lo + float(g() % 11) / 10.0f) : RandFloat(g));
+    Wr(p + 8, Pick(g, {0, Float(1.0f), Float(0.5f), Float(-1.0f), RandFloat(g)}));
+    Wr(p + 0xC, Pick(g, {0, 100, 1000, 0xFFFFFFFF, uint32_t(g())}));
+    Wr(p + 0x10, Pick(g, {0, 100, 1000, 0xFFFFFFFF, uint32_t(g())}));
+  }
+  Wr(0x11CE828, unit());
+  Wr(0x11CE82C, unit());
+  Wr(0x11CE830, g() % 4 ? Rd(0x15496E8) - g() % 100 : 0);
+}
+
+// Draw surfaces for the draw surface loop: sort keys of the 4 shaders,
+// the 4 entities or the world (0x7FE, bit 1), arrays modes and bits 0
+// and 2, now and then the last one's again; a bad, skipped or polygon
+// surface (3-6 points within 100 of 0).
+uint32_t DrawSurfList(Arena& a, std::mt19937& g, uint32_t n) {
+  const uint32_t list = a.Alloc(8 * std::max(n, 1u));
+  uint32_t last = 0;
+  for (uint32_t i = 0; i < n; i++) {
+    const uint32_t ent = g() % 3 ? g() % 4 : 0x7FE;
+    uint32_t sort = (g() % 4) << 30 | (g() % 4) << 18 | ent << 7 | (g() % 8) | (g() % 8 == 0 ? 2 : 0);
+    sort &= ~0x78u;
+    if (i && g() % 3 == 0) sort = last;
+    last = sort;
+    const uint32_t surf = a.Alloc(0x50);
+    const uint32_t type = Pick(g, {0, 1, 2, 2, 2});
+    Wr(surf, type);
+    const uint32_t np = 3 + g() % 4, pts = a.Alloc(0x20 * np);
+    for (uint32_t k = 0; k < 0x20 * np; k += 4)
+      Wr(pts + k, k % 0x20 < 0x1C ? Float(float(int(g() % 20001) - 10000) / 100.0f) : uint32_t(g()));
+    Wr(surf + 8, np);
+    Wr(surf + 0xC, pts);
+    Wr(list + 8 * i, sort);
+    Wr(list + 8 * i + 4, surf);
+  }
+  return list;
+}
+
+// RB_DrawSurfs' command: the refdef and view as they are, at most 6 draw
+// surfaces.
+uint32_t DrawSurfsCommand(Arena& a, std::mt19937& g) {
+  const uint32_t cmd = a.Alloc(0x3F4);
+  Wr(cmd, 7);
+  for (uint32_t i = 0; i < 0x62; i++) Wr(cmd + 4 + 4 * i, Rd(0x15496A0 + 4 * i));
+  for (uint32_t i = 0; i < 0x98; i++) Wr(cmd + 0x18C + 4 * i, Rd(0x1549828 + 4 * i));
+  const uint32_t n = g() % 8 ? g() % 7 : 0;
+  Wr(cmd + 0x3EC, DrawSurfList(a, g, n));
+  Wr(cmd + 0x3F0, g() % 16 ? n : uint32_t(g()) | 0x80000000u);
+  return cmd;
+}
+
 bool Limits2D(std::mt19937& g) {
   switch (g() % 8) {
     case 0: Wr(0x17F0C88, 0x1FFC - g() % 2); break;
@@ -2480,11 +2742,142 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       k.edi = f;
       break;
     }
-    case 0x4CE290: {
-      // RB_DrawSurfs: its refdef and view (anything), surfaces and count.
-      const uint32_t cmd = a.Alloc(0x3F4);
-      for (uint32_t i = 0; i < 0x3F4; i += 4) Wr(cmd + i, g());
-      k.ebx = cmd;
+    case 0x4CE290:
+      // RB_DrawSurfs: its refdef and view, surfaces and count.
+      DrawState(a, g);
+      k.ebx = DrawSurfsCommand(a, g);
+      break;
+    case 0x4CC670: {
+      DrawState(a, g);
+      const uint32_t n = g() % 8 ? g() % 7 : 0;
+      k.eax = g() % 16 ? n : uint32_t(g()) | 0x80000000u;
+      k.args = {DrawSurfList(a, g, n)};
+      break;
+    }
+    case 0x4CEA70: {
+      // Up to 4 commands of each kind but text (its fonts; one RB_DrawSurfs
+      // at most), then an end (0 or past 11).
+      DrawState(a, g);
+      Wr(0x1549B4C, g() % 2);
+      Wr(0x154954C, g() % 2 ? g() % 1000 : uint32_t(g()));  // the count and its peak
+      Wr(0x1549550, g() % 2 ? g() % 1000 : uint32_t(g()));
+      Wr(0x1439370, 0);
+      Wr(0x153439C, Cvar(a, g, 0));
+      Wr(0x1534710, Cvar(a, g, g() % 2));
+      Wr(0x15344EC, Cvar(a, g, g() % 2));
+      const uint32_t buf = a.Alloc(0x1000);
+      uint32_t at = buf;
+      bool surfs = false;
+      for (uint32_t n = g() % 5; n; n--) {
+        uint32_t id = 1 + g() % 11;
+        if ((id == 7 && surfs) || id == 6) id = 1;
+        if (id == 7) {
+          surfs = true;
+          const uint32_t cmd = DrawSurfsCommand(a, g);
+          for (uint32_t i = 0; i < 0x3F4; i += 4) Wr(at + i, Rd(cmd + i));
+          at += 0x3F4;
+          continue;
+        }
+        Wr(at, id);
+        for (uint32_t i = 4; i < 0x48; i += 4) Wr(at + i, g() % 4 ? Float(float(int(g() % 2001) - 1000) / 7.0f) : RandFloat(g));
+        if (id == 1 || id == 8 || id == 10) Wr(at + 4, g() % 8 ? g() % 3000 : uint32_t(g()));
+        if (id >= 2 && id <= 5) Wr(at + 4, g() % 4 ? Rd(0x17F0C70) : Rd(0x1535B5C));
+        at += id == 2 ? 0x28 : id == 3 ? 0x30 : id == 4 ? 0x2C : id == 5 ? 0x48 : id == 9 || id == 11 ? 4 : 8;
+      }
+      Wr(at, g() % 2 ? 0 : 12 + g() % 100);
+      k.eax = buf;
+      break;
+    }
+    case 0x4CF730:
+    case 0x4CEF90:
+    case 0x4CF0C0:
+    case 0x4CC050:
+    case 0x5086A0:
+      DrawState(a, g);
+      break;
+    case 0x4CC440: {
+      DrawState(a, g);
+      Wr(0x1549B3C, g() % 4 ? Rd(0x15497F8) + 0x2B8 * (g() % 4) : 0x1535D6C);
+      if (g() % 4 == 0) {
+        Wr(0x1534664, Rd(0x1549B3C));
+        Wr(0x1534668, Rd(Rd(0x17F0C70) + 0x54) & 0x18);
+      }
+      // Now and then an ambient light to raise whose luminance sums to
+      // -0, or cancels in its order: (-c1 2^40, c0 2^40, 1) for the
+      // weights c0-c2 at 0x55B7A0.
+      const uint32_t ent = Rd(0x1549B3C), w = Rd(0x1535A34);
+      if (w && g() % 4 == 0) {
+        Wr(ent + 4, Rd(ent + 4) | 0x20);
+        Wr(ent + 0x110, Float(1.0f));
+        Wr(0x1536290, Float(1.0f));
+        Wr(Rd(0x15344A0) + 0x1C, Float(1.0f));
+        const bool zero = g() % 2;
+        const float c0 = std::bit_cast<float>(Rd(0x55B7A0)), c1 = std::bit_cast<float>(Rd(0x55B7A4));
+        const uint32_t amb[3] = {Float(-c1 * 0x1p40f), Float(c0 * 0x1p40f), Float(1.0f)};
+        for (uint32_t k = 0; k < 3; k++) {
+          Wr(w + 0xF8 + 4 * k, 0x80000000);
+          Wr(w + 0xD8 + 4 * k, zero ? 0x80000000 : amb[k]);
+        }
+      }
+      break;
+    }
+    case 0x4CF2D0:
+      DrawState(a, g);
+      k.args = {FlareOf(a, g, 0)};
+      break;
+    case 0x4DD480:
+      DrawState(a, g);
+      k.esi = a.Alloc(4);
+      k.edi = a.Alloc(4);
+      k.args = {Pick(g, {0, Float(1.0f), Float(0.5f), RandFloat(g)})};
+      break;
+    case 0x4C8CE0: {
+      // A value and its target (now and then the same or special), rise
+      // and fall times (0, negative or large), the time elapsed.
+      const uint32_t v = g() % 8 ? Float(float(int(g() % 21) - 10) / 10.0f) : RandFloat(g);
+      k.args = {v, g() % 4 ? Float(float(int(g() % 21) - 10) / 10.0f) : g() % 2 ? v : RandFloat(g),
+                Pick(g, {0, 1, 100, 1000, 0xFFFFFFFF, uint32_t(g())}),
+                Pick(g, {0, 1, 100, 1000, 0xFFFFFFFF, uint32_t(g())}),
+                uint32_t(g() % 8 ? g() % 2000 : g())};
+      // Now and then a step that lands on a target of -0 (at +0).
+      if (g() % 8 == 0) k.args = {Float(g() % 2 ? 0.5f : -0.5f), 0x80000000, 100, 100, 50};
+      break;
+    }
+    case 0x4ADFE0:
+      for (int i = 0; i < 4; i++) k.args.push_back(g() % 4 ? Float(float(int(g() % 1501) - 250) / 1000.0f) : RandFloat(g));
+      break;
+    case 0x4CC300: {
+      // A light (index 0-7; colours, position, spot, attenuations) and a
+      // scale (mostly 1).
+      const uint32_t l = a.Alloc(0x74);
+      for (uint32_t i = 0; i < 0x74; i += 4) Wr(l + i, g() % 8 ? Float(float(int(g() % 2001) - 1000) / 1000.0f) : RandFloat(g));
+      k.ebx = g() % 8 ? 1 + g() % 7 : 8;
+      if (g() % 8 == 0) k.ebx = 0x80000000;
+      k.esi = l;
+      Wr(0x1534660, g() % 9);
+      k.args = {Pick(g, {Float(1.0f), Float(1.0f), Float(0.5f), RandFloat(g)})};
+      break;
+    }
+    case 0x4AA0F0: {
+      // Dlights (a point or a direction; at most 9, now and then none or
+      // negative) into an orientation.
+      const uint32_t n = g() % 8 ? Pick(g, {uint32_t(g() % 10), 4, 5}) : g() % 2 ? 0 : uint32_t(g()) | 0x80000000u;
+      const uint32_t m = n > 9 ? 0 : n, d = a.Alloc(0x88 * std::max(m, 1u)), o = a.Alloc(0x30);
+      for (uint32_t i = 0; i < 0x88 * m; i += 4) Wr(d + i, g() % 8 ? Mixed(g) : RandFloat(g));
+      for (uint32_t i = 0; i < m; i++)
+        if (g() % 2) Wr(d + 0x88 * i + 0x50, g() % 2 ? 0 : 0x80000000);
+      for (uint32_t i = 0; i < 0x30; i += 4) Wr(o + i, g() % 8 ? Mixed(g) : RandFloat(g));
+      // Now and then sums that round by their order: points or directions
+      // (-2^60, 160, 2^60) on unit axes at 0.
+      if (m && g() % 4 == 0) {
+        for (uint32_t i = 0; i < m; i++)
+          for (uint32_t j = 0; j < 4; j++)
+            Wr(d + 0x88 * i + 0x44 + 4 * j, j == 3 ? Pick(g, {0, Float(1.0f)}) : Float(j == 1 ? 160.0f : j ? 0x1p60f : -0x1p60f));
+        for (uint32_t i = 0; i < 0x30; i += 4) Wr(o + i, i < 0xC ? 0 : Float(1.0f));
+      }
+      k.eax = n;
+      k.edx = d;
+      k.ecx = o;
       break;
     }
     case 0x4CE2F0: {
