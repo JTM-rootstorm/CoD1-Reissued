@@ -6,7 +6,8 @@
 // surface list; the world's view, its static models' bounds and links into
 // the cells, and a cell's models and surfaces; the cell walk (polygon
 // clips, the planes through a portal, a cell's occluders, the walk through
-// the portals, the coronas and the world's surfaces);
+// the portals, the coronas and the world's surfaces); the view through a
+// portal (a portal surface's orientations and its view);
 // the back end's sky clipping (ClipSkyPolygon, AddSkyPolygon), texture
 // coordinates (ComputeTexCoords); and the draw surface sort (qsortFast),
 // the 4x4 matrix product and the memcpy 0x42B0A0 under both. Replacements of lifted
@@ -46,7 +47,7 @@ void f_004AD7E0(Ctx& c);  // draws a debug box (ECX mins, EDX maxs, EAX colour)
 void f_004DEC10(Ctx& c);  // adds a culled-in entity (ent, ent)
 void f_004CAF00(Ctx& c);  // R_AddDrawSurf(surface, dlight, 0, 0; EAX, EDX shader)
 void f_0042B0A0_lifted(Ctx& c);  // the memcpy, for overlapping copies
-void f_004CAB80(Ctx& c);  // a portal or mirror surface's view (entity; EAX: drawn)
+void f_004CAB80(Ctx& c);  // a portal or mirror surface's view (EBX draw surface, entity; EAX: drawn)
 void f_00427E80(Ctx& c);  // a 4x4 matrix's inverse (ECX in, EAX out)
 void f_00429070(Ctx& c);  // adds a point to bounds (ECX point, EDX mins, ESI maxs)
 void f_004290E0(Ctx& c);  // adds bounds to bounds (ECX/ESI mins/maxs, EDX/EDI the other's)
@@ -55,6 +56,13 @@ void f_004268B0(Ctx& c);  // normalises a vector (EAX)
 void f_00426710(Ctx& c);  // VectorNormalize (ESI; the length in ST0)
 void f_004AD630(Ctx& c);  // draws a debug polygon (EBX count, stack points; EAX colour)
 void f_004AD760(Ctx& c);  // draws a debug line (EBX from, EDI to; ESI colour)
+void f_004CA170(Ctx& c);  // a surface's plane (ECX surface, ESI out)
+void f_004C9580(Ctx& c);  // an entity's orientation (EAX out, EBX view, EDI entity)
+void f_004CA8D0(Ctx& c);  // whether a portal surface is off the screen (draw surface; EAX)
+void f_004273C0(Ctx& c);  // a vector across EBX into EDX
+void f_00426AB0(Ctx& c);  // rotates a point about EAX (out, point, degrees)
+void f_0052E6D0(Ctx& c);  // the CRT's trigonometric function of ST0 called by the portal rotation
+void f_004CB270(Ctx& c);  // renders a view (view parms)
 // ComputeTexCoords' texture coordinate generators and modifiers.
 void f_0050A2B0(Ctx& c);
 void f_0050ABF0(Ctx& c);
@@ -2552,6 +2560,238 @@ void f_004D9E20(Ctx& c) {
   c.edi = edi;
   c.ebp = ebp;
   c.esp = e + 4;
+}
+
+// ---- the front end: the view through a portal -------------------------------
+
+// The orientations of a portal surface (ECX the entity; stack: the draw
+// surface, the surface's orientation, the camera's, the PVS origin, the
+// mirror flag; EAX 1 when found): the surface's plane (0x4CA170) into the
+// world (for an entity other than the world's 0x7FE, its orientation into
+// tr.or: 0x4C9580 for types 0-2, else the view's world copied; the normal
+// by 0x4C90F0 and both planes' distances moved along tr.or's origin); the
+// surface's axes from the normal (a perpendicular by 0x4273C0, their cross
+// product); then the first portal entity (type 0xB) within 64 of the
+// original plane. A mirror when its old origin (+0x54) is its origin
+// (+0x44): the surface's origin the plane's foot, the camera the surface
+// with its first axis negated. Else the surface's origin moved along the
+// first axis onto the entity's origin, the camera at the old origin with
+// the entity's axes (+0x1C), the first two negated and the second rotated
+// about the first (0x426AB0) with an old frame (+0x60) by the time / 1000
+// x the frame (+0x50), or without a frame by 0x52E6D0(time x 0.003) x 4 +
+// +0x80; without an old frame by +0x80 when it is not 0; the third then
+// their cross product (in each case's order). No portal entity: EAX 0.
+// The draw surface's and the surface's argument slots take the original's
+// temporaries; the cookie check is left out.
+void f_004CA240(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, ebp = c.ebp, ent = c.ecx;
+  const uint32_t surf = Arg(c, e, 2), cam = Arg(c, e, 3), pvs = Arg(c, e, 4), mirror = Arg(c, e, 5);
+  const uint32_t s = e - 0x40, plane = s + 0x14, orig = s + 0x28, a0 = surf + 0xC, a1 = surf + 0x18;
+  auto mul = [](uint32_t a, uint32_t b) { return St(Ld(a)) * Ld(b); };
+  auto done = [&](uint32_t r) {
+    c.eax = r;
+    c.ebx = ebx;
+    c.esi = esi;
+    c.edi = edi;
+    c.ebp = ebp;
+    c.esp = e + 4;
+  };
+  c.esp = s;
+  c.ebp = cam;
+  c.ecx = U32(Arg(c, e, 1) + 4);
+  c.esi = orig;
+  c.edi = ent;
+  Call(c, f_004CA170, 0x4CA26A);
+  if (ent != 0x7FE) {
+    Put(0x1536024, ent);
+    const uint32_t ep = ent * 0x2B8 + U32(0x1536470);
+    Put(0x1535D68, ep);
+    if (U32(ep) <= 2) {
+      c.eax = 0x153629C;
+      c.ebx = 0x1536030;
+      c.edi = ep;
+      Call(c, f_004C9580, 0x4CA2C2);
+    } else {
+      MovsD(0x153629C, 0x15360AC, 0x1F);
+    }
+    c.ecx = plane;
+    c.eax = orig;
+    Call(c, f_004C90F0, 0x4CA2CF);
+    Put(plane + 0xC, Fst(mul(0x15362A4, plane + 8) + mul(0x15362A0, plane + 4) + mul(0x153629C, plane) +
+                         Ld(orig + 0xC)));
+    Put(orig + 0xC, Fst(mul(0x15362A4, orig + 8) + mul(0x15362A0, orig + 4) + mul(0x153629C, orig) +
+                        Ld(orig + 0xC)));
+  } else {
+    MovsD(plane, orig, 5);
+  }
+  MovsD(a0, plane, 3);
+  c.eax = U32(plane + 8);
+  c.ecx = U32(plane);
+  c.ebx = a0;
+  c.edx = a1;
+  c.esi = a1;
+  c.edi = surf;
+  Call(c, f_004273C0, 0x4CA359);
+  Put(surf + 0x24, Fst(mul(a0 + 4, a1 + 8) - mul(a1 + 4, a0 + 8)));
+  Put(surf + 0x28, Fst(mul(a0 + 8, a1) - mul(a0, a1 + 8)));
+  Put(surf + 0x2C, Fst(mul(a1 + 4, a0) - mul(a0 + 4, a1)));
+  const int32_t n = I32(0x153646C);
+  const uint32_t ents = U32(0x1536470);
+  uint32_t p = 0;
+  for (int32_t i = 0; i < n; i++) {
+    const uint32_t q = ents + 0x2B8 * uint32_t(i);
+    if (U32(q) != 0xB) continue;
+    const F32 d = Fst(mul(orig + 8, q + 0x4C) + mul(orig, q + 0x44) + mul(orig + 4, q + 0x48) - Ld(orig + 0xC));
+    Put(e + 4, d);
+    if (St(d) > Ld(0x55B608) || St(d) < Ld(0x55B818)) continue;
+    p = q;
+    break;
+  }
+  if (!p) return done(0);
+  MovsD(pvs, p + 0x54, 3);
+  if (St(Ld(p + 0x54)) == Ld(p + 0x44) && St(Ld(p + 0x58)) == Ld(p + 0x48) &&
+      St(Ld(p + 0x5C)) == Ld(p + 0x4C)) {
+    const F32 x = Fst(mul(plane + 0xC, plane));
+    Put(e + 4, x);
+    Put(surf, x);
+    Put(surf + 4, Fst(mul(plane + 0xC, plane + 4)));
+    Put(surf + 8, Fst(mul(plane + 0xC, plane + 8)));
+    MovsD(cam, surf, 3);
+    for (uint32_t k = 0; k < 12; k += 4) Put(cam + 0xC + k, Fst(St(Ld(0x537E54 + k)) - Ld(a0 + k)));
+    MovsD(cam + 0x18, surf + 0x18, 6);
+    Put(mirror, 1u);
+    return done(1);
+  }
+  const F32 d = Fst(mul(plane + 8, p + 0x4C) + mul(plane + 4, p + 0x48) + mul(plane, p + 0x44) - Ld(plane + 0xC));
+  const F32 nd{d.bits ^ 0x80000000u};  // FCHS of the stored distance
+  Put(e + 4, nd);
+  for (uint32_t k = 0; k < 12; k += 4) Put(surf + k, Fst(St(nd) * Ld(a0 + k) + Ld(p + 0x44 + k)));
+  MovsD(cam, p + 0x54, 3);
+  MovsD(cam + 0xC, p + 0x1C, 9);
+  for (uint32_t k = 0; k < 0x18; k += 4) Put(cam + 0xC + k, Fst(St(Ld(0x537E54 + k % 12)) - Ld(cam + 0xC + k)));
+  Put(e + 8, U32(cam + 0x20));
+  // Axis 0 (EDI) and axis 1 (EBX), the one rotated; the point it is
+  // rotated from is a copy of it in the original's plane local.
+  const uint32_t a = cam + 0xC, b = cam + 0x18, out = cam + 0x24, pt = plane;
+  auto rotate = [&](F32 deg, uint32_t ret) {
+    MovsD(pt, b, 3);
+    c.esp = s;
+    Push(c, deg.bits);
+    Push(c, pt);
+    Push(c, b);
+    c.eax = a;
+    c.ebx = b;
+    c.edi = a;
+    c.esi = p + 0x48;
+    Call(c, f_00426AB0, ret);
+    c.esp = s;
+  };
+  if (U32(p + 0x60)) {
+    const F32 t = Fst(FromInt(I32(0x1536360)));
+    Put(e + 4, t);
+    if (const int32_t frame = I32(p + 0x50)) {
+      const St q = St(t) / Ld(0x55B658);
+      const F32 f = Fst(FromInt(frame));
+      Put(e + 4, f);
+      const F32 deg = Fst(q * f);
+      Put(e + 4, deg);
+      rotate(deg, 0x4CA636);
+      Put(out, Fst(mul(b + 8, a + 4) - mul(b + 4, a + 8)));
+      Put(out + 4, Fst(mul(b, a + 8) - mul(b + 8, a)));
+      Put(out + 8, Fst(mul(a, b + 4) - mul(a + 4, b)));
+    } else {
+      x87::LoadF64(c.fpu, std::bit_cast<uint64_t>((St(t) * Ld(0x55B81C)).v));
+      Call(c, f_0052E6D0, 0x4CA673);
+      const F32 sn{x87::StoreF32(c.fpu)};
+      x87::Pop(c.fpu);
+      Put(e + 4, sn);
+      const F32 deg = Fst(St(sn) * Ld(0x55B800) + Ld(p + 0x80));
+      Put(e + 4, deg);
+      rotate(deg, 0x4CA6AF);
+      Put(out, Fst(mul(b + 8, a + 4) - mul(a + 8, b + 4)));
+      Put(out + 4, Fst(mul(a + 8, b) - mul(a, b + 8)));
+      Put(out + 8, Fst(mul(a, b + 4) - mul(b, a + 4)));
+    }
+  } else if (!(St(Ld(p + 0x80)) == Ld(0x55B584))) {
+    rotate(Ld(p + 0x80), 0x4CA70D);
+    Put(out, Fst(mul(a + 4, b + 8) - mul(b + 4, a + 8)));
+    Put(out + 4, Fst(mul(a + 8, b) - mul(a, b + 8)));
+    Put(out + 8, Fst(mul(b + 4, a) - mul(a + 4, b)));
+  }
+  Put(mirror, 0u);
+  done(1);
+}
+
+// A portal or mirror surface's view (EBX the draw surface; stack: the
+// entity; EAX 1 when drawn): none inside a portal's view (0x1536134: a
+// warning), with the cvar 0x1534514 or 0x153457C set, for a surface off the
+// screen (0x4CA8D0) or without a portal entity (0x4CA240); else the view
+// (0x260 bytes at 0x1536030) saved and copied, the copy flagged a portal's
+// (+0x104) with the mirror flag (+0x108) and PVS origin (+0xF8) 0x4CA240
+// gives, its origin the view's mirrored through the surface to the camera
+// (0x4C9FF0), its portal plane (+0x114) the camera's first axis negated
+// through the camera's origin (nudged, 0x4D6830), its axes mirrored
+// (0x4CA0C0), rendered (0x4CB270), and the view restored. The locals the
+// callees are handed are at the original's (8-aligned) addresses; the
+// cookie check is left out.
+void f_004CAB80(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi, ebp = c.ebp, ds = c.ebx, ent = Arg(c, e, 1);
+  const uint32_t s = (((e - 4) & ~7u) - 0xD28) - 8;
+  const uint32_t cam = s + 8, surf = s + 0x38, parms = s + 0x68, old = s + 0x2C8, pl = parms + 0x114;
+  auto done = [&](uint32_t r) {
+    c.eax = r;
+    c.esi = esi;
+    c.edi = edi;
+    c.ebp = ebp;
+    c.esp = e + 4;
+  };
+  c.esp = s;
+  c.ebp = e - 4;
+  if (U32(0x1536134)) {
+    Push(c, 0x5430C0);
+    Push(c, 1);
+    CallPtr(c, U32(kPrintfPtr), 0x4CABB3, 0x4CABAD);
+    return done(0);
+  }
+  if (CvarInt(0x1534514) || CvarInt(0x153457C)) return done(0);
+  Push(c, s + 0x528);
+  Push(c, ds);
+  Call(c, f_004CA8D0, 0x4CABF4);
+  c.esp = s;
+  if (c.eax) return done(0);
+  MovsD(old, 0x1536030, 0x98);
+  MovsD(parms, 0x1536030, 0x98);
+  Push(c, parms + 0x108);
+  Push(c, parms + 0xF8);
+  Push(c, cam);
+  Push(c, surf);
+  Push(c, ds);
+  Put(parms + 0x104, 1u);
+  c.ecx = ent;
+  Call(c, f_004CA240, 0x4CAC4C);
+  c.esp = s;
+  if (!c.eax) return done(0);
+  c.eax = cam;
+  c.ecx = surf;
+  c.edx = parms;
+  c.esi = old;
+  Call(c, f_004C9FF0, 0x4CAC6F);
+  for (uint32_t k = 0; k < 12; k += 4) Put(pl + k, Fst(St(Ld(0x537E54 + k)) - Ld(cam + 0xC + k)));
+  Put(pl + 0xC, Fst(St(Ld(cam + 8)) * Ld(pl + 8) + St(Ld(cam + 4)) * Ld(pl + 4) + St(Ld(cam)) * Ld(pl)));
+  c.eax = pl;
+  Call(c, f_004D6830, 0x4CACDA);
+  constexpr uint32_t kRet[3] = {0x4CACF2, 0x4CAD0D, 0x4CAD28};
+  for (uint32_t i = 0; i < 3; i++) {
+    c.eax = parms + 0xC + 0xC * i;
+    c.ecx = cam;
+    c.edx = surf;
+    c.esi = old + 0xC + 0xC * i;
+    Call(c, f_004CA0C0, kRet[i]);
+  }
+  Push(c, parms);
+  Call(c, f_004CB270, 0x4CAD32);
+  MovsD(0x1536030, old, 0x98);
+  done(1);
 }
 
 }  // namespace recomp::gen

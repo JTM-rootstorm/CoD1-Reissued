@@ -156,7 +156,10 @@ speed.
   (main) and 1.752-1.755 ms. With layer 4: 13 of 13 shared, 47 of 1640
   in-level identical (46 between two runs of main); mean 1.759-1.784 ms
   (main) and 1.722-1.737 ms, p99 2.6 and 2.5; the log's error count
-  unchanged (3).
+  unchanged (3). With layer 5: 13 of 13 shared, 46 of 1640 in-level
+  identical (45 between two runs of main); mean 1.772-1.783 ms (main) and
+  1.729-1.731 ms; errors 3. (Whether the run's level draws a portal
+  surface at all is not known: the frames do not show the portal view.)
 - Layer 4, the cell walk (2026-11-09): a polygon's clip 0x4D7F30 (ECX
   plane; stack points, &count, out: distances z + x + y less the plane's,
   behind below -0.001, in front above 0.001; none in front: count 0, EAX
@@ -235,6 +238,57 @@ speed.
   (two axes about 2^22 and points 1 off it: normals (+-1, +-1, +-1) whose
   distances cancel to 2^-30), points about 0.001 along a plane's normal,
   axial portals at an integral distance and 0x400 occluders were added.
+- Layer 5, the view through a portal (2026-11-09): a portal surface's
+  orientations 0x4CA240 (ECX the entity; stack the draw surface, the
+  surface's orientation, the camera's, the PVS origin, the mirror flag;
+  EAX 1 when a portal entity is found: the surface's plane by 0x4CA170, for an entity other than the world's
+  into the world through its orientation (0x4C9580 into tr.or for types
+  0-2, else the view's world copied) with the original plane's distance
+  moved along tr.or's origin but its normal left local; the surface's axes
+  the normal, a perpendicular (0x4273C0) and their cross product; then
+  the first entity of type 0xB whose origin is within 64 of the original
+  plane, its distance stored as a float first. A mirror when its old
+  origin (+0x54) equals its origin: the surface's origin the plane's
+  foot, the camera the surface with its first axis negated. Else the
+  surface's origin moved along the normal onto the entity's origin, the
+  camera at the old origin with the entity's axes (+0x1C), the first two
+  negated, the second rotated about the first by 0x426AB0 with an old
+  frame (+0x60) by the time / 1000 x the frame (+0x50), or without a
+  frame by 4 x 0x52E6D0(time x 0.003) + the float at +0x80, and without
+  an old frame by +0x80 when not 0; the third axis their cross product,
+  with each of the three cases' operands in its own order. It keeps
+  float temporaries in its first two argument slots) and the view
+  0x4CAB80 (EBX the draw surface; stack the entity; EAX 1 when drawn:
+  none inside a portal's view (0x1536134, ri.Printf's warning 0x5430C0
+  at level 1), with the cvar 0x1534514 or 0x153457C set, for a surface
+  0x4CA8D0 finds off the screen or without a portal entity; else the view
+  0x1536030 (0x260 bytes) saved and copied in an 8-aligned 0xD28-byte
+  frame, the copy a portal's (+0x104) with the mirror flag (+0x108) and
+  PVS origin (+0xF8), its origin and axes mirrored through the surface
+  to the camera (0x4C9FF0, 0x4CA0C0), its portal plane (+0x114) the
+  camera's first axis negated through the camera's origin, nudged
+  (0x4D6830); rendered by 0x4CB270 and the view restored). Still lifted
+  under them: 0x4CA170 (with 0x429650's plane from points), 0x4C9580,
+  0x4CA8D0 (native in the back end), 0x4273C0, 0x426AB0, the CRT's
+  0x52E6D0 and the cookie checks; 0x4CB270 (the scene) is the next layer.
+- Layer 5 oracle and mutations: 0x4CA8D0 (off the screen every fourth
+  call) and 0x4CB270 are stubs, the latter recording a hash of the view
+  it is handed and taking it as the current view with every dword
+  changed (a rendered view becomes the current one), so the restore
+  shows; the
+  draw surface sort now reaches the real portal view, over a portal scene
+  (four entities, one surface). The scenes are finite and not degenerate:
+  a zero normal's perpendicular (0x4273C0) divides by 0 and the CRT's
+  square root of the NaN reports through the Windows API. 40k cases (20k
+  per entry): 708k random cases in all, 0 mismatched; ctest 37 of 37. 49
+  mutants: all caught but one equivalent (the world's plane copied with
+  four dwords, the fifth never read); the first run missed the four sum
+  orders and the restore's length, until an entity's first axis and
+  origin that cancel under the default plane, triangles of normal (c, c,
+  c) with portals whose distances cancel (and others about 64 off with
+  two terms of about 2^35 that cancel, where only the range test shows
+  the order), portals whose first axis and old origin cancel, and the
+  stub's change of the view were added.
 
 ## Renderer back end (2026-10-25, branch render-backend)
 The back end is going native from the bottom up (src/render_backend.cpp),

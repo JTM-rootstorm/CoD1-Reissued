@@ -80,7 +80,8 @@ replace 00519140
 # BSP, a cell's models and surfaces, the surfaces beyond the far plane and
 # the world's view; the cell walk: a polygon's clip, a portal's planes and
 # the planes through it, a cell's occluders, the walk through the portals,
-# the world's coronas and the world's surfaces. Back end:
+# the world's coronas and the world's surfaces; the view through a portal:
+# a portal surface's orientations and its view. Back end:
 # ClipSkyPolygon, AddSkyPolygon and ComputeTexCoords. Under both:
 # qsortFast of the draw surfaces, the 4x4 matrix product and the memcpy
 # 0x42B0A0.
@@ -132,6 +133,8 @@ replace 004D7A70
 replace 004D96E0
 replace 004D9A10
 replace 004D9E20
+replace 004CA240
+replace 004CAB80
 
 # The renderer back end (src/render_backend.cpp): GL_Bind, the cull face,
 # the texture environment, the state bits and the client arrays, fog on
