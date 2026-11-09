@@ -32,4 +32,13 @@
 #define f_004D7DF0 n_004D7DF0
 #define f_004D7E70 n_004D7E70
 #define f_004D7ED0 n_004D7ED0
+#define f_004D8770 n_004D8770
+#define f_004D8910 n_004D8910
+#define f_004D8A20 n_004D8A20
+#define f_004D8B50 n_004D8B50
+#define f_004D8BE0 n_004D8BE0
+#define f_004D8D80 n_004D8D80
+#define f_004D9290 n_004D9290
+#define f_004D9820 n_004D9820
+#define f_004D9D80 n_004D9D80
 #include "../src/render.cpp"

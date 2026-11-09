@@ -2,7 +2,9 @@
 // back end: the front end's culling of world surfaces, static models and
 // entities against the view frustum and the cell portals, the dlight bits
 // of a bounds and adding a world surface; the view (its culls, transforms,
-// fog transition, far clip, projection and frustum);
+// fog transition, far clip, projection and frustum); the draw surface list;
+// the world's view, its static models' bounds and links into the cells,
+// and a cell's models and surfaces;
 // the back end's sky clipping (ClipSkyPolygon, AddSkyPolygon), texture
 // coordinates (ComputeTexCoords); and the draw surface sort (qsortFast),
 // the 4x4 matrix product and the memcpy 0x42B0A0 under both. Replacements of lifted
@@ -43,6 +45,9 @@ void f_004CAF00(Ctx& c);  // R_AddDrawSurf(surface, dlight, 0, 0; EAX, EDX shade
 void f_0042B0A0_lifted(Ctx& c);  // the memcpy, for overlapping copies
 void f_004CAB80(Ctx& c);  // a portal or mirror surface's view (entity; EAX: drawn)
 void f_00427E80(Ctx& c);  // a 4x4 matrix's inverse (ECX in, EAX out)
+void f_00429070(Ctx& c);  // adds a point to bounds (ECX point, EDX mins, ESI maxs)
+void f_004290E0(Ctx& c);  // adds bounds to bounds (ECX/ESI mins/maxs, EDX/EDI the other's)
+void f_00429800(Ctx& c);  // BoxOnPlaneSide(mins, maxs, plane)
 // ComputeTexCoords' texture coordinate generators and modifiers.
 void f_0050A2B0(Ctx& c);
 void f_0050ABF0(Ctx& c);
@@ -1460,12 +1465,17 @@ namespace {
 constexpr uint32_t kCullOrigin = 0x11BEAF8, kCullFrustum = 0x11BEB04, kCullFar = 0x11BEB84;
 constexpr uint32_t kViewProj = 0x11BEB90, kViewProjInverse = 0x11BEBD0, kWorld = 0x1535A34;
 
-// A plane (cplane_t) nudged 0.001 back, with its far corner's offsets
-// within a bounds from its normal's signs as integers (-0 counts as 0).
-void NudgePlane(uint32_t p) {
-  Put(p + 0xC, Fst(St(Ld(p + 0xC)) - Ld(0x55B58C)));
+// A plane's (cplane_t) far corner's offsets within a bounds, from its
+// normal's signs as integers (-0 counts as 0).
+void SignBits(uint32_t p) {
   for (uint32_t k = 0; k < 3; k++)
     Wr<uint8_t>(g_guest_base, p + 0x10 + k, uint8_t((I32(p + 4 * k) <= 0 ? 0 : 0xC) + 4 * k));
+}
+
+// A plane nudged 0.001 back, with its offsets.
+void NudgePlane(uint32_t p) {
+  Put(p + 0xC, Fst(St(Ld(p + 0xC)) - Ld(0x55B58C)));
+  SignBits(p);
 }
 
 // A point's distance along a plane's normal (z + y + x).
@@ -1574,6 +1584,362 @@ void f_004D7ED0(Ctx& c) {
         break;
       }
   c.esp += 4;
+}
+
+
+// ---- the front end: the world's static models and cells ------------------------
+
+namespace {
+
+// The static models (0x2B8 bytes each: type at +0, 0 an XModel through
+// the table 0x15364F8 by its index at +8, 1 a model scaled by its axes;
+// +0x2B4 nonzero while hidden from this view) and their cell references
+// (32 bytes each: model, mins, maxs, next; a cell's list at +0x3C).
+constexpr uint32_t kNumStaticModels = 0x153646C, kStaticModels = 0x1536470;
+constexpr uint32_t kCellRefs = 0x11BEB88, kNumCellRefs = 0x11BEB8C;
+
+// A static model's bounds b culled by the frustum (while the plane bits
+// counter is above 0), the near and far planes and the portals.
+bool ModelCulled(uint32_t b, uint32_t planes, int32_t numPlanes) {
+  return FrustumCulls(b, planes, numPlanes, 0 < I32(kPlaneBits)) ||
+         PortalsCull(b, [](int32_t bits) { return 0 < bits; });
+}
+
+// A vector's squared length (x*x + y*y + z*z).
+St Length2(uint32_t v) {
+  const St x = Ld(v), y = Ld(v + 4), z = Ld(v + 8);
+  return x * x + y * y + z * z;
+}
+
+}  // namespace
+
+// A type 1 static model's bounds (ECX model; ESI mins, EDX maxs out): its
+// model's (+0x90 -> +0x18 -> +4, bounds at +0x4C) scaled by the square
+// root of its largest axis's (+0x1C, +0x28, +0x34) squared length, the
+// lengths compared as stored but the first kept unrounded, about its
+// origin (+0x44).
+void f_004D8910(Ctx& c) {
+  const uint32_t m = c.ecx, mins = c.esi, maxs = c.edx;
+  St r = Length2(m + 0x1C);
+  const F32 l0 = Fst(r), l1 = Fst(Length2(m + 0x28)), l2 = Fst(Length2(m + 0x34));
+  if (St(l0) < l1) r = l1;
+  if (r < l2) r = l2;
+  r = Sqrt(r);
+  const uint32_t b = U32(U32(U32(m + 0x90) + 0x18) + 4) + 0x4C;
+  F32 v[6];
+  for (uint32_t i = 0; i < 6; i++) v[i] = Ld(b + 4 * i);
+  for (uint32_t i = 0; i < 3; i++) Put(mins + 4 * i, Fst(St(v[i]) * r + Ld(m + 0x44 + 4 * i)));
+  for (uint32_t i = 0; i < 3; i++) Put(maxs + 4 * i, Fst(St(v[3 + i]) * r + Ld(m + 0x44 + 4 * i)));
+  c.esp += 4;
+}
+
+// An XModel static model's bounds (EDI model; EAX maxs, mins on the
+// stack): its model's bounds' (+0x4C) eight corners under its axes (+0x1C,
+// +0x28, +0x34) about its origin (+0x44), each stored as floats and added
+// to the bounds (from +-2^18) by 0x429070.
+void f_004D8A20(Ctx& c) {
+  const uint32_t e = c.esp, maxs = c.eax, m = c.edi, mins = Arg(c, e, 1), esi = c.esi;
+  const uint32_t b = U32(U32(0x15364F8 + 4 * U32(m + 8)) + 0x4C), pt = e - 0x18;
+  for (uint32_t i = 3; i--;) Put(mins + 4 * i, 0x48800000);
+  for (uint32_t i = 3; i--;) Put(maxs + 4 * i, 0xC8800000);
+  for (uint32_t k = 0; k < 8; k++) {
+    const F32 x = Ld(b + 12 * (k & 1)), y = Ld(b + 12 * (k >> 1 & 1) + 4), z = Ld(b + 12 * (k >> 2 & 1) + 8);
+    for (uint32_t i = 0; i < 3; i++) Put(pt + 4 * i, Fst(St(x) * Ld(m + 0x1C + 4 * i) + Ld(m + 0x44 + 4 * i)));
+    for (uint32_t i = 0; i < 3; i++) Put(pt + 4 * i, Fst(St(y) * Ld(m + 0x28 + 4 * i) + Ld(pt + 4 * i)));
+    for (uint32_t i = 0; i < 3; i++) Put(pt + 4 * i, Fst(St(z) * Ld(m + 0x34 + 4 * i) + Ld(pt + 4 * i)));
+    c.esp = e - 0x24;
+    c.ecx = pt;
+    c.edx = mins;
+    c.esi = maxs;
+    Call(c, f_00429070, 0x4D8B3A);
+  }
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// A static model's (EBX) reference in a cell (ECX) with bounds EDX mins,
+// EAX maxs: added to the cell's bounds when it has one ("^1Max xmodel refs
+// (%i) exceeded" through ri.Printf at 0x1000), else a new one at the head
+// of the cell's list.
+void f_004D8B50(Ctx& c) {
+  const uint32_t e = c.esp, cell = c.ecx, mins = c.edx, maxs = c.eax, model = c.ebx;
+  const uint32_t n = U32(kNumCellRefs);
+  if (n == 0x1000) {
+    c.esp = e - 8;
+    Push(c, n);
+    Push(c, 0x5425C8);
+    Push(c, 1);
+    CallPtr(c, U32(kPrintfPtr), 0x4D8B72, 0x4D8B6C);
+    c.esp = e + 4;
+    return;
+  }
+  for (uint32_t r = U32(cell + 0x3C); r; r = U32(r + 0x1C))
+    if (U32(r) == model) {
+      const uint32_t esi = c.esi, edi = c.edi;
+      c.esp = e - 0xC;
+      c.ecx = r + 4;
+      c.esi = r + 0x10;
+      c.edi = maxs;
+      Call(c, f_004290E0, 0x4D8BDB);
+      c.esi = esi;
+      c.edi = edi;
+      c.esp = e + 4;
+      return;
+    }
+  const uint32_t r = U32(kCellRefs) + (n << 5);
+  Put(kNumCellRefs, n + 1);
+  Put(r, model);
+  for (uint32_t i = 0; i < 3; i++) Put(r + 4 + 4 * i, U32(mins + 4 * i));
+  for (uint32_t i = 0; i < 3; i++) Put(r + 0x10 + 4 * i, U32(maxs + 4 * i));
+  Put(r + 0x1C, U32(cell + 0x3C));
+  Put(cell + 0x3C, r);
+  c.esp = e + 4;
+}
+
+// A static model's bounds (stack: BSP node, model, mins, maxs) linked into
+// the cells of the leaves it reaches (node +8: -2 for a node, else the
+// leaf's cell, -1 none; plane +0xC, children +0x10, +0x14): EAX the one
+// cell, or -2 when it reaches more than one. A box across an axial plane
+// is split at it: the back with its maxs clamped, then the front with its
+// mins clamped only when the plane is below its maxs.
+void f_004D8BE0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, model = Arg(c, e, 2), mins = Arg(c, e, 3), maxs = Arg(c, e, 4);
+  const uint32_t s = e - 0x28, lo = e - 0x18, hi = e - 0xC;
+  auto link = [&](uint32_t esp, uint32_t child, uint32_t mn, uint32_t mx, uint32_t ret) {
+    c.esp = esp;
+    Push(c, mx);
+    Push(c, mn);
+    Push(c, model);
+    Push(c, child);
+    Call(c, f_004D8BE0, ret);
+    return c.eax;
+  };
+  uint32_t node = Arg(c, e, 1), result;
+  for (;;) {
+    if (I32(node + 8) != -2) {
+      if (I32(node + 8) >= 0) {
+        c.esp = s;
+        c.ecx = U32(U32(kWorld) + 0x124) + (U32(node + 8) << 6);
+        c.edx = mins;
+        c.eax = maxs;
+        c.ebx = model;
+        Call(c, f_004D8B50, 0x4D8C41);
+      }
+      result = U32(node + 8);
+      break;
+    }
+    c.esp = s;
+    Push(c, U32(node + 0xC));
+    Push(c, maxs);
+    Push(c, mins);
+    Call(c, f_00429800, 0x4D8C0B);
+    if (c.eax != 3) {
+      node = U32(node + 0xC + 4 * c.eax);
+      continue;
+    }
+    uint32_t front, back;
+    if (U8(U32(node + 0xC) + 0x10) >= 3) {
+      front = link(s, U32(node + 0x10), mins, maxs, 0x4D8CF5);
+      back = link(s - 0x10, U32(node + 0x14), mins, maxs, 0x4D8D07);
+    } else {
+      const uint32_t p = U32(node + 0xC);
+      for (uint32_t i = 0; i < 3; i++) Put(lo + 4 * i, U32(mins + 4 * i));
+      Put(lo + 4 * U8(p + 0x10), U32(p + 0xC));
+      for (uint32_t i = 0; i < 3; i++) Put(hi + 4 * i, U32(maxs + 4 * i));
+      Put(hi + 4 * U8(p + 0x10), U32(p + 0xC));
+      back = link(s, U32(node + 0x14), mins, hi, 0x4D8CAB);
+      const uint32_t axis = 4 * U8(U32(node + 0xC) + 0x10);
+      if (!(St(Ld(lo + axis)) < Ld(maxs + axis))) {
+        result = back;
+        break;
+      }
+      front = link(s, U32(node + 0x10), lo, maxs, 0x4D8CDE);
+    }
+    result = front == back ? front : 0xFFFFFFFE;
+    break;
+  }
+  c.ebx = ebx;
+  c.eax = result;
+  c.esp = e + 4;
+}
+
+// The static models linked into the world's cells (stack: frustum planes,
+// count): the cells' (world +0x124, count +0x120, 0x40 bytes each) lists
+// emptied, then each model of a type the cvars allow (XModels: 0x153470C
+// and 0x1534420; type 1: 0x15343A0 and 0x1534424) hidden, its bounds
+// culled, and, not culled, linked through the BSP (a type 1 model only
+// while two of its sizes are at most 1536: else shown); shown when it
+// reaches no cell. A debug box while 0x1534550 (XModels) or 0x15344B8 is 1.
+void f_004D8D80(Ctx& c) {
+  const uint32_t e = c.esp, planes = Arg(c, e, 1), esi = c.esi, edi = c.edi;
+  const int32_t numPlanes = int32_t(Arg(c, e, 2));
+  const uint32_t s = e - 0x38, mins = e - 0x18, maxs = e - 0xC;
+  const bool xmodels = CvarInt(0x153470C) && CvarInt(0x1534420);
+  const bool scaled = CvarInt(0x15343A0) && CvarInt(0x1534424);
+  for (int32_t i = 0; i < I32(U32(kWorld) + 0x120); i++) Put(U32(U32(kWorld) + 0x124) + 0x40 * uint32_t(i) + 0x3C, 0);
+  Put(kNumCellRefs, 0);
+  auto link = [&](uint32_t model, uint32_t ret) {
+    c.esp = s;
+    Push(c, maxs);
+    Push(c, mins);
+    Push(c, model);
+    Push(c, U32(U32(kWorld) + 0x98));
+    Call(c, f_004D8BE0, ret);
+    return c.eax;
+  };
+  for (int32_t i = 0; i < I32(kNumStaticModels); i++) {
+    const uint32_t at = 0x2B8 * uint32_t(i);
+    Put(U32(kStaticModels) + at + 0x2B4, 0);
+    const uint32_t type = U32(U32(kStaticModels) + at);
+    uint32_t debug;
+    if (type == 1) {
+      if (!scaled) continue;
+      Put(U32(kStaticModels) + at + 0x2B4, 2);
+      c.esp = s;
+      c.ecx = U32(kStaticModels) + at;
+      c.edx = maxs;
+      c.esi = mins;
+      Call(c, f_004D8910, 0x4D8E6F);
+      if (ModelCulled(mins, planes, numPlanes)) continue;
+      const F32 limit = Ld(0x55B5D8);
+      auto small = [&](uint32_t k) { return !(St(Ld(maxs + 4 * k)) - Ld(mins + 4 * k) > limit); };
+      const bool x = small(0), y = small(1);
+      if (x == y ? !x : !small(2)) Put(U32(kStaticModels) + at + 0x2B4, 0);
+      else if (link(U32(kStaticModels) + at, 0x4D904C) == 0xFFFFFFFF) Put(U32(kStaticModels) + at + 0x2B4, 0);
+      debug = 0x15344B8;
+    } else if (type == 0) {
+      if (!xmodels) continue;
+      Put(U32(kStaticModels) + at + 0x2B4, 2);
+      c.esp = s;
+      Push(c, mins);
+      c.eax = maxs;
+      c.edi = U32(kStaticModels) + at;
+      Call(c, f_004D8A20, 0x4D90A0);
+      if (ModelCulled(mins, planes, numPlanes)) continue;
+      if (link(U32(kStaticModels) + at, 0x4D9229) == 0xFFFFFFFF) Put(U32(kStaticModels) + at + 0x2B4, 0);
+      debug = 0x1534550;
+    } else {
+      continue;
+    }
+    if (CvarInt(debug) == 1) {
+      c.esp = s;
+      DrawBounds(c, mins, maxs, 0x537890, 0x4D925B);
+    }
+  }
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// A cell's (EAX) static model references (+0x3C) against the frustum
+// (stack: planes, count): each hidden model whose reference's bounds are
+// not culled is shown.
+void f_004D8770(Ctx& c) {
+  const uint32_t e = c.esp, planes = Arg(c, e, 1);
+  const int32_t numPlanes = int32_t(Arg(c, e, 2));
+  for (uint32_t r = U32(c.eax + 0x3C); r; r = U32(r + 0x1C))
+    if (U32(U32(r) + 0x2B4) && !ModelCulled(r + 4, planes, numPlanes)) Put(U32(r) + 0x2B4, 0);
+  c.esp = e + 4;
+}
+
+// A cell's (ESI) world surfaces (stack: planes, count, dlight bits): its
+// surface AABB trees (+0x18 -> +0x20, count +0x24) or, without, its
+// surface references (+0x18, count +0x1C), culled from plane bits 0; then
+// its static models while the cvar 0x15343D4 is set.
+void f_004D9290(Ctx& c) {
+  const uint32_t e = c.esp, cell = c.esi, planes = Arg(c, e, 1), numPlanes = Arg(c, e, 2), dl = Arg(c, e, 3);
+  Put(kPlaneBits, uint32_t(kNoBits));
+  if (U32(U32(cell + 0x18) + 0x24)) {
+    for (int32_t i = 0; i < I32(U32(cell + 0x18) + 0x24); i++) {
+      c.esp = e - 0xC;
+      Push(c, 0);
+      Push(c, dl);
+      Push(c, numPlanes);
+      Push(c, planes);
+      Push(c, U32(U32(cell + 0x18) + 0x20) + 0x28 * uint32_t(i));
+      Call(c, f_004D8420, 0x4D92C9);
+    }
+  } else {
+    for (int32_t i = 0; i < I32(U32(cell + 0x18) + 0x1C); i++) {
+      c.esp = e - 0xC;
+      Push(c, 0);
+      Push(c, planes);
+      Push(c, dl);
+      Push(c, U32(U32(cell + 0x18) + 0x18) + 0xC * uint32_t(i));
+      c.eax = numPlanes;
+      Call(c, f_004D8280, 0x4D92FE);
+    }
+  }
+  if (CvarInt(0x15343D4)) {
+    c.esp = e - 0xC;
+    Push(c, numPlanes);
+    Push(c, planes);
+    c.eax = cell;
+    Call(c, f_004D8770, 0x4D9329);
+  }
+  c.esp = e + 4;
+}
+
+// The world's surfaces beyond the far plane (world +0xA8, count +0xA4),
+// with one: the far plane dropped, each not yet added this view whose
+// bounds are wholly behind it culled by the frustum alone.
+void f_004D9D80(Ctx& c) {
+  const uint32_t e = c.esp, far = U32(kFarPlane);
+  if (far) {
+    Put(kFarPlane, 0);
+    for (int32_t i = 0; i < I32(U32(kWorld) + 0xA4); i++) {
+      const uint32_t ref = U32(U32(U32(kWorld) + 0xA8) + 4 * uint32_t(i));
+      if (U32(ref) == U32(kViewCount) || !Behind(FarZYX(U32(ref + 8) + 0xC, far), far)) continue;
+      c.esp = e - 0xC;
+      Push(c, 0);
+      Push(c, kCullFrustum);
+      Push(c, 0);
+      Push(c, ref);
+      c.eax = 4;
+      Call(c, f_004D8280, 0x4D9E08);
+    }
+  }
+  c.esp = e + 4;
+}
+
+// The world's view (unless 0x564550 is clear and the cvar 0x153450C set;
+// 0x564550 cleared): the frustum (0x4D6A10), the origin, the near plane
+// (the view's forward axis 0x153603C through the origin, 0.1 + 0.001 on;
+// a portal's 0x1536144 instead while 0x1536138), the far plane while the
+// far distance is above 0 (the axis reversed, 0.001 inside it), and the
+// view-projection matrix (0x4D6AB0) while the cvar 0x153452C is above 0.
+void f_004D9820(Ctx& c) {
+  const uint32_t e = c.esp;
+  if (!U32(0x564550) && CvarInt(0x153450C)) {
+    c.esp = e + 4;
+    return;
+  }
+  Put(0x564550, 0);
+  Call(c, f_004D6A10, 0x4D9848);
+  constexpr uint32_t kOrigin = 0x1536030, kAxis = 0x153603C, kNear = 0x11BEB54, kFar = 0x11BEB68;
+  for (uint32_t i = 0; i < 3; i++) Put(kCullOrigin + 4 * i, U32(kOrigin + 4 * i));
+  for (uint32_t i = 0; i < 3; i++) Put(kNear + 4 * i, U32(kAxis + 4 * i));
+  SignBits(kNear);
+  Put(kNear + 0xC, Fst(St(Ld(kNear + 8)) * Ld(kOrigin + 8) + St(Ld(kNear + 4)) * Ld(kOrigin + 4) +
+                       St(Ld(kNear)) * Ld(kOrigin) - Ld(0x55B71C) - Ld(0x55B58C)));
+  Put(kNearPlane, U32(0x1536138) ? 0x1536144 : kNear);
+  Call(c, f_004D6880, 0x4D991F);
+  const St dist(std::bit_cast<double>(x87::StoreF64(c.fpu)));
+  x87::Pop(c.fpu);
+  if (dist > Ld(0x55B584)) {
+    Put(kFarPlane, kFar);
+    Put(kFar, Fst(St(Ld(kAxis)) * Ld(0x55B5BC)));
+    Put(kFar + 4, Fst(St(Ld(kAxis + 4)) * Ld(0x55B5BC)));
+    const St z = St(Ld(kAxis + 8)) * Ld(0x55B5BC);
+    Put(kFar + 8, Fst(z));
+    SignBits(kFar);
+    Put(kFar + 0xC, Fst(z * Ld(kOrigin + 8) + St(Ld(kFar + 4)) * Ld(kOrigin + 4) + St(Ld(kFar)) * Ld(kOrigin) -
+                        dist - Ld(0x55B58C)));
+  } else {
+    Put(kFarPlane, 0);
+  }
+  if (St(Ld(U32(0x153452C) + 0x1C)) > Ld(0x55B584)) return f_004D6AB0(c);
+  c.esp = e + 4;
 }
 
 }  // namespace recomp::gen

@@ -77,6 +77,39 @@ speed.
   first child) and a polygon (+0x18 points, +0x1C count) against planes
   0x4D7E70 (1 at a plane none is in front of, at once with no points) and
   0x4D7ED0 (0 at a point in front of any).
+- Layer 3, the world's static models and cells (2026-11-09): a type 1
+  static model's bounds 0x4D8910 (its model's bounds, +0x90 -> +0x18 ->
+  +4 +0x4C, scaled by the square root of the largest squared length of
+  its axes +0x1C/+0x28/+0x34: compared as stored floats, the first kept
+  unrounded), an XModel's 0x4D8A20 (the table 0x15364F8 by +8, bounds
+  +0x4C: eight corners under the axes, each stored as floats, added by
+  0x429070 from +-2^18), a model's reference in a cell 0x4D8B50 ("^1Max
+  xmodel refs (%i) exceeded" at 0x1000 through ri.Printf; 32-byte refs
+  from 0x11BEB88, count 0x11BEB8C, a cell's list at +0x3C, an existing
+  one's bounds widened by 0x4290E0), its link through the BSP 0x4D8BE0
+  (BoxOnPlaneSide 0x429800; node cell -2, leaf cell or -1; across an
+  axial plane the back with its maxs clamped, then the front with its
+  mins clamped only when the plane is below its maxs; across another
+  both whole; EAX the one cell or -2), the links of all static models
+  0x4D8D80 (0x2B8 bytes each from 0x1536470, count 0x153646C; +0x2B4
+  nonzero while hidden; XModels while the cvars 0x153470C and 0x1534420,
+  type 1 while 0x15343A0 and 0x1534424; culled models stay hidden, a type
+  1 model is linked only when two of its sizes are at most 1536, shown
+  otherwise or when it reaches no cell; debug boxes with 0x1534550 or
+  0x15344B8 at 1), a cell's models 0x4D8770 (each hidden one whose
+  reference is not culled shown), a cell's surfaces 0x4D9290 (its AABB
+  trees or its references from plane bits 0, then its models with the
+  cvar 0x15343D4), the surfaces beyond the far plane 0x4D9D80 (world
+  +0xA8, count +0xA4: with a far plane it is dropped and each surface
+  wholly behind it culled by the frustum alone) and the world's view
+  0x4D9820 (skipped while 0x564550 is clear and the cvar 0x153450C set;
+  the frustum, the origin, the near plane along the forward axis 0.1 +
+  0.001 on, or a portal's 0x1536144 while 0x1536138; the far plane, the
+  axis reversed, while the far distance is above 0; the view-projection
+  matrix while the cvar 0x153452C is above 0, a tail call). BoxOnPlaneSide
+  answers 0 for NaN distances or signbits that disagree with the normal,
+  and the link then takes the plane for a node (as in the original; the
+  oracle's links use finite values).
 - Oracle (tests/render_test.cpp): ri.Printf and ri.Error recorded with
   the arguments their formats take (a double per %f). R_AddDrawSurf is
   no longer a stub: the culls' cases give their references real shaders
@@ -100,11 +133,27 @@ speed.
   the count (only the array on the count would show it)); the first runs
   missed every sum order, the equal-radius and the equal-fog-end ones
   until the cancelling, grazing and -0 cases above were added.
+- Layer 3 oracle and mutations: BoxOnPlaneSide's cases (a jump through
+  its table) dispatched to their lifted bodies; 0x429070, 0x4290E0 and
+  0x429800 run lifted on both sides. 72k static model and cell cases
+  (in the culls' worlds) and 5k world view cases: 587k random cases in
+  all, 0 mismatched; ctest 37 of 37. 51 mutants: all caught but three
+  equivalent ones (the third axis's `<` against `<=`, which replaces a
+  value by an equal one; 0x4D9D80's view count test, which 0x4D8280
+  repeats; the far plane's unrounded z, a negation) and one no random
+  case shows (0x4D8910's three squares summed in another order: a
+  double's last bit, under a float's store); the first runs missed the scaled bounds' compare (until the
+  first two axes tie and the third is shorter), sizes of exactly 1536
+  (unit axes, integral origins), a negative AABB tree count with
+  references beside it, and the world view's sum orders (huge products
+  that cancel, a far plane at a huge far distance).
 - Frames (r_mode 3, com_maxfps 20, fixedtime 50, every frame), against
   main 0117892: all 13 loading and briefing frames shared, 46 of 1640
   in-level frames identical (45 between two runs of main). Timing (three
   walks each, interleaved): mean frame 1.774-1.776 ms (main) and
-  1.759-1.775 ms, p95 2.4, p99 2.6 for both.
+  1.759-1.775 ms, p95 2.4, p99 2.6 for both. With layer 3: 13 of 13 shared, 47 of 1640
+  in-level identical (46 between two runs of main); mean 1.766-1.774 ms
+  (main) and 1.752-1.755 ms.
 
 ## Renderer back end (2026-10-25, branch render-backend)
 The back end is going native from the bottom up (src/render_backend.cpp),

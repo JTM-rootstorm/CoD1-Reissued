@@ -26,9 +26,12 @@
 // cvars for its culls, transforms, fog transition, far clip, projection and
 // frustum, with grazing spheres and sums of products that nearly cancel
 // (where the order of a sum shows), and ri.Printf's calls compared by the
-// arguments their formats take. Values are now and then zeros, denormals,
-// infinities, NaNs or huge. Captures (tests/render_capture.h) add the
-// game's own calls.
+// arguments their formats take; static models (unit, permuted and wide
+// axes), their cells and references (at the limit too), BSPs to link them
+// through (finite values only), and the world's view with huge products
+// that cancel and a far plane at a huge distance. Values are now and then
+// zeros, denormals, infinities, NaNs or huge. Captures
+// (tests/render_capture.h) add the game's own calls.
 
 #include <algorithm>
 #include <cmath>
@@ -169,6 +172,15 @@ void f_004D6AB0_lifted(Ctx& c);
 void f_004D7DF0_lifted(Ctx& c);
 void f_004D7E70_lifted(Ctx& c);
 void f_004D7ED0_lifted(Ctx& c);
+void f_004D8770_lifted(Ctx& c);
+void f_004D8910_lifted(Ctx& c);
+void f_004D8A20_lifted(Ctx& c);
+void f_004D8B50_lifted(Ctx& c);
+void f_004D8BE0_lifted(Ctx& c);
+void f_004D8D80_lifted(Ctx& c);
+void f_004D9290_lifted(Ctx& c);
+void f_004D9820_lifted(Ctx& c);
+void f_004D9D80_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_native.cpp renames
 // its entries).
 void f_004D68E0(Ctx& c) { f_004D68E0_lifted(c); }
@@ -203,6 +215,15 @@ void f_004D6AB0(Ctx& c) { f_004D6AB0_lifted(c); }
 void f_004D7DF0(Ctx& c) { f_004D7DF0_lifted(c); }
 void f_004D7E70(Ctx& c) { f_004D7E70_lifted(c); }
 void f_004D7ED0(Ctx& c) { f_004D7ED0_lifted(c); }
+void f_004D8770(Ctx& c) { f_004D8770_lifted(c); }
+void f_004D8910(Ctx& c) { f_004D8910_lifted(c); }
+void f_004D8A20(Ctx& c) { f_004D8A20_lifted(c); }
+void f_004D8B50(Ctx& c) { f_004D8B50_lifted(c); }
+void f_004D8BE0(Ctx& c) { f_004D8BE0_lifted(c); }
+void f_004D8D80(Ctx& c) { f_004D8D80_lifted(c); }
+void f_004D9290(Ctx& c) { f_004D9290_lifted(c); }
+void f_004D9820(Ctx& c) { f_004D9820_lifted(c); }
+void f_004D9D80(Ctx& c) { f_004D9D80_lifted(c); }
 // unzCloseCurrentFile and tolower, native in the game (src/unzip.cpp,
 // src/crt.cpp): here only lifted code the stubs stand for reaches them.
 void f_0049EAA0_lifted(Ctx& c);
@@ -269,6 +290,15 @@ void n_004D6AB0(Ctx& c);
 void n_004D7DF0(Ctx& c);
 void n_004D7E70(Ctx& c);
 void n_004D7ED0(Ctx& c);
+void n_004D8770(Ctx& c);
+void n_004D8910(Ctx& c);
+void n_004D8A20(Ctx& c);
+void n_004D8B50(Ctx& c);
+void n_004D8BE0(Ctx& c);
+void n_004D8D80(Ctx& c);
+void n_004D9290(Ctx& c);
+void n_004D9820(Ctx& c);
+void n_004D9D80(Ctx& c);
 // The stubs.
 #define COD1_STUB(va) \
   void f_##va(Ctx& c) { StubFor(c, 0x##va); }
@@ -316,6 +346,15 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
       if (conv != '%') n += conv == 'f' ? 2 : 1;
     }
     Stub(c, target == kError ? kErrorPtr : kPrintfPtr, 0, n);
+    return;
+  }
+  // BoxOnPlaneSide's jump through its table of cases.
+  const LiftedFn* lo = kLiftedFunctions;
+  const LiftedFn* hi = kLiftedFunctions + kLiftedFunctionCount;
+  const LiftedFn* f =
+      std::lower_bound(lo, hi, target, [](const LiftedFn& a, uint32_t t) { return a.va < t; });
+  if (f != hi && f->va == target) {
+    f->fn(c);
     return;
   }
   std::printf("unexpected call to %08X from %08X\n", target, va);
@@ -387,6 +426,11 @@ const Entry kEntries[] = {
     COD1_ENTRY(004D6880, "far distance"),      COD1_ENTRY(004D6A10, "cull frustum"),
     COD1_ENTRY(004D6AB0, "view projection"),   COD1_ENTRY(004D7DF0, "R_CellForCamera"),
     COD1_ENTRY(004D7E70, "polygon behind a plane"), COD1_ENTRY(004D7ED0, "polygon behind all"),
+    COD1_ENTRY(004D8910, "scaled model bounds"), COD1_ENTRY(004D8A20, "XModel bounds"),
+    COD1_ENTRY(004D8B50, "cell reference"),     COD1_ENTRY(004D8BE0, "model link"),
+    COD1_ENTRY(004D8D80, "static model links"), COD1_ENTRY(004D8770, "cell's models"),
+    COD1_ENTRY(004D9290, "cell's surfaces"),    COD1_ENTRY(004D9D80, "beyond the far plane"),
+    COD1_ENTRY(004D9820, "world view"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -1311,7 +1355,60 @@ void WorldViewCase(Arena& a, std::mt19937& g, Stats& s, uint32_t special) {
   // A view origin at 0 now and then (for distances of exactly 0).
   if (g() % 4 == 0)
     for (uint32_t i = 0; i < 3; i++) Wr(0x11BEAF8 + 4 * i, 0);
-  switch (g() % 7) {
+  switch (g() % 8) {
+    case 7: {
+      // The world's view: its planes through an origin that nearly
+      // cancels against the forward axis now and then.
+      Wr(0x564550, g() % 4 ? 1 : 0);
+      Wr(0x1536138, g() % 2 ? 0 : g());
+      for (uint32_t cvar : {0x153450Cu, 0x153452Cu}) {
+        const uint32_t v = a.Alloc(0x24);
+        Wr(cvar, v);
+        Wr(v + 0x20, g() % 2);
+        WrF(v + 0x1C, g() % 2 ? 0.0f : Value(g, -1, 1, special));
+      }
+      switch (g() % 4) {
+        case 0: {
+          float n[3], p[3];
+          Cancel3(g, n, p);
+          for (uint32_t i = 0; i < 3; i++) {
+            WrF(0x153603C + 4 * i, n[i]);
+            WrF(0x1536030 + 4 * i, p[i]);
+          }
+          break;
+        }
+        case 1: {
+          // Two huge products that cancel and a small one, first or last.
+          const uint32_t i = g() % 3, k = (i + 1 + g() % 2) % 3, j = 3 - i - k;
+          const float A = Wide(g, 30, 60), sign = g() % 2 ? 1.0f : -1.0f;
+          for (uint32_t x : {i, k}) {
+            WrF(0x153603C + 4 * x, x == i ? sign : -sign);
+            WrF(0x1536030 + 4 * x, std::fabs(A));
+          }
+          WrF(0x153603C + 4 * j, Uniform(g, -1, 1));
+          WrF(0x1536030 + 4 * j, Uniform(g, -4, 4));
+          break;
+        }
+        case 2: {
+          // A far plane through about the far distance (a huge one): its
+          // distance's last bits show.
+          const float d = std::fabs(Wide(g, 20, 40));
+          WrF(far + 0x1C, d);
+          const uint32_t x = g() % 3;
+          for (uint32_t i = 0; i < 3; i++) {
+            WrF(0x153603C + 4 * i, i == x ? -1.0f : 0.0f);
+            WrF(0x1536030 + 4 * i, i == x ? (g() % 2 ? d : d + Uniform(g, -1, 1)) : Uniform(g, -4, 4));
+          }
+          break;
+        }
+        default:
+          break;
+      }
+      win.push_back(a.All());
+      win.push_back({0x564550, 4});
+      Run({0x4D9820, 0, 0, 0, 0, 0, 0, {}}, win, g, s, "random");
+      break;
+    }
     case 0: {
       const uint32_t p = a.Alloc(0x14);
       for (uint32_t i = 0; i < 0x14; i += 4) WrF(p + i, Value(g, -1, 1, special));
@@ -1360,6 +1457,228 @@ void WorldViewCase(Arena& a, std::mt19937& g, Stats& s, uint32_t special) {
       Wr(poly + 0x1C, np);
       win.push_back(a.All());
       Run({g() % 2 ? 0x4D7E70u : 0x4D7ED0u, poly, nplanes, planes, 0, 0, 0, {}}, win, g, s, "random");
+      break;
+    }
+  }
+}
+
+// ---- the world's static models and cells ---------------------------------------
+
+constexpr uint32_t kCellRefs = 0x11BEB88, kNumCellRefs = 0x11BEB8C, kCullFrustum = 0x11BEB04;
+constexpr uint32_t kNumStaticModels = 0x153646C, kStaticModels = 0x1536470, kXModels = 0x15364F8;
+constexpr uint32_t kStaticCvars[] = {0x153470C, 0x1534420, 0x15343A0, 0x1534424,
+                                     0x15344B8, 0x1534550, 0x15343D4};
+
+// A model's local bounds: half sizes about 1536 / 2 (exactly, now and then)
+// so that the scaled sizes straddle the limit of 1536.
+void LocalBounds(std::mt19937& g, const World& w, uint32_t b) {
+  for (int i = 0; i < 3; i++) {
+    const float h = g() % 4 ? Pick(g, {8, 700, 768, 1000}) : Value(g, 0, 1000, w.special);
+    const float c = g() % 2 ? 0 : Uniform(g, -h, h);
+    WrF(b + 4 * i, Value(g, c - h, c - h, w.special));
+    WrF(b + 0xC + 4 * i, Value(g, c + h, c + h, w.special));
+  }
+}
+
+// A static model (0x2B8 bytes at m) of a random type, its axes now and
+// then unit, of equal stored lengths (permuted components) or wide.
+void StaticModel(Arena& a, std::mt19937& g, const World& w, uint32_t m) {
+  Wr(m, uint32_t(Pick(g, {0, 0, 1, 1, 2, -1})));
+  Wr(m + 8, g() % 4);
+  // Unit axes and an integral origin now and then (sizes of exactly
+  // 1536), an origin at 0 (where the scale's last bits show).
+  const uint32_t kind = g() % 8;
+  const bool wide = kind == 1, perm = kind == 2 || kind == 3;
+  float v[3];
+  for (float& x : v) x = wide ? Wide(g, -10, 10) : Value(g, -2, 2, w.special);
+  for (uint32_t k = 0; k < 3; k++) {
+    if (kind == 0) for (uint32_t i = 0; i < 3; i++) v[i] = i == k ? 1.0f : 0.0f;
+    else if (!perm) for (float& x : v) x = wide ? Wide(g, -10, 10) : Value(g, -2, 2, w.special);
+    else std::shuffle(v, v + 3, g);
+    // The first two of equal stored lengths, the third shorter.
+    if (perm && k == 2)
+      for (float& x : v) x *= 0.5f;
+    for (uint32_t i = 0; i < 3; i++) WrF(m + 0x1C + 0xC * k + 4 * i, v[i]);
+  }
+  for (uint32_t i = 0; i < 3; i++)
+    WrF(m + 0x44 + 4 * i, kind == 0 ? std::round(Uniform(g, -w.size, w.size))
+                          : kind == 3 || g() % 4 == 0 ? 0.0f : Value(g, -w.size, w.size, w.special));
+  const uint32_t p1 = a.Alloc(0x1C), p2 = a.Alloc(8), model = a.Alloc(0x64);
+  Wr(m + 0x90, p1);
+  Wr(p1 + 0x18, p2);
+  Wr(p2 + 4, model);
+  LocalBounds(g, w, model + 0x4C);
+  Wr(m + 0x2B4, g() % 2 ? 0 : g() % 3);
+}
+
+// A BSP for the static models' links: nodes (cell -2) over planes axial
+// (type the axis) or not (type 3 and up; signbits from the normal), now
+// and then through the model's bounds' corners; leaves with a cell or -1.
+// (BoxOnPlaneSide answers 0 for NaN distances or signbits that disagree
+// with the normal, and the walk then takes the plane for a node; an axial
+// plane's split assumes a positive normal.)
+uint32_t LinkBsp(Arena& a, std::mt19937& g, const World& w, uint32_t numCells, uint32_t b, int depth) {
+  const uint32_t node = a.Alloc(0x18);
+  if (depth >= 5 || (depth && g() % 3 == 0)) {
+    Wr(node, g() % 100);
+    Wr(node + 8, numCells && g() % 4 ? g() % numCells : 0xFFFFFFFF);
+    return node;
+  }
+  Wr(node, 0xFFFFFFFF);
+  Wr(node + 8, 0xFFFFFFFE);
+  const uint32_t p = a.Alloc(0x14);
+  float n[3] = {0, 0, 0};
+  uint8_t type, bits = 0;
+  if (g() % 2) {
+    type = uint8_t(g() % 3);
+    n[type] = 1;
+  } else {
+    type = 3;
+    for (float& x : n) x = Uniform(g, -1, 1);
+  }
+  for (int i = 0; i < 3; i++) {
+    WrF(p + 4 * i, n[i]);
+    if (n[i] < 0) bits |= uint8_t(1 << i);
+  }
+  const int axis = type < 3 ? type : int(g() % 3);
+  const float lo = g_mem.read<float>(b + 4 * uint32_t(axis)), hi = g_mem.read<float>(b + 0xC + 4 * uint32_t(axis));
+  WrF(p + 0xC, g() % 4 == 0 ? (g() % 2 ? lo : hi) : g() % 2 ? Uniform(g, lo, hi) : Value(g, -w.size, w.size, w.special));
+  g_mem.write<uint8_t>(p + 0x10, g() % 32 ? type : uint8_t(3 + g() % 3));
+  g_mem.write<uint8_t>(p + 0x11, bits);
+  Wr(node + 0xC, p);
+  Wr(node + 0x10, LinkBsp(a, g, w, numCells, b, depth + 1));
+  Wr(node + 0x14, LinkBsp(a, g, w, numCells, b, depth + 1));
+  return node;
+}
+
+// A cell (0x40 bytes) with a list of references to the static models.
+uint32_t NewCell(Arena& a, std::mt19937& g, const World& w, uint32_t cell, uint32_t models, uint32_t n) {
+  uint32_t link = 0;
+  for (uint32_t i = g() % 4; i; i--) {
+    const uint32_t r = a.Alloc(0x20);
+    Wr(r, n && g() % 4 ? models + 0x2B8 * (g() % n) : a.Alloc(0x2B8));
+    Wr(Rd(r) + 0x2B4, g() % 2 ? 0 : g() % 3);
+    WrBounds(g, w, r + 4);
+    Wr(r + 0x1C, link);
+    link = r;
+  }
+  Wr(cell + 0x3C, link);
+  return cell;
+}
+
+void StaticCases(Arena& a, std::mt19937& g, const World& base, Stats& s) {
+  // The links through the BSP only from finite values (see LinkBsp).
+  const uint32_t kase = g() % 8;
+  World w = base;
+  if (kase == 3 || kase == 4) w.special = 0;
+  for (uint32_t cvar : kStaticCvars) {
+    const uint32_t v = a.Alloc(0x24);
+    Wr(cvar, v);
+    Wr(v + 0x20, g() % 4 ? g() % 2 : uint32_t(Pick(g, {2, -1})));
+  }
+  for (uint32_t i = 0; i < 4; i++) {
+    const uint32_t x = a.Alloc(0x50), b = a.Alloc(0x18);
+    LocalBounds(g, w, b);
+    Wr(x + 0x4C, b);
+    Wr(kXModels + 4 * i, x);
+  }
+  const uint32_t n = g() % 8 ? g() % 6 : 0, models = a.Alloc(0x2B8 * (n + 1));
+  for (uint32_t i = 0; i < n; i++) StaticModel(a, g, w, models + 0x2B8 * i);
+  Wr(kNumStaticModels, g() % 16 ? n : uint32_t(-1));
+  Wr(kStaticModels, models);
+  // The references' array, placed so that the next ones land in a buffer;
+  // its count at the limit now and then.
+  const uint32_t refs = a.Alloc(256 * 0x20), count = g() % 4 ? g() % 8 : uint32_t(Pick(g, {0xFFF, 0x1000}));
+  Wr(kNumCellRefs, count);
+  Wr(kCellRefs, refs - count * 0x20);
+  const uint32_t numCells = g() % 8 ? 1 + g() % 6 : 0, cells = a.Alloc(numCells * 0x40 + 4);
+  for (uint32_t i = 0; i < numCells; i++) NewCell(a, g, w, cells + 0x40 * i, models, n);
+  const uint32_t world = a.Alloc(0x128);
+  Wr(kWorld, world);
+  Wr(world + 0x120, numCells);
+  Wr(world + 0x124, cells);
+  const uint32_t box = a.Alloc(0x18);
+  WrBounds(g, w, box);
+  Wr(world + 0x98, LinkBsp(a, g, w, numCells, box, 0));
+  for (uint32_t i = 0; i < 4 * 0x14; i += 4) Wr(kCullFrustum + i, Rd(w.planes + i));
+  const bool graze = g() % 4 == 0;
+  const uint32_t mins = a.Alloc(0x18), maxs = mins + 0xC;
+  std::vector<Window> win = {a.All(), {kPlaneBits, 4}, {kNumDrawSurfs, 8}, {0x11BEB54, 0x40}};
+  switch (kase) {
+    case 0: {
+      const uint32_t m = models + 0x2B8 * n;
+      StaticModel(a, g, w, m);
+      win[0] = a.All();
+      Run({0x4D8910, uint32_t(g()), m, maxs, 0, mins, 0, {}}, win, g, s, "random");
+      break;
+    }
+    case 1: {
+      const uint32_t m = models + 0x2B8 * n;
+      StaticModel(a, g, w, m);
+      win[0] = a.All();
+      Run({0x4D8A20, maxs, 0, 0, 0, 0, m, {mins}}, win, g, s, "random");
+      break;
+    }
+    case 2: {
+      const uint32_t cell = numCells ? cells + 0x40 * (g() % numCells) : NewCell(a, g, w, a.Alloc(0x40), models, n);
+      const uint32_t r = Rd(cell + 0x3C);
+      const uint32_t model = r && g() % 2 ? Rd(r) : models + 0x2B8 * (n ? g() % n : 0);
+      WrBounds(g, w, mins);
+      win[0] = a.All();
+      Run({0x4D8B50, maxs, cell, mins, model, 0, 0, {}}, win, g, s, "random");
+      break;
+    }
+    case 3: {
+      std::memcpy(g_mem.ptr<uint8_t>(mins), g_mem.ptr<uint8_t>(box), 0x18);
+      // A point now and then (mins == maxs), on a plane too.
+      if (g() % 8 == 0) std::memcpy(g_mem.ptr<uint8_t>(maxs), g_mem.ptr<uint8_t>(mins), 0xC);
+      win[0] = a.All();
+      Run({0x4D8BE0, 0, 0, 0, 0, 0, 0, {Rd(world + 0x98), models + 0x2B8 * (n ? uint32_t(g()) % n : 0), mins, maxs}},
+          win, g, s, "random");
+      break;
+    }
+    case 4:
+      // The count starts again from 0.
+      Wr(kCellRefs, refs);
+      Run({0x4D8D80, 0, 0, 0, 0, 0, 0, {w.planes, uint32_t(w.numPlanes)}}, win, g, s, "random");
+      break;
+    case 5: {
+      const uint32_t cell = NewCell(a, g, w, a.Alloc(0x40), models, n);
+      if (graze)
+        for (uint32_t r = Rd(cell + 0x3C); r; r = Rd(r + 0x1C)) Graze(g, w, r + 4);
+      win[0] = a.All();
+      Run({0x4D8770, cell, 0, 0, 0, 0, 0, {w.planes, uint32_t(w.numPlanes)}}, win, g, s, "random");
+      break;
+    }
+    case 6: {
+      const uint32_t cell = NewCell(a, g, w, a.Alloc(0x40), models, n), surfs = a.Alloc(0x28);
+      Wr(cell + 0x18, surfs);
+      // References always, trees (preferred; a negative count is neither)
+      // now and then.
+      Refs(a, g, w, surfs + 0x18, g() % 5);
+      if (g() % 16 == 0) Wr(surfs + 0x1C, uint32_t(-1));
+      if (g() % 2) {
+        const uint32_t k = g() % 4, nodes = a.Alloc(k * 0x28);
+        for (uint32_t i = 0; i < k; i++) NewNode(a, g, w, nodes + 0x28 * i, 1);
+        Wr(surfs + 0x20, nodes);
+        Wr(surfs + 0x24, g() % 8 ? k : uint32_t(-1));
+      }
+      win[0] = a.All();
+      Run({0x4D9290, 0, 0, 0, 0, cell, 0, {w.planes, uint32_t(w.numPlanes), DlightBits(g)}}, win, g, s,
+          "random");
+      break;
+    }
+    default: {
+      const uint32_t k = g() % 6, list = a.Alloc(4 * k);
+      for (uint32_t i = 0; i < k; i++) {
+        const uint32_t ref = NewRef(a, g, w);
+        if (graze && Rd(kFarPlane)) Graze(g, w, Rd(ref + 8) + 0xC);
+        Wr(list + 4 * i, ref);
+      }
+      Wr(world + 0xA4, k);
+      Wr(world + 0xA8, list);
+      win[0] = a.All();
+      Run({0x4D9D80, 0, 0, 0, 0, 0, 0, {}}, win, g, s, "random");
       break;
     }
   }
@@ -1455,6 +1774,7 @@ int main(int argc, char** argv) {
     const uint32_t special = world < 3000 ? 0 : world < 6000 ? 4 : 48;
     NewWorld(a, g, w, special);
     for (int i = 0; i < 20; i++) CullCases(a, g, w, s);
+    for (int i = 0; i < 8; i++) StaticCases(a, g, w, s);
   }
   for (int i = 0; i < 150000; i++) SkyCase(a, g, s, i < 50000 ? 0 : i < 100000 ? 4 : 48);
   for (int i = 0; i < 20; i++) SkyErrorCase(a, g, s);

@@ -75,7 +75,10 @@ replace 00519140
 # and a vector between two orientations; the draw surface list:
 # R_AddDrawSurf, R_SortDrawSurfs and its command; the world's view: its
 # planes and far distance, the view-projection matrix, R_CellForCamera and
-# a polygon against planes. Back end:
+# a polygon against planes; the world's static models and cells: the
+# models' bounds, their references in the cells and their link through the
+# BSP, a cell's models and surfaces, the surfaces beyond the far plane and
+# the world's view. Back end:
 # ClipSkyPolygon, AddSkyPolygon and ComputeTexCoords. Under both:
 # qsortFast of the draw surfaces, the 4x4 matrix product and the memcpy
 # 0x42B0A0.
@@ -111,6 +114,15 @@ replace 004D6AB0
 replace 004D7DF0
 replace 004D7E70
 replace 004D7ED0
+replace 004D8770
+replace 004D8910
+replace 004D8A20
+replace 004D8B50
+replace 004D8BE0
+replace 004D8D80
+replace 004D9290
+replace 004D9820
+replace 004D9D80
 
 # The renderer back end (src/render_backend.cpp): GL_Bind, the cull face,
 # the texture environment, the state bits and the client arrays, fog on
