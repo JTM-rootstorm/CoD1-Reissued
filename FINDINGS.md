@@ -1098,6 +1098,21 @@ rest is sketched in "Sketch: the stage iterator on gfx::Device".
   against the build before: all 13 loading and briefing frames shared,
   46 of 1640 in-level frames identical (46 between two runs of the
   build before); ctest 37 of 37.
+- Locked arrays and streams as they lie (2026-11-09, SwARc ffstreams):
+  glLockArraysEXT/glUnlockArraysEXT reach the context (no-ops before),
+  which passes the flush's positions (and normals) as locked streams: the
+  device copies them once for every stage of the flush and reads every
+  stream where it lies (no interleaving); the context derives its device
+  state only after a state call; the device keeps each stage's texture
+  and sampler and the last pipeline from the draw before. Profile before
+  (training walk, com_maxfps 0, perf cpu-clock:u): the draw path about a
+  third of the main thread (InterleaveFf, FfIndex and the index range
+  12%, the stage bindings, sampler and pipeline lookups 10%, the
+  context's ApplyState/ApplyTextures 7%); after, none of them above 2%.
+  Timing (three walks each, interleaved, frames 12-88 s): mean frame
+  2.40 -> 1.78 ms (-26%), p95 2.8-2.9 -> 2.4, p99 3.0 -> 2.6. Frames,
+  against the build before: all 13 loading and briefing frames shared,
+  47 of 1640 in-level frames identical; ctest 37 of 37.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),
@@ -1268,11 +1283,13 @@ native iterator replacing 0x4F7C30/0x4F6380/0x4F70F0 would skip:
   uploads tess.xyz (and normals where lit) once per flush as one stream,
   and per stage only svars.colors (a device format in RGBA order, no
   swizzle) and that stage's texture coordinates, with 16-bit indices
-  once per flush. gfx::Device takes separate streams now (DrawFf, which
-  interleaves them into the arena in one copy); the vertex array draws
-  use it ("Vertex array draws on gfx::Device" above).
+  once per flush. Done: the device reads the streams as they lie and the
+  locked positions once per flush ("Locked arrays and streams as they
+  lie" above).
 - Per draw left: GpuDevice::Draw's uniform build and pipeline lookup,
-  reduced to a key compare when the stage is the previous one.
+  reduced to a key compare when the stage is the previous one. Done for
+  the bindings and the pipeline ("Locked arrays and streams as they
+  lie" above).
 - Order: the draws and their state must stay in the original's order for
   the frames to match; 2D, cinematics and the GL calls outside the stage
   iterators stay on the GL HLE, so the HLE's cached state must be

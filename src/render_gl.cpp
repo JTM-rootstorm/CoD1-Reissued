@@ -7,8 +7,9 @@
 // glDrawArrays and glDrawElements draw with the device itself (DrawFf):
 // the client arrays as its streams and the state from the context
 // (gl::Context::ArrayDraw), the vertices the indices span as they are,
-// with no gathering or renumbering. Draws whose arrays the device does
-// not take as they are go through the context.
+// with no gathering or renumbering; a flush's locked positions (and
+// normals) go to the device once for all its stages. Draws whose arrays
+// the device does not take as they are go through the context.
 
 #include "render_gl.h"
 
@@ -170,9 +171,8 @@ void glNormalPointer(uint32_t type, int32_t stride, const void* p) {
 }
 void glEnableClientState(uint32_t array) { GL_OR_RETURN; g->SetClientState(array, true); }
 void glDisableClientState(uint32_t array) { GL_OR_RETURN; g->SetClientState(array, false); }
-// Compiled vertex arrays are a hint that the arrays stay unchanged.
-void glLockArraysEXT(int32_t, int32_t) {}
-void glUnlockArraysEXT() {}
+void glLockArraysEXT(int32_t first, int32_t count) { GL_OR_RETURN; g->LockArrays(first, count); }
+void glUnlockArraysEXT() { GL_OR_RETURN; g->UnlockArrays(); }
 void glDrawArrays(uint32_t mode, int32_t first, int32_t count) {
   GL_OR_RETURN;
   gfx::FfDraw d;
