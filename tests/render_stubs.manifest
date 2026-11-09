@@ -2,6 +2,8 @@
 # the replaced renderer functions call, stubbed (recording each call) in
 # tests/render_test.cpp.
 replace 004AD7E0
+replace 004AD630
+replace 004AD760
 replace 004DEC10
 replace 004CAB80
 replace 00427E80

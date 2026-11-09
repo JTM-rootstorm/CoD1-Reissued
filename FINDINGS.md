@@ -153,7 +153,88 @@ speed.
   walks each, interleaved): mean frame 1.774-1.776 ms (main) and
   1.759-1.775 ms, p95 2.4, p99 2.6 for both. With layer 3: 13 of 13 shared, 47 of 1640
   in-level identical (46 between two runs of main); mean 1.766-1.774 ms
-  (main) and 1.752-1.755 ms.
+  (main) and 1.752-1.755 ms. With layer 4: 13 of 13 shared, 47 of 1640
+  in-level identical (46 between two runs of main); mean 1.759-1.784 ms
+  (main) and 1.722-1.737 ms, p99 2.6 and 2.5; the log's error count
+  unchanged (3).
+- Layer 4, the cell walk (2026-11-09): a polygon's clip 0x4D7F30 (ECX
+  plane; stack points, &count, out: distances z + x + y less the plane's,
+  behind below -0.001, in front above 0.001; none in front: count 0, EAX
+  0; none behind: EAX the points; else out with the points on and in
+  front and each crossing, stopping at 0x400 points only after a
+  crossing; its 0x1004-byte side and distance arrays overflow past 1024
+  points), a portal's planes 0x4D6BC0 (stack &count, n, points, an unused
+  fourth; with the cvar 0x153452C above 0 the points through the
+  view-projection matrix 0x11BEB90, the groups of four summing y + z + x
+  and the rest z + x + y, the screen rectangle back through the inverse
+  0x11BEBD0 to four corners and their planes through the view origin,
+  each dropped when an edge plane's normal is more than the cvar along
+  it; then the edges' planes, zero normals skipped, the first of each
+  group of four summing its distance z + x + y, the others z + y + x;
+  normalised by 0x4268B0 (the fast inverse square root), nudged 0.001;
+  in a block from the refimport's 0x1549610 of (n + 4) x 20 or n x 20
+  bytes), the planes through a portal 0x4D80F0 (ECX &count, EDX the
+  plane count; stack portal, the plane it is seen through, planes: its
+  polygon +0x18/+0x1C clipped by that plane, then by the far plane and
+  the planes into two 0x3000-byte buffers on the stack in turn; with the
+  view origin less than 1 behind the portal's plane (or in front) a copy
+  of the planes instead; the debug polygon 0x4AD630 with the cvar
+  0x153443C), a cell's occluders 0x4D7A70 (+0x2C, count +0x30: convex,
+  faces +0/+4, edges +0xC/+8 with two faces and two points, points
+  +0x14/+0x10; each with a point in front of the near plane and of every
+  plane still given, the planes used up by advancing the caller's
+  argument slots, so later occluders are tested against fewer; its
+  planes those of its shadow: the faces the view is in front of, marked
+  at +0x13, and a plane through the view origin and each silhouette edge;
+  ri.Error at 0x400 occluders and 0x1800 faces), the cell walk 0x4D96E0
+  (cell, the plane it is seen through, planes, count, dlight bits: the
+  cell's occluders, surfaces and models; then each portal (+0x1C, 0x24
+  bytes, count +0x20, counted down in the cell's argument slot) not on
+  the walk (+0x20), with the view not in front of it, not behind a plane
+  (0x4D7E70) nor hidden by an occluder (0x4D7ED0), walked with the planes
+  through it, freed by 0x154961C), the world's coronas 0x4D9A10 (world
+  +0xC0, 0x20 bytes each, count +0xC4: shader, origin, radius, two z
+  limits, colour, alpha; the direction to the view origin 0x1536330 by
+  0x426710 below the first limit, a cube of radius x sqrt 3 culled like
+  a static model, a sprite (type 4) 16 along the direction, alpha faded
+  by z between the limits through _ftol; one refentity on the stack,
+  zeroed once, for 0x4DEC10) and the world walk 0x4D9E20 (with the cvar
+  0x1534490 and RDF_NOWORLDMODEL clear: the occluder list, the cull
+  planes and the static model references in a 0x3F000-byte frame, the
+  dlight bits from the count 0x1536474, 0x1536024 = 0x7FE, 0x1536028 =
+  0x3FF00; the world's view, static model links and coronas; from the
+  view's cell its surfaces and models alone, the far plane dropped, with
+  the cvar 0x1534510, else the cell walk through the near plane; outside
+  the world every cell, with the cvar 0x15346D8 its models too, else the
+  world's models +0x148 (0x24 bytes, count +0x144); then the surfaces
+  beyond the far plane, and the cells' static model bounds for the
+  debug cvars 0x15344B8 and 0x1534550 at 2). The cull's list
+  0x11BEC10/0x11BEC14, called portals in layers 1-3, holds these
+  occluders: renamed. Still lifted under it: 0x4268B0 and 0x426710 (the
+  vector normalisations), the debug draws 0x4AD630, 0x4AD760 and
+  0x4AD7E0, the entity add 0x4DEC10 and the CRT (_chkstk, _ftol, the
+  cookie check).
+- Layer 4 oracle and mutations: the refimport's allocation and free are
+  fake targets (blocks from a heap below the stack that starts again for
+  each side), the debug polygon 0x4AD630 and line 0x4AD760 stubs, and the
+  stubs of 0x4DEC10 and both debug draws record a hash of what they are
+  handed (the refentity and polygons live on the caller's stack, which no
+  window covers); the stack below the arguments is refilled with one
+  pattern before each side for the entries keeping locals there, and the
+  three entries returning a pointer have EAX compared. The corona cases
+  are finite: the CRT's square root under 0x426710 reports a NaN through
+  the Windows API, which the test does not have. 72k cell walk cases (12k
+  per entry) and 9k world walks: 668k random cases in all, 0 mismatched;
+  ctest 37 of 37. 69 mutants: all caught but one equivalent (the
+  rectangle's min taking an equal value, which only -0 against +0 tells
+  apart and no corner shows); the first runs missed every sum order
+  (projection rows, corners, the planes' distances, the occluders' tests),
+  the clip's compare of the unrounded distance, a view exactly 1 behind a
+  portal and the error at exactly 0x400 occluders, until rows that cancel
+  on one point, an inverse that cancels at a corner, a lattice origin
+  (two axes about 2^22 and points 1 off it: normals (+-1, +-1, +-1) whose
+  distances cancel to 2^-30), points about 0.001 along a plane's normal,
+  axial portals at an integral distance and 0x400 occluders were added.
 
 ## Renderer back end (2026-10-25, branch render-backend)
 The back end is going native from the bottom up (src/render_backend.cpp),

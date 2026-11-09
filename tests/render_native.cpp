@@ -41,4 +41,11 @@
 #define f_004D9290 n_004D9290
 #define f_004D9820 n_004D9820
 #define f_004D9D80 n_004D9D80
+#define f_004D7F30 n_004D7F30
+#define f_004D6BC0 n_004D6BC0
+#define f_004D80F0 n_004D80F0
+#define f_004D7A70 n_004D7A70
+#define f_004D96E0 n_004D96E0
+#define f_004D9A10 n_004D9A10
+#define f_004D9E20 n_004D9E20
 #include "../src/render.cpp"

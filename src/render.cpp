@@ -1,10 +1,12 @@
 // The renderer's front end natively, and the hottest lifted code under the
 // back end: the front end's culling of world surfaces, static models and
-// entities against the view frustum and the cell portals, the dlight bits
-// of a bounds and adding a world surface; the view (its culls, transforms,
-// fog transition, far clip, projection and frustum); the draw surface list;
-// the world's view, its static models' bounds and links into the cells,
-// and a cell's models and surfaces;
+// entities against the view frustum and the cells' occluders, the dlight
+// bits of a bounds and adding a world surface; the view (its culls,
+// transforms, fog transition, far clip, projection and frustum); the draw
+// surface list; the world's view, its static models' bounds and links into
+// the cells, and a cell's models and surfaces; the cell walk (polygon
+// clips, the planes through a portal, a cell's occluders, the walk through
+// the portals, the coronas and the world's surfaces);
 // the back end's sky clipping (ClipSkyPolygon, AddSkyPolygon), texture
 // coordinates (ComputeTexCoords); and the draw surface sort (qsortFast),
 // the 4x4 matrix product and the memcpy 0x42B0A0 under both. Replacements of lifted
@@ -32,6 +34,7 @@
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
+#include <vector>
 
 #include "runtime/log.h"
 #include "x86/lifted.h"
@@ -48,6 +51,10 @@ void f_00427E80(Ctx& c);  // a 4x4 matrix's inverse (ECX in, EAX out)
 void f_00429070(Ctx& c);  // adds a point to bounds (ECX point, EDX mins, ESI maxs)
 void f_004290E0(Ctx& c);  // adds bounds to bounds (ECX/ESI mins/maxs, EDX/EDI the other's)
 void f_00429800(Ctx& c);  // BoxOnPlaneSide(mins, maxs, plane)
+void f_004268B0(Ctx& c);  // normalises a vector (EAX)
+void f_00426710(Ctx& c);  // VectorNormalize (ESI; the length in ST0)
+void f_004AD630(Ctx& c);  // draws a debug polygon (EBX count, stack points; EAX colour)
+void f_004AD760(Ctx& c);  // draws a debug line (EBX from, EDI to; ESI colour)
 // ComputeTexCoords' texture coordinate generators and modifiers.
 void f_0050A2B0(Ctx& c);
 void f_0050ABF0(Ctx& c);
@@ -102,12 +109,13 @@ uint32_t Arg(const Ctx& c, uint32_t e, int n) { return U32(e + 4 * n); }
 
 // Globals of the cull: a plane-bits counter (the depth from which the
 // frustum test is still needed), the near and an optional far plane, the
-// portals of the current cell (count, array of pointers; a portal has its
-// own counter at +0x18 and planes at +0x20, count +0x1C), the view count
+// occluders of the cells walked (count, array of pointers; an occluder has
+// its own counter at +0x18 and planes at +0x20, count +0x1C: those of its
+// shadow, 0x4D7A70), the view count
 // and the debug-draw cvars (cvar_t*, integer at +0x20).
 constexpr uint32_t kPlaneBits = 0x11BEC20;
 constexpr uint32_t kNearPlane = 0x11BEB7C, kFarPlane = 0x11BEB80;
-constexpr uint32_t kNumPortals = 0x11BEC10, kPortals = 0x11BEC14;
+constexpr uint32_t kNumOccluders = 0x11BEC10, kOccluders = 0x11BEC14;
 constexpr uint32_t kViewCount = 0x1535A28;
 constexpr uint32_t kDrawEntityBounds = 0x15347E0, kDrawSurfBounds = 0x15344DC,
                    kDrawModelBounds = 0x153443C, kCullEntities = 0x1534568;
@@ -148,15 +156,15 @@ bool FrustumCulls(uint32_t b, uint32_t planes, int32_t numPlanes, bool test) {
   return f && Behind(FarZYX(b, f), f);
 }
 
-// The portals: one whose counter says so (`test`) is tested, its counter
+// The occluders: one whose counter says so (`test`) is tested, its counter
 // set to kNoBits; b is culled when it is behind every plane of one.
 template <typename Test>
-bool PortalsCull(uint32_t b, Test test) {
-  for (int32_t k = 0; k < I32(kNumPortals); k++) {
-    const uint32_t portal = U32(U32(kPortals) + uint32_t(k) * 4);
-    if (!test(I32(portal + 0x18))) continue;
-    Put(portal + 0x18, uint32_t(kNoBits));
-    const uint32_t q = U32(U32(kPortals) + uint32_t(k) * 4);
+bool OccludersCull(uint32_t b, Test test) {
+  for (int32_t k = 0; k < I32(kNumOccluders); k++) {
+    const uint32_t o = U32(U32(kOccluders) + uint32_t(k) * 4);
+    if (!test(I32(o + 0x18))) continue;
+    Put(o + 0x18, uint32_t(kNoBits));
+    const uint32_t q = U32(U32(kOccluders) + uint32_t(k) * 4);
     for (int32_t j = 0;; j++) {
       if (j >= I32(q + 0x1C)) return true;
       const uint32_t p = U32(q + 0x20) + uint32_t(j) * 0x14;
@@ -249,7 +257,7 @@ void f_004D6970(Ctx& c) {
 // A world surface reference (stack: ref, dlight bits, planes, plane bits;
 // EAX the plane count): unless already added this view, culls the
 // surface's bounds (+0xC) against the frustum (when the plane bits are
-// below the counter), the near/far planes and the portals (those whose
+// below the counter), the near/far planes and the occluders (those whose
 // counter is above the plane bits), then adds it.
 void f_004D8280(Ctx& c) {
   const uint32_t e = c.esp, ref = Arg(c, e, 1), planes = Arg(c, e, 3);
@@ -257,7 +265,7 @@ void f_004D8280(Ctx& c) {
   if (U32(ref) != U32(kViewCount)) {
     const uint32_t surf = U32(ref + 8), b = surf + 0xC;
     if (!FrustumCulls(b, planes, numPlanes, planeBits < I32(kPlaneBits)) &&
-        !PortalsCull(b, [&](int32_t bits) { return planeBits < bits; })) {
+        !OccludersCull(b, [&](int32_t bits) { return planeBits < bits; })) {
       c.esp = e - 0x14;
       if (U32(U32(kDrawSurfBounds) + 0x20) & 2) DrawBounds(c, b, surf + 0x18, 0x537820, 0x4D8407);
       Push(c, ref);
@@ -273,14 +281,14 @@ void f_004D8280(Ctx& c) {
 // bytes each), children (+0x20, count +0x24, 0x28 bytes each). Culled like
 // a surface (far corners); then the dlight bits are narrowed to its
 // bounds. A node entirely in front of the frustum planes and inside some
-// plane of every tested portal (near corners) adds all its surfaces, and
+// plane of every tested occluder (near corners) adds all its surfaces, and
 // raises the counters for what is under it; otherwise its children are
 // visited, or a leaf's surfaces culled one by one, with plane bits + 1.
 void f_004D8420(Ctx& c) {
   const uint32_t e = c.esp, node = Arg(c, e, 1), planes = Arg(c, e, 2);
   const int32_t numPlanes = int32_t(Arg(c, e, 3)), planeBits = int32_t(Arg(c, e, 5));
   if (FrustumCulls(node, planes, numPlanes, planeBits < I32(kPlaneBits)) ||
-      PortalsCull(node, [&](int32_t bits) { return planeBits < bits; })) {
+      OccludersCull(node, [&](int32_t bits) { return planeBits < bits; })) {
     c.esp = e + 4;
     return;
   }
@@ -303,17 +311,17 @@ void f_004D8420(Ctx& c) {
     }
     if (inside) Put(kPlaneBits, uint32_t(planeBits + 1));
   }
-  for (int32_t k = 0; k < I32(kNumPortals) && inside; k++) {
-    const uint32_t portal = U32(U32(kPortals) + uint32_t(k) * 4);
-    if (planeBits >= I32(portal + 0x18)) continue;
+  for (int32_t k = 0; k < I32(kNumOccluders) && inside; k++) {
+    const uint32_t o = U32(U32(kOccluders) + uint32_t(k) * 4);
+    if (planeBits >= I32(o + 0x18)) continue;
     for (int32_t j = 0;; j++) {
-      if (j >= I32(portal + 0x1C)) {
+      if (j >= I32(o + 0x1C)) {
         inside = false;
         break;
       }
-      const uint32_t p = U32(portal + 0x20) + uint32_t(j) * 0x14;
+      const uint32_t p = U32(o + 0x20) + uint32_t(j) * 0x14;
       if (Near(node, p, 2) + Near(node, p, 1) + Near(node, p, 0) > Dist(p)) {
-        Put(portal + 0x18, uint32_t(planeBits + 1));
+        Put(o + 0x18, uint32_t(planeBits + 1));
         break;
       }
     }
@@ -360,7 +368,7 @@ void f_004D8420(Ctx& c) {
 void f_004D9330(Ctx& c) {
   const uint32_t e = c.esp, model = c.edx;
   if (FrustumCulls(model, c.ecx, int32_t(c.eax), I32(kPlaneBits) > 0) ||
-      PortalsCull(model, [](int32_t bits) { return bits > 0; })) {
+      OccludersCull(model, [](int32_t bits) { return bits > 0; })) {
     c.esp = e + 4;
     return;
   }
@@ -383,7 +391,7 @@ void f_004D9330(Ctx& c) {
 void f_004D94C0(Ctx& c) {
   const uint32_t e = c.esp, ent = Arg(c, e, 1), b = ent + 0x9C;
   if (FrustumCulls(b, c.edx, int32_t(c.eax), I32(kPlaneBits) > 0) ||
-      PortalsCull(b, [](int32_t bits) { return bits > 0; })) {
+      OccludersCull(b, [](int32_t bits) { return bits > 0; })) {
     c.esp = e + 4;
     return;
   }
@@ -1599,10 +1607,10 @@ constexpr uint32_t kNumStaticModels = 0x153646C, kStaticModels = 0x1536470;
 constexpr uint32_t kCellRefs = 0x11BEB88, kNumCellRefs = 0x11BEB8C;
 
 // A static model's bounds b culled by the frustum (while the plane bits
-// counter is above 0), the near and far planes and the portals.
+// counter is above 0), the near and far planes and the occluders.
 bool ModelCulled(uint32_t b, uint32_t planes, int32_t numPlanes) {
   return FrustumCulls(b, planes, numPlanes, 0 < I32(kPlaneBits)) ||
-         PortalsCull(b, [](int32_t bits) { return 0 < bits; });
+         OccludersCull(b, [](int32_t bits) { return 0 < bits; });
 }
 
 // A vector's squared length (x*x + y*y + z*z).
@@ -1939,6 +1947,610 @@ void f_004D9820(Ctx& c) {
     Put(kFarPlane, 0);
   }
   if (St(Ld(U32(0x153452C) + 0x1C)) > Ld(0x55B584)) return f_004D6AB0(c);
+  c.esp = e + 4;
+}
+
+
+// ---- the front end: the cell walk ------------------------------------------------
+
+namespace {
+
+// The cull's planes (count, pointer: the walk's buffer on its stack) and
+// the refimport's temporary allocation (size; EAX the block) and its free.
+constexpr uint32_t kNumCullPlanes = 0x11BEC18, kCullPlanes = 0x11BEC1C;
+constexpr uint32_t kAllocPtr = 0x1549610, kFreePtr = 0x154961C;
+
+// ri.Error(ERR_DROP, msg) from the call site va (returning to ret) at ESP s.
+void DropError(Ctx& c, uint32_t s, uint32_t msg, uint32_t ret, uint32_t va) {
+  c.esp = s;
+  Push(c, msg);
+  Push(c, 1);
+  CallPtr(c, U32(0x1549604), ret, va);
+}
+
+// size bytes from the refimport's temporary allocation, called from va
+// (returning to ret) at ESP s.
+uint32_t TempAlloc(Ctx& c, uint32_t s, uint32_t size, uint32_t ret, uint32_t va) {
+  c.esp = s;
+  Push(c, size);
+  CallPtr(c, U32(kAllocPtr), ret, va);
+  c.esp = s;
+  return c.eax;
+}
+
+// The cull's flag of debug draws (the static models' bounds cvar).
+uint32_t DrawFlags() { return U32(U32(kDrawModelBounds) + 0x20); }
+
+}  // namespace
+
+// Clips a polygon (stack: points, &count, out; 12 bytes each) by the plane
+// ECX: each point's distance (z + x + y, less the plane's), behind below
+// -0.001, in front above 0.001, else on it. With none in front the count
+// is 0 and EAX 0; with none behind EAX the points; else EAX out, which
+// gets the points on and in front and where each edge between front and
+// behind crosses the plane (stopping at 0x400 points after a crossing).
+void f_004D7F30(Ctx& c) {
+  const uint32_t e = c.esp, plane = c.ecx, pts = Arg(c, e, 1), countp = Arg(c, e, 2), out = Arg(c, e, 3);
+  c.esp = e + 4;
+  const int32_t n = I32(countp);
+  if (n <= 0) {
+    Put(countp, 0);
+    c.eax = 0;
+    return;
+  }
+  std::vector<int32_t> sides(uint32_t(n) + 1);
+  std::vector<F32> dists(uint32_t(n) + 1);
+  int32_t front = 0, back = 0;
+  for (int32_t i = 0; i < n; i++) {
+    const uint32_t p = pts + 0xC * uint32_t(i);
+    const St d = St(Ld(p + 8)) * Ld(plane + 8) + St(Ld(p)) * Ld(plane) + St(Ld(plane + 4)) * Ld(p + 4) -
+                 Ld(plane + 0xC);
+    dists[i] = Fst(d);
+    sides[i] = 2;
+    if (d < Ld(0x55B5DC)) {
+      sides[i] = 1;
+      back++;
+    } else if (d > Ld(0x55B58C)) {
+      sides[i] = 0;
+      front++;
+    }
+  }
+  if (!front) {
+    Put(countp, 0);
+    c.eax = 0;
+    return;
+  }
+  c.eax = pts;
+  if (!back) return;
+  sides[n] = sides[0];
+  dists[n] = dists[0];
+  int32_t m = 0;
+  uint32_t o = out;
+  for (int32_t i = 0; i < n; i++) {
+    const uint32_t p = pts + 0xC * uint32_t(i);
+    if (sides[i] != 1) {
+      MovsD(o, p, 3);
+      m++;
+      o += 0xC;
+      if (sides[i] == 2) continue;
+    }
+    if (sides[i + 1] == 2 || sides[i + 1] == sides[i]) continue;
+    const St t = dists[i] / (St(dists[i]) - dists[i + 1]);
+    const uint32_t q = pts + 0xC * uint32_t((i + 1) % n);
+    m++;
+    for (uint32_t k = 0; k < 12; k += 4) Put(o + k, Fst((St(Ld(q + k)) - Ld(p + k)) * t + Ld(p + k)));
+    o += 0xC;
+    if (m == 0x400) break;
+  }
+  Put(countp, uint32_t(m));
+  c.eax = out;
+}
+
+// A portal's cull planes (stack: &count, n, points; the fourth argument
+// unused) in a temporary allocation, EAX: with the cvar 0x153452C above 0,
+// the points projected by the view-projection matrix (the groups of four,
+// then the rest, each summing in its own order), the screen rectangle
+// around them (its min and max from 1 and -1) back through the inverse to
+// four corners, and the planes through the view origin and each side
+// unless the normal of one of the polygon's edge planes is more than the
+// cvar along it; then the planes through the view origin and each of the
+// polygon's edges with a normal; all normalised (0x4268B0, on the stack
+// for the edges), 0.001 back, the count to *count. The corners are on the
+// stack for the debug lines (the cvar 0x153443C; 2 the rejected sides).
+void f_004D6BC0(Ctx& c) {
+  const uint32_t e = c.esp, countp = Arg(c, e, 1), pts = Arg(c, e, 3);
+  const int32_t n = I32(e + 8);
+  const uint32_t ebx = c.ebx, esi = c.esi, edi = c.edi, ebp = c.ebp;
+  const uint32_t s = e - 0x609C, corners = s + 0x54, normals = s + 0x309C;
+  auto aperture = [] { return St(Ld(U32(0x153452C) + 0x1C)); };
+  uint32_t planes;
+  if (aperture() > Ld(0x55B584)) {
+    planes = TempAlloc(c, s, (uint32_t(n) * 5 + 0x14) * 4, 0x4D6BFC, 0x4D6BF6);
+    F32 minX{0x3F800000}, minY{0x3F800000}, maxX{0xBF800000}, maxY{0xBF800000};
+    auto project = [&](uint32_t p, bool rest) {
+      const F32 x = Ld(p), y = Ld(p + 4), z = Ld(p + 8);
+      auto row = [&](uint32_t r) {
+        return rest ? St(Ld(r + 8)) * z + St(Ld(r)) * x + St(Ld(r + 4)) * y
+                    : St(Ld(r + 4)) * y + St(Ld(r + 8)) * z + St(Ld(r)) * x;
+      };
+      const F32 inv = Fst(St(Ld(0x55B580)) / Fst(row(kViewProj + 0x30) + Ld(kViewProj + 0x3C)));
+      const F32 px = Fst((row(kViewProj) + Ld(kViewProj + 0xC)) * inv);
+      const F32 py = Fst((row(kViewProj + 0x10) + Ld(kViewProj + 0x1C)) * inv);
+      if (St(minX) > px) minX = px;
+      if (St(maxX) < px) maxX = px;
+      if (St(minY) > py) minY = py;
+      if (St(maxY) < py) maxY = py;
+    };
+    for (int32_t i = 0; i < n; i++) project(pts + 0xC * uint32_t(i), i >= n / 4 * 4);
+    for (uint32_t k = 0; k < 4; k++) {
+      const F32 cx = k >= 2 ? maxX : minX, cy = k == 1 || k == 2 ? minY : maxY;
+      F32 v[4];
+      for (uint32_t j = 0; j < 4; j++)
+        v[j] = Fst(St(Ld(kViewProjInverse + 0x10 + 4 * j)) * cy + St(Ld(kViewProjInverse + 4 * j)) * cx +
+                   Ld(kViewProjInverse + 0x30 + 4 * j));
+      const F32 inv = Fst(St(Ld(0x55B580)) / v[3]);
+      for (uint32_t j = 0; j < 3; j++) Put(corners + 0xC * k + 4 * j, Fst(St(v[j]) * inv));
+    }
+    MovsD(corners + 0x30, corners, 3);
+  } else {
+    planes = TempAlloc(c, s, uint32_t(n) * 0x14, 0x4D720B, 0x4D7205);
+  }
+  // The points from the view origin, the first again at the end.
+  std::vector<F32> rel(3 * (n > 0 ? uint32_t(n) + 1 : 1));
+  for (int32_t i = 0; i < n; i++)
+    for (uint32_t k = 0; k < 3; k++) rel[3 * i + k] = Fst(St(Ld(pts + 0xC * uint32_t(i) + 4 * k)) - Ld(kCullOrigin + 4 * k));
+  if (n > 0)
+    for (uint32_t k = 0; k < 3; k++) rel[3 * uint32_t(n) + k] = rel[k];
+  for (int32_t i = 0; i < n; i++) {
+    const F32* r0 = &rel[3 * i];
+    const F32* r1 = r0 + 3;
+    const uint32_t nrm = normals + 0xC * uint32_t(i);
+    Put(nrm, Fst(St(r1[1]) * r0[2] - St(r1[2]) * r0[1]));
+    Put(nrm + 4, Fst(St(r1[2]) * r0[0] - St(r0[2]) * r1[0]));
+    Put(nrm + 8, Fst(St(r0[1]) * r1[0] - St(r1[1]) * r0[0]));
+    c.esp = s;
+    c.eax = nrm;
+    Call(c, f_004268B0, 0x4D7326);
+  }
+  uint32_t m = 0;
+  if (aperture() > Ld(0x55B584)) {
+    F32 cr[15];
+    for (uint32_t k = 0; k < 12; k++) cr[k] = Fst(St(Ld(corners + 4 * k)) - Ld(kCullOrigin + 4 * (k % 3)));
+    for (uint32_t k = 0; k < 3; k++) cr[12 + k] = cr[k];
+    for (uint32_t k = 0; k < 4; k++) {
+      const F32* r0 = &cr[3 * k];
+      const F32* r1 = r0 + 3;
+      const uint32_t p = planes + 0x14 * m;
+      Put(p, Fst(St(r1[1]) * r0[2] - St(r0[1]) * r1[2]));
+      Put(p + 4, Fst(St(r0[0]) * r1[2] - St(r1[0]) * r0[2]));
+      Put(p + 8, Fst(St(r0[1]) * r1[0] - St(r0[0]) * r1[1]));
+      c.esp = s;
+      c.eax = p;
+      Call(c, f_004268B0, 0x4D7499);
+      bool reject = false;
+      for (int32_t j = 0; j < n && !reject; j++) {
+        const uint32_t q = normals + 0xC * uint32_t(j);
+        reject = St(Ld(q)) * Ld(p) + St(Ld(q + 8)) * Ld(p + 8) + St(Ld(q + 4)) * Ld(p + 4) > aperture();
+      }
+      c.ebx = corners + 0xC * k;
+      c.edi = c.ebx + 0xC;
+      if (reject) {
+        if (DrawFlags() & 2) {
+          c.esi = 0x5378B0;
+          Call(c, f_004AD760, 0x4D79F8);
+        }
+        continue;
+      }
+      if (DrawFlags()) {
+        c.esi = 0x5378A0;
+        Call(c, f_004AD760, 0x4D74F8);
+      }
+      Put(p + 0xC, Fst(St(Ld(kCullOrigin + 4)) * Ld(p + 4) + St(Ld(kCullOrigin + 8)) * Ld(p + 8) +
+                       St(Ld(kCullOrigin)) * Ld(p)));
+      NudgePlane(p);
+      m++;
+    }
+  }
+  // The edges' planes: in the groups of four the first sums z + x + y, the
+  // others and the rest z + y + x.
+  const int32_t groups = n / 4 * 4;
+  for (int32_t i = 0; i < n; i++) {
+    const uint32_t q = normals + 0xC * uint32_t(i);
+    const F32 x = Ld(q), y = Ld(q + 4), z = Ld(q + 8);
+    if (St(y) * y + St(z) * z + St(x) * x == Ld(0x55B584)) continue;
+    const uint32_t p = planes + 0x14 * m;
+    MovsD(p, q, 3);
+    const F32 ox = Ld(kCullOrigin), oy = Ld(kCullOrigin + 4), oz = Ld(kCullOrigin + 8);
+    St d;
+    if (i >= groups) d = St(y) * oy + St(oz) * z + St(x) * ox;
+    else if (i % 4 == 0) d = St(z) * oz + St(x) * ox + St(y) * oy;
+    else d = St(z) * oz + St(y) * oy + St(x) * ox;
+    Put(p + 0xC, Fst(d));
+    NudgePlane(p);
+    m++;
+  }
+  Put(countp, m);
+  c.eax = planes;
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.ebp = ebp;
+  c.esp = e + 4;
+}
+
+// A portal's cull planes through it (stack: portal, the plane it is seen
+// through, planes; ECX &count, EDX the plane count), EAX a temporary
+// allocation or 0 (count 0): its polygon (+0x18, count +0x1C) clipped by
+// that plane; with the view origin in front of the portal's plane (+0) or
+// less than 1 behind it a copy of the planes as they are; else the
+// polygon clipped by the far plane and the planes too, drawn for the
+// debug cvar, and its planes (0x4D6BC0, the fourth argument the portal's
+// +0x14). The clips alternate between two buffers on the stack.
+void f_004D80F0(Ctx& c) {
+  const uint32_t e = c.esp, portal = Arg(c, e, 1), planes = Arg(c, e, 3), countp = c.ecx;
+  const int32_t numPlanes = int32_t(c.edx);
+  const uint32_t ebx = c.ebx, esi = c.esi, edi = c.edi, ebp = c.ebp;
+  const uint32_t s = e - 0x6014, buf = e - 0x6000;
+  auto done = [&](uint32_t eax) {
+    c.eax = eax;
+    c.ebx = ebx;
+    c.esi = esi;
+    c.edi = edi;
+    c.ebp = ebp;
+    c.esp = e + 4;
+  };
+  auto clip = [&](uint32_t plane, uint32_t pts, uint32_t out, uint32_t ret) {
+    c.esp = s;
+    Push(c, out);
+    Push(c, countp);
+    Push(c, pts);
+    c.ecx = plane;
+    Call(c, f_004D7F30, ret);
+    c.esp = s;
+    return c.eax;
+  };
+  auto other = [&](uint32_t pts) { return pts == buf ? buf + 0x3000 : buf; };
+  Put(countp, U32(portal + 0x1C));
+  uint32_t pts = clip(Arg(c, e, 2), U32(portal + 0x18), buf, 0x4D8124);
+  if (!U32(countp)) return done(0);
+  if (Ld(portal + 0xC) - Dot(kCullOrigin, portal) < Ld(0x55B580)) {
+    Put(countp, uint32_t(numPlanes));
+    const uint32_t size = uint32_t(numPlanes) * 0x14, copy = TempAlloc(c, s, size, 0x4D8170, 0x4D816A);
+    MovsD(copy, planes, size / 4);
+    return done(copy);
+  }
+  if (U32(kFarPlane)) {
+    pts = clip(U32(kFarPlane), pts, other(pts), 0x4D81C0);
+    if (!U32(countp)) return done(0);
+  }
+  for (int32_t i = 0; i < numPlanes; i++) {
+    pts = clip(planes + 0x14 * uint32_t(i), pts, other(pts), 0x4D8203);
+    if (!U32(countp)) return done(0);
+  }
+  if (DrawFlags()) {
+    Push(c, pts);
+    c.ebx = U32(countp);
+    c.eax = 0x536548;
+    Call(c, f_004AD630, 0x4D823F);
+    c.esp = s;
+  }
+  Push(c, U32(portal + 0x14));
+  Push(c, pts);
+  Push(c, U32(countp));
+  Push(c, countp);
+  Call(c, f_004D6BC0, 0x4D8257);
+  done(c.eax);
+}
+
+// A cell's occluders (stack: cell, planes, count; +0x2C, count +0x30) onto
+// the cull's list (cleared, as are the cull's planes): each with
+// a point in front of the near plane and, for each of the planes still
+// given, in front of it (the planes given are used up, the argument slots
+// advanced, by the first occluders tested), its counter set to kNoBits and
+// its planes (+0x20, count +0x1C) the cull's next: its faces (+0, count +4,
+// marked at +0x13) the view origin is in front of, then for each edge (+0xC,
+// count +8: two faces, two points) between one of those and one not, the
+// plane through the view origin and its points (normalised, 0.001 back).
+// ri.Error at 0x400 occluders and 0x1800 faces.
+void f_004D7A70(Ctx& c) {
+  const uint32_t e = c.esp, cell = Arg(c, e, 1);
+  Put(kNumOccluders, 0);
+  Put(kNumCullPlanes, 0);
+  auto front = [](uint32_t o, auto dist) {
+    for (int32_t k = 0; k < I32(o + 0x10); k++)
+      if (dist(U32(o + 0x14) + 0xC * uint32_t(k))) return true;
+    return false;
+  };
+  for (int32_t i = 0; i < I32(cell + 0x30); i++) {
+    const uint32_t o = U32(U32(cell + 0x2C) + 4 * uint32_t(i));
+    if (!front(o, [](uint32_t pt) {
+          const uint32_t p = U32(kNearPlane);
+          return St(Ld(pt + 4)) * Ld(p + 4) + St(Ld(pt + 8)) * Ld(p + 8) + St(Ld(p)) * Ld(pt) > Ld(p + 0xC);
+        }))
+      continue;
+    bool hidden = false;
+    while (U32(e + 0xC) && !hidden) {
+      const uint32_t p = U32(e + 8);
+      hidden = !front(o, [&](uint32_t pt) {
+        return St(Ld(pt + 8)) * Ld(p + 8) + St(Ld(pt + 4)) * Ld(p + 4) + St(Ld(p)) * Ld(pt) > Ld(p + 0xC);
+      });
+      if (!hidden) {
+        Put(e + 0xC, U32(e + 0xC) - 1);
+        Put(e + 8, p + 0x14);
+      }
+    }
+    if (hidden) continue;
+    if (I32(kNumOccluders) == 0x400) DropError(c, e - 0x30, 0x542628, 0x4D7B4F, 0x4D7B49);
+    Put(U32(kOccluders) + 4 * U32(kNumOccluders), o);
+    Put(kNumOccluders, U32(kNumOccluders) + 1);
+    Put(o + 0x18, uint32_t(kNoBits));
+    Put(o + 0x1C, U32(kNumCullPlanes));
+    Put(o + 0x20, U32(kCullPlanes) + 0x14 * U32(kNumCullPlanes));
+    for (int32_t j = 0; j < I32(o + 4); j++) {
+      const uint32_t f = U32(o) + 0x14 * uint32_t(j);
+      Wr<uint8_t>(g_guest_base, f + 0x13, 0);
+      if (!(Dot(kCullOrigin, f) > Ld(f + 0xC))) continue;
+      Wr<uint8_t>(g_guest_base, f + 0x13, 1);
+      if (U32(kNumCullPlanes) == 0x1800) DropError(c, e - 0x30, 0x542608, 0x4D7BF4, 0x4D7BEE);
+      MovsD(U32(kCullPlanes) + 0x14 * U32(kNumCullPlanes), U32(o) + 0x14 * uint32_t(j), 5);
+      Put(kNumCullPlanes, U32(kNumCullPlanes) + 1);
+    }
+    for (int32_t j = 0; j < I32(o + 8); j++) {
+      const uint32_t edge = U32(o + 0xC) + 0x10 * uint32_t(j);
+      const uint8_t side = U8(U32(edge) + 0x13);
+      if (side == U8(U32(edge + 4) + 0x13)) continue;
+      const uint32_t p0 = U32(edge + 8 + 4 * (side == 0)), p1 = U32(edge + 8 + 4 * side);
+      F32 d0[3], d1[3];
+      for (uint32_t k = 0; k < 3; k++) {
+        d0[k] = Fst(St(Ld(p0 + 4 * k)) - Ld(kCullOrigin + 4 * k));
+        d1[k] = Fst(St(Ld(p1 + 4 * k)) - Ld(kCullOrigin + 4 * k));
+      }
+      const uint32_t p = U32(kCullPlanes) + 0x14 * U32(kNumCullPlanes);
+      Put(p, Fst(St(d1[1]) * d0[2] - St(d1[2]) * d0[1]));
+      Put(p + 4, Fst(St(d1[2]) * d0[0] - St(d1[0]) * d0[2]));
+      Put(p + 8, Fst(St(d1[0]) * d0[1] - St(d1[1]) * d0[0]));
+      c.esp = e - 0x30;
+      c.eax = p;
+      Call(c, f_004268B0, 0x4D7D1E);
+      const uint32_t q = U32(kCullPlanes) + 0x14 * U32(kNumCullPlanes);
+      Put(q + 0xC, Fst(Dot(kCullOrigin, q)));
+      NudgePlane(q);
+      Put(kNumCullPlanes, U32(kNumCullPlanes) + 1);
+    }
+    Put(o + 0x1C, U32(kNumCullPlanes) - U32(o + 0x1C));
+  }
+  c.esp = e + 4;
+}
+
+// R_RecursiveWorldNode's like for cells (stack: cell, the portal plane it
+// is seen through, planes, plane count, dlight bits): its occluders
+// (0x4D7A70), surfaces (0x4D9290) and static models and entities
+// (0x4D9650); then each of its portals (+0x1C, 0x24 bytes each, count
+// +0x20, counted down in the cell's argument slot) not already on the
+// walk (+0x20), with the view origin not in front of its plane (+0), not
+// wholly behind a plane (0x4D7E70) or hidden by an occluder (0x4D7ED0),
+// and with planes through it (0x4D80F0): the cell beyond it (+0x14),
+// walked with those planes, which are freed after.
+void f_004D96E0(Ctx& c) {
+  const uint32_t e = c.esp, cell = Arg(c, e, 1), planes = Arg(c, e, 3), numPlanes = Arg(c, e, 4);
+  const uint32_t bits = Arg(c, e, 5);
+  const uint32_t ebx = c.ebx, esi = c.esi, edi = c.edi, ebp = c.ebp;
+  const uint32_t s = e - 0x14;
+  c.esp = s;
+  Push(c, numPlanes);
+  Push(c, planes);
+  Push(c, cell);
+  Call(c, f_004D7A70, 0x4D96F9);
+  Push(c, bits);
+  Push(c, numPlanes);
+  Push(c, planes);
+  c.esi = cell;
+  Call(c, f_004D9290, 0x4D9707);
+  Push(c, planes);
+  Push(c, cell);
+  c.ebx = numPlanes;
+  c.edi = bits;
+  Call(c, f_004D9650, 0x4D9714);
+  c.esp = s;
+  uint32_t portal = U32(cell + 0x1C);
+  if (const uint32_t n = U32(cell + 0x20)) {
+    Put(e + 4, n);
+    do {
+      if (!U32(portal + 0x20) && !(Dot(kCullOrigin, portal) > Ld(portal + 0xC))) {
+        c.eax = portal;
+        c.ecx = numPlanes;
+        c.edx = planes;
+        Call(c, f_004D7E70, 0x4D977A);
+        bool hidden = c.eax != 0;
+        for (int32_t k = 0; !hidden && k < I32(kNumOccluders); k++) {
+          const uint32_t o = U32(U32(kOccluders) + 4 * uint32_t(k));
+          c.eax = portal;
+          c.ecx = U32(o + 0x1C);
+          c.edx = U32(o + 0x20);
+          Call(c, f_004D7ED0, 0x4D97A5);
+          hidden = c.eax != 0;
+        }
+        if (!hidden) {
+          Push(c, planes);
+          Push(c, Arg(c, e, 2));
+          Push(c, portal);
+          c.ecx = e - 4;
+          c.edx = numPlanes;
+          Call(c, f_004D80F0, 0x4D97C5);
+          const uint32_t through = c.eax, count = U32(e - 4);
+          c.esp = s;
+          if (count) {
+            Push(c, Arg(c, e, 5));
+            Push(c, count);
+            Push(c, through);
+            Push(c, portal);
+            Push(c, U32(portal + 0x14));
+            Put(portal + 0x20, 1);
+            Call(c, f_004D96E0, 0x4D97EA);
+            Push(c, through);
+            CallPtr(c, U32(kFreePtr), 0x4D97F1, 0x4D97EB);
+            c.esp = s;
+            Put(portal + 0x20, 0);
+          }
+        }
+      }
+      portal += 0x24;
+      Put(e + 4, U32(e + 4) - 1);
+    } while (U32(e + 4));
+  }
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.ebp = ebp;
+  c.esp = e + 4;
+}
+
+// The world's coronas (+0xC0, 0x20 bytes each, count +0xC4: shader, origin,
+// radius, two limits, colour, alpha; stack: planes, plane count): each
+// whose direction to the view origin (0x1536330, normalised) has z below
+// its first limit and whose cube of the radius x sqrt 3 is not culled
+// (frustum while the plane bits counter is above 0, near and far planes,
+// occluders), as a sprite 16 along that direction (a refentity on the
+// stack, zeroed once, type 4) with the shader's handle (+0x44), the colour
+// and the radius, its alpha faded by z between the limits; added by
+// 0x4DEC10. The cookie check is left out.
+void f_004D9A10(Ctx& c) {
+  const uint32_t e = c.esp, planes = Arg(c, e, 1);
+  const int32_t numPlanes = I32(e + 8);
+  const uint32_t esi = c.esi;
+  const uint32_t s = e - 0xE0, dir = s + 0x14, b = s + 0x24, ent = s + 0x40;
+  for (uint32_t i = 0; i < 0x9C; i += 4) Put(ent + i, 0);
+  Put(ent, 4);
+  for (int32_t i = 0; i < I32(U32(kWorld) + 0xC4); i++) {
+    const uint32_t f = U32(U32(kWorld) + 0xC0) + 0x20 * uint32_t(i);
+    for (uint32_t k = 0; k < 12; k += 4) Put(dir + k, Fst(St(Ld(0x1536330 + k)) - Ld(f + 4 + k)));
+    c.esp = s;
+    c.esi = dir;
+    Call(c, f_00426710, 0x4D9AB4);
+    x87::Pop(c.fpu);
+    if (St(Ld(dir + 8)) >= Ld(f + 0x14)) continue;
+    const St r = St(Ld(f + 0x10)) * Ld(0x55B870);
+    for (uint32_t k = 0; k < 12; k += 4) Put(b + k, Fst(St(Ld(f + 4 + k)) - r));
+    for (uint32_t k = 0; k < 12; k += 4) Put(b + 0xC + k, Fst(r + Ld(f + 4 + k)));
+    if (ModelCulled(b, planes, numPlanes)) continue;
+    for (uint32_t k = 0; k < 12; k += 4) Put(ent + 0x44 + k, Fst(St(Ld(dir + k)) * Ld(0x55B5E4) + Ld(f + 4 + k)));
+    Put(ent + 0x68, U32(U32(f) + 0x44));
+    for (uint32_t k = 0; k < 3; k++) Wr<uint8_t>(g_guest_base, ent + 0x6C + k, U8(f + 0x1C + k));
+    Put(ent + 0x64, Fst(St(Ld(f + 0x10))));
+    Put(ent + 0x7C, Fst(St(Ld(f + 0x10))));
+    uint8_t alpha = U8(f + 0x1F);
+    if (St(Ld(dir + 8)) > Ld(f + 0x18))
+      alpha = uint8_t(Ftol((St(Ld(f + 0x14)) - Ld(dir + 8)) * FromInt(alpha) / (St(Ld(f + 0x14)) - Ld(f + 0x18))));
+    Wr<uint8_t>(g_guest_base, ent + 0x6F, alpha);
+    Push(c, 0);
+    Push(c, ent);
+    Call(c, f_004DEC10, 0x4D9D21);
+  }
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// R_AddWorldSurfaces' like: with the cvar 0x1534490 set and a world
+// (RDF_NOWORLDMODEL clear), the cull's occluders, planes and static model
+// references in buffers on the stack, the dlight bits of tr.refdef's
+// count, the world's view (0x4D9820), the static models' links (0x4D8D80)
+// and coronas (0x4D9A10) by the frustum; then from the view's cell
+// (0x4D7DF0) its surfaces and models alone with the far plane dropped
+// (the cvar 0x1534510) or the cell walk (0x4D96E0, through the near
+// plane); outside the world every cell's surfaces and models (the cvar
+// 0x15346D8) or surfaces, with the world's models (+0x148, count +0x144,
+// 0x24 bytes each); then the surfaces beyond the far plane (0x4D9D80)
+// and, with a debug cvar at 2, the bounds of each cell's references to
+// static models of its type (hidden ones in another colour).
+void f_004D9E20(Ctx& c) {
+  const uint32_t e = c.esp;
+  if (!CvarInt(0x1534490) || (U8(0x1536364) & 1)) {
+    c.esp = e + 4;
+    return;
+  }
+  const uint32_t ebx = c.ebx, esi = c.esi, edi = c.edi, ebp = c.ebp;
+  const uint32_t s = e - 0x3F014;
+  Put(kOccluders, e - 0x3F000);
+  const uint32_t bits = (1u << (U32(0x1536474) & 31)) - 1;
+  Put(kCullPlanes, e - 0x3E000);
+  Put(kCellRefs, e - 0x20000);
+  Put(kNumOccluders, 0);
+  Put(0x1536024, 0x7FE);
+  Put(0x1536028, 0x3FF00);
+  c.edi = bits;
+  c.esp = s;
+  Call(c, f_004D9820, 0x4D9E9D);
+  c.esp = s;
+  Push(c, 4);
+  Push(c, kCullFrustum);
+  Call(c, f_004D8D80, 0x4D9EA9);
+  Push(c, 4);
+  Push(c, kCullFrustum);
+  Call(c, f_004D9A10, 0x4D9EB5);
+  c.esp = s;
+  Call(c, f_004D7DF0, 0x4D9EBD);
+  const uint32_t world = U32(kWorld);
+  auto surfaces = [&](uint32_t cell, uint32_t ret) {
+    c.esp = s;
+    Push(c, bits);
+    Push(c, 4);
+    Push(c, kCullFrustum);
+    c.esi = cell;
+    Call(c, f_004D9290, ret);
+  };
+  auto models = [&](uint32_t cell, uint32_t ret) {
+    Push(c, kCullFrustum);
+    Push(c, cell);
+    c.ebx = 4;
+    Call(c, f_004D9650, ret);
+    c.esp = s;
+  };
+  if (int32_t(c.eax) >= 0) {
+    const uint32_t cell = U32(world + 0x124) + (c.eax << 6);
+    if (CvarInt(0x1534510)) {
+      Put(kFarPlane, 0);
+      surfaces(cell, 0x4D9EF2);
+      models(cell, 0x4D9F02);
+    } else {
+      c.esp = s;
+      Push(c, bits);
+      Push(c, 4);
+      Push(c, kCullFrustum);
+      Push(c, 0x11BEB54);
+      Push(c, cell);
+      Call(c, f_004D96E0, 0x4D9F15);
+    }
+  } else if (CvarInt(0x15346D8)) {
+    for (int32_t i = 0; i < I32(U32(kWorld) + 0x120); i++) {
+      surfaces(U32(U32(kWorld) + 0x124) + 0x40 * uint32_t(i), 0x4D9F57);
+      models(U32(U32(kWorld) + 0x124) + 0x40 * uint32_t(i), 0x4D9F75);
+    }
+  } else {
+    for (int32_t i = 0; i < I32(U32(kWorld) + 0x120); i++) surfaces(U32(U32(kWorld) + 0x124) + 0x40 * uint32_t(i), 0x4D9FB5);
+    for (int32_t i = 0; i < I32(U32(kWorld) + 0x144); i++) {
+      c.esp = s;
+      Push(c, bits);
+      c.eax = 4;
+      c.ecx = kCullFrustum;
+      c.edx = U32(U32(kWorld) + 0x148) + 0x24 * uint32_t(i);
+      Call(c, f_004D9330, 0x4D9FF8);
+    }
+  }
+  c.esp = s;
+  Call(c, f_004D9D80, 0x4DA013);
+  if (CvarInt(0x15344B8) == 2 || CvarInt(0x1534550) == 2) {
+    for (int32_t i = 0; i < I32(U32(kWorld) + 0x120); i++) {
+      for (uint32_t r = U32(U32(U32(kWorld) + 0x124) + 0x40 * uint32_t(i) + 0x3C); r; r = U32(r + 0x1C)) {
+        const uint32_t model = U32(r), type = U32(model);
+        if ((type == 1 && CvarInt(0x15344B8) != 2) || (type == 0 && CvarInt(0x1534550) != 2)) continue;
+        DrawBounds(c, r + 4, r + 0x10, U32(model + 0x2B4) ? 0x537810 : 0x537820, 0x4DA091);
+      }
+    }
+  }
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.ebp = ebp;
   c.esp = e + 4;
 }
 

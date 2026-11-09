@@ -6,18 +6,23 @@
 // not replace are stubs (tests/render_stubs.manifest) that record each
 // call: its address, return address, ESP, the registers the callee reads
 // and its stack arguments, which must be the same on both sides; they
-// leave EAX, ECX and EDX changed. Each case runs one entry through the
+// leave EAX, ECX and EDX changed; the debug polygon and line and an added
+// entity also record a hash of what they are handed (on the caller's
+// stack). The refimport's temporary allocation hands out blocks of a heap
+// that starts again for each side. Each case runs one entry through the
 // lifted original and the native code from the same guest memory, and both
 // must leave the same bytes in the case's memory (the structures, the
 // globals, the stack arguments), the same calls, and the same ESP, EBX,
 // ESI, EDI, EBP and x87 stack (top, empty registers, control word), and
-// 0x4D68E0 the same EAX. Not compared: EAX otherwise, ECX, EDX, EFLAGS,
-// the x87 status word and the stack below the return address.
+// the entries that return a value the same EAX (ST0 for 0x4D6880). Not
+// compared: EAX otherwise, ECX, EDX, EFLAGS, the x87 status word and the
+// stack below the return address (refilled with one pattern before each
+// side for the entries that keep locals there for their callees).
 //
 //   render_test EXE [CAPTURE...]
 //
 // Random cases (mt19937, fixed seed): small worlds of frustum planes,
-// near/far planes, portals with their counters, dlights, surface AABB
+// near/far planes, occluders with their counters, dlights, surface AABB
 // trees, surfaces, static models, cells and entities, culled from every
 // entry; sky polygons clipped from every stage; shaders with random
 // tcGens, vectors and texmods over a random tessellator; draw surface
@@ -29,7 +34,12 @@
 // arguments their formats take; static models (unit, permuted and wide
 // axes), their cells and references (at the limit too), BSPs to link them
 // through (finite values only), and the world's view with huge products
-// that cancel and a far plane at a huge distance. Values are now and then
+// that cancel and a far plane at a huge distance; polygons clipped (up to
+// the 0x400 points), convex ones on portals near the view, occluders (at
+// the 0x400 and 0x1800 limits too), cell graphs of three portals at most
+// walked, coronas (finite: the CRT's square root of a NaN reports through
+// the Windows API) and the world walk over such cells, static models,
+// coronas and world models from a random view. Values are now and then
 // zeros, denormals, infinities, NaNs or huge. Captures
 // (tests/render_capture.h) add the game's own calls.
 
@@ -70,6 +80,13 @@ void WrF(uint32_t va, float f) { g_mem.write<float>(va, f); }
 // 0x1549600.
 constexpr uint32_t kErrorPtr = 0x1549604, kError = 0x7FFE0000;
 constexpr uint32_t kPrintfPtr = 0x1549600, kPrintf = 0x7FFE0010;
+// The refimport's temporary allocation and its free (0x1549610, 0x154961C):
+// blocks from the heap below the stack, which starts again for each side of
+// a case.
+constexpr uint32_t kAllocPtr = 0x1549610, kAlloc = 0x7FFE0020;
+constexpr uint32_t kFreePtr = 0x154961C, kFree = 0x7FFE0030;
+constexpr uint32_t kHeap = 0x6FE00000, kHeapSize = 0x100000;
+uint32_t g_heap_top = kHeap;
 
 enum Reg { kEax = 1, kEcx = 2, kEdx = 4, kEbx = 8, kEsi = 16, kEdi = 32, kEbp = 64 };
 constexpr int kSaved = kEbx | kEsi | kEdi | kEbp;
@@ -89,6 +106,8 @@ struct StubInfo {
 };
 constexpr StubInfo kStubs[] = {
     {0x4AD7E0, kEax | kEcx | kEdx, 0},          // debug box
+    {0x4AD630, kEax | kEbx, 1},                 // debug polygon
+    {0x4AD760, kEbx | kEsi | kEdi, 0},          // debug line
     {0x4DEC10, 0, 2},                           // adds an entity
     {0x4CAB80, 0, 1},                           // a portal's view
     {0x427E80, kEax | kEcx, 0},                 // a matrix's inverse
@@ -121,6 +140,17 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
   for (int i = 0; i < 7; i++)
     if (regs & (1 << i)) r.regs[i] = all[i];
   for (int i = 0; i < args; i++) r.args[i] = Rd(c.esp + 4 + 4 * i);
+  // What the debug draws and an added entity are handed (on the caller's
+  // stack, which the cases do not compare): its bytes' hash.
+  auto hash = [](uint32_t va, uint32_t size) {
+    uint32_t h = 2166136261u;
+    if (!size || !g_mem.IsCommitted(va & ~0xFFFu) || !g_mem.IsCommitted((va + size - 1) & ~0xFFFu)) return h;
+    for (uint32_t i = 0; i < size; i++) h = (h ^ g_mem.read<uint8_t>(va + i)) * 16777619u;
+    return h;
+  };
+  if (va == 0x4DEC10) r.args[2] = hash(r.args[0], 0x9C);
+  if (va == 0x4AD630 && c.ebx <= 0x1000) r.args[2] = hash(r.args[0], 0xC * c.ebx);
+  if (va == 0x4AD760) r.args[2] = hash(c.ebx, 0xC) ^ hash(c.edi, 0xC) * 3;
   g_calls.push_back(r);
   const uint32_t junk = 0xC0DE0000u + uint32_t(g_calls.size());
   // A portal's view now and then not drawn (EAX 0).
@@ -181,6 +211,13 @@ void f_004D8D80_lifted(Ctx& c);
 void f_004D9290_lifted(Ctx& c);
 void f_004D9820_lifted(Ctx& c);
 void f_004D9D80_lifted(Ctx& c);
+void f_004D7F30_lifted(Ctx& c);
+void f_004D6BC0_lifted(Ctx& c);
+void f_004D80F0_lifted(Ctx& c);
+void f_004D7A70_lifted(Ctx& c);
+void f_004D96E0_lifted(Ctx& c);
+void f_004D9A10_lifted(Ctx& c);
+void f_004D9E20_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_native.cpp renames
 // its entries).
 void f_004D68E0(Ctx& c) { f_004D68E0_lifted(c); }
@@ -224,6 +261,13 @@ void f_004D8D80(Ctx& c) { f_004D8D80_lifted(c); }
 void f_004D9290(Ctx& c) { f_004D9290_lifted(c); }
 void f_004D9820(Ctx& c) { f_004D9820_lifted(c); }
 void f_004D9D80(Ctx& c) { f_004D9D80_lifted(c); }
+void f_004D7F30(Ctx& c) { f_004D7F30_lifted(c); }
+void f_004D6BC0(Ctx& c) { f_004D6BC0_lifted(c); }
+void f_004D80F0(Ctx& c) { f_004D80F0_lifted(c); }
+void f_004D7A70(Ctx& c) { f_004D7A70_lifted(c); }
+void f_004D96E0(Ctx& c) { f_004D96E0_lifted(c); }
+void f_004D9A10(Ctx& c) { f_004D9A10_lifted(c); }
+void f_004D9E20(Ctx& c) { f_004D9E20_lifted(c); }
 // unzCloseCurrentFile and tolower, native in the game (src/unzip.cpp,
 // src/crt.cpp): here only lifted code the stubs stand for reaches them.
 void f_0049EAA0_lifted(Ctx& c);
@@ -299,10 +343,19 @@ void n_004D8D80(Ctx& c);
 void n_004D9290(Ctx& c);
 void n_004D9820(Ctx& c);
 void n_004D9D80(Ctx& c);
+void n_004D7F30(Ctx& c);
+void n_004D6BC0(Ctx& c);
+void n_004D80F0(Ctx& c);
+void n_004D7A70(Ctx& c);
+void n_004D96E0(Ctx& c);
+void n_004D9A10(Ctx& c);
+void n_004D9E20(Ctx& c);
 // The stubs.
 #define COD1_STUB(va) \
   void f_##va(Ctx& c) { StubFor(c, 0x##va); }
 COD1_STUB(004AD7E0)
+COD1_STUB(004AD630)
+COD1_STUB(004AD760)
 COD1_STUB(004DEC10)
 COD1_STUB(004CAB80)
 COD1_STUB(00427E80)
@@ -328,6 +381,19 @@ COD1_STUB(0050AE10)
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
+  if (target == kAlloc || target == kFree) {
+    Stub(c, target == kAlloc ? kAllocPtr : kFreePtr, 0, 1);
+    if (target == kAlloc) {
+      const uint32_t size = Rd(c.esp);
+      if (size > kHeapSize - (g_heap_top - kHeap)) {
+        std::printf("heap full (%08X bytes)\n", size);
+        std::abort();
+      }
+      c.eax = g_heap_top;
+      g_heap_top += (size + 15) & ~15u;
+    }
+    return;
+  }
   if (target == kError || target == kPrintf) {
     // ri.Error and ri.Printf(code, fmt, ...): the arguments their formats
     // take (a double for each %f); the texmod error passes two more and
@@ -431,6 +497,10 @@ const Entry kEntries[] = {
     COD1_ENTRY(004D8D80, "static model links"), COD1_ENTRY(004D8770, "cell's models"),
     COD1_ENTRY(004D9290, "cell's surfaces"),    COD1_ENTRY(004D9D80, "beyond the far plane"),
     COD1_ENTRY(004D9820, "world view"),
+    COD1_ENTRY(004D7F30, "polygon clip"),       COD1_ENTRY(004D6BC0, "portal planes"),
+    COD1_ENTRY(004D80F0, "planes through a portal"), COD1_ENTRY(004D7A70, "cell's occluders"),
+    COD1_ENTRY(004D96E0, "cell walk"),          COD1_ENTRY(004D9A10, "coronas"),
+    COD1_ENTRY(004D9E20, "world walk"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -472,12 +542,31 @@ struct Call {
   std::vector<uint32_t> args;
 };
 
+// The stack below the arguments that the entries keeping locals there for
+// their callees use, refilled with one pattern before each side (a local
+// one side leaves unwritten then differs).
+uint32_t ScrubDepth(uint32_t fn) {
+  switch (fn) {
+    case 0x4D7F30: return 0x2100;
+    case 0x4D6BC0: return 0x6200;
+    case 0x4D80F0: return 0xC400;
+    case 0x4D7A70: case 0x4D9A10: return 0x200;
+    case 0x4D96E0: return 0x40000;
+    case 0x4D9E20: return 0x80000;
+    default: return 0;
+  }
+}
+
 // Runs one call through the lifted original and the native code from the
 // same memory and compares; the original's result stays (the next case's
 // starting state).
 void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const char* what) {
   const Entry& e = kEntries[EntryIndex(k.fn)];
   const uint32_t esp = kStack + kStackSize - 0x1000;
+  const uint32_t scrub = ScrubDepth(k.fn), pattern = g();
+  auto fill = [&] {
+    for (uint32_t va = esp - scrub; va < esp; va += 4) Wr(va, pattern);
+  };
   Wr(esp, 0xDEAD0000);
   for (size_t i = 0; i < k.args.size(); i++) Wr(esp + 4 + 4 * uint32_t(i), k.args[i]);
   w.push_back({esp, 4 + 4 * uint32_t(k.args.size())});
@@ -498,12 +587,16 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
 
   Ctx cl = c0;
   g_calls.clear();
+  g_heap_top = kHeap;
+  fill();
   e.lifted(cl);
   const std::vector<uint8_t> after = Save(w);
   const std::vector<CallRec> lcalls = g_calls;
   Load(w, before);
   Ctx cn = c0;
   g_calls.clear();
+  g_heap_top = kHeap;
+  fill();
   e.native(cn);
   const std::vector<uint8_t> got = Save(w);
 
@@ -511,7 +604,8 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   s.by_entry[EntryIndex(k.fn)]++;
   s.calls += int(lcalls.size());
   const bool eax = k.fn == 0x4D68E0 || k.fn == 0x4C8D50 || k.fn == 0x4C9070 || k.fn == 0x4D7DF0 ||
-                   k.fn == 0x4D7E70 || k.fn == 0x4D7ED0;
+                   k.fn == 0x4D7E70 || k.fn == 0x4D7ED0 || k.fn == 0x4D7F30 || k.fn == 0x4D6BC0 ||
+                   k.fn == 0x4D80F0;
   // A result on the x87 stack: its register.
   const bool st0 = k.fn == 0x4D6880;
   bool ok = cn.esp == cl.esp && cn.ebp == cl.ebp && cn.ebx == cl.ebx && cn.esi == cl.esi &&
@@ -626,7 +720,7 @@ float Wide(std::mt19937& g, int lo, int hi) {
 // ---- the front end ------------------------------------------------------------
 
 constexpr uint32_t kPlaneBits = 0x11BEC20, kNearPlane = 0x11BEB7C, kFarPlane = 0x11BEB80,
-                   kNumPortals = 0x11BEC10, kPortals = 0x11BEC14, kViewCount = 0x1535A28,
+                   kNumOccluders = 0x11BEC10, kOccluders = 0x11BEC14, kViewCount = 0x1535A28,
                    kRefdef = 0x153647C;
 constexpr uint32_t kCvars[] = {0x15347E0, 0x15344DC, 0x153443C, 0x1534568};
 
@@ -698,10 +792,10 @@ void NewWorld(Arena& a, std::mt19937& g, World& w, uint32_t special) {
   Wr(kNearPlane, NewPlane(a, g, w));
   Wr(kFarPlane, g() % 2 ? NewPlane(a, g, w) : 0);
   const uint32_t n = g() % 4 ? g() % 4 : 0;
-  const uint32_t portals = a.Alloc(4 * 4);
+  const uint32_t occluders = a.Alloc(4 * 4);
   for (uint32_t k = 0; k < n; k++) {
     const uint32_t p = a.Alloc(0x24);
-    Wr(portals + 4 * k, p);
+    Wr(occluders + 4 * k, p);
     Wr(p + 0x18, uint32_t(Pick(g, {-1, 0, 1, 2, 3, 5, 0x7FFFFFFF})));
     const uint32_t np = g() % 5;
     Wr(p + 0x1C, np);
@@ -712,8 +806,8 @@ void NewWorld(Arena& a, std::mt19937& g, World& w, uint32_t special) {
       std::memcpy(g_mem.ptr<uint8_t>(planes + 0x14 * i), g_mem.ptr<uint8_t>(q), 0x14);
     }
   }
-  Wr(kNumPortals, n);
-  Wr(kPortals, portals);
+  Wr(kNumOccluders, n);
+  Wr(kOccluders, occluders);
   w.viewCount = g() % 16;
   Wr(kViewCount, w.viewCount);
   for (uint32_t cvar : kCvars) {
@@ -813,9 +907,9 @@ void Graze(std::mt19937& g, const World& w, uint32_t b) {
   for (int32_t i = 0; i < 7; i++) plane(w.planes + 0x14 * uint32_t(i));
   plane(Rd(kNearPlane));
   if (Rd(kFarPlane)) plane(Rd(kFarPlane));
-  for (uint32_t k = 0; k < Rd(kNumPortals); k++) {
-    const uint32_t portal = Rd(Rd(kPortals) + 4 * k);
-    for (uint32_t i = 0; i < Rd(portal + 0x1C); i++) plane(Rd(portal + 0x20) + 0x14 * i);
+  for (uint32_t k = 0; k < Rd(kNumOccluders); k++) {
+    const uint32_t o = Rd(Rd(kOccluders) + 4 * k);
+    for (uint32_t i = 0; i < Rd(o + 0x1C); i++) plane(Rd(o + 0x20) + 0x14 * i);
   }
 }
 
@@ -1566,16 +1660,20 @@ uint32_t NewCell(Arena& a, std::mt19937& g, const World& w, uint32_t cell, uint3
   return cell;
 }
 
-void StaticCases(Arena& a, std::mt19937& g, const World& base, Stats& s) {
-  // The links through the BSP only from finite values (see LinkBsp).
-  const uint32_t kase = g() % 8;
-  World w = base;
-  if (kase == 3 || kase == 4) w.special = 0;
+void StaticCvars(Arena& a, std::mt19937& g) {
   for (uint32_t cvar : kStaticCvars) {
     const uint32_t v = a.Alloc(0x24);
     Wr(cvar, v);
     Wr(v + 0x20, g() % 4 ? g() % 2 : uint32_t(Pick(g, {2, -1})));
   }
+}
+
+void StaticCases(Arena& a, std::mt19937& g, const World& base, Stats& s) {
+  // The links through the BSP only from finite values (see LinkBsp).
+  const uint32_t kase = g() % 8;
+  World w = base;
+  if (kase == 3 || kase == 4) w.special = 0;
+  StaticCvars(a, g);
   for (uint32_t i = 0; i < 4; i++) {
     const uint32_t x = a.Alloc(0x50), b = a.Alloc(0x18);
     LocalBounds(g, w, b);
@@ -1684,6 +1782,509 @@ void StaticCases(Arena& a, std::mt19937& g, const World& base, Stats& s) {
   }
 }
 
+// ---- the cell walk -----------------------------------------------------------------
+
+constexpr uint32_t kCullOrigin = 0x11BEAF8, kViewProj = 0x11BEB90, kAperture = 0x153452C;
+constexpr uint32_t kCullList = 0x11BEC10;  // occluders (count, list), planes (count, buffer)
+
+float Dot3(const float* a, const float* b) { return float(double(a[0]) * b[0] + double(a[1]) * b[1] + double(a[2]) * b[2]); }
+void RdVec(uint32_t va, float* v) {
+  for (uint32_t i = 0; i < 3; i++) v[i] = g_mem.read<float>(va + 4 * i);
+}
+void WrVec(uint32_t va, const float* v) {
+  for (uint32_t i = 0; i < 3; i++) WrF(va + 4 * i, v[i]);
+}
+
+// A unit normal (an axis now and then).
+void Normal(std::mt19937& g, float* n) {
+  if (g() % 4 == 0) {
+    n[0] = n[1] = n[2] = 0;
+    n[g() % 3] = g() % 2 ? 1.0f : -1.0f;
+    return;
+  }
+  float l;
+  do {
+    for (int i = 0; i < 3; i++) n[i] = Uniform(g, -1, 1);
+    l = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+  } while (l < 0.1f || l > 1);
+  for (int i = 0; i < 3; i++) n[i] /= l;
+}
+
+// n points (12 bytes each) at pts: a convex polygon on the plane (normal,
+// dist) about the view origin's foot, of radius r, its points' distances
+// rounded (now and then 0.001 off, either way); or anywhere.
+void Polygon(std::mt19937& g, const World& w, uint32_t pts, uint32_t n, const float* nrm, float dist, float r) {
+  float o[3], u[3], v[3];
+  RdVec(kCullOrigin, o);
+  if (!std::isfinite(o[0] + o[1] + o[2])) o[0] = o[1] = o[2] = 0;
+  // u, v across the normal.
+  const bool x = std::fabs(nrm[0]) < 0.9f;
+  const float tv[3] = {x ? 1.0f : 0.0f, x ? 0.0f : 1.0f, 0};
+  u[0] = nrm[1] * tv[2] - nrm[2] * tv[1];
+  u[1] = nrm[2] * tv[0] - nrm[0] * tv[2];
+  u[2] = nrm[0] * tv[1] - nrm[1] * tv[0];
+  const float lu = std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+  for (float& x : u) x /= lu;
+  v[0] = nrm[1] * u[2] - nrm[2] * u[1];
+  v[1] = nrm[2] * u[0] - nrm[0] * u[2];
+  v[2] = nrm[0] * u[1] - nrm[1] * u[0];
+  const float off = Dot3(o, nrm) - dist;
+  float c[3];
+  for (int i = 0; i < 3; i++) c[i] = o[i] - off * nrm[i] + Uniform(g, -r, r) * (i ? v[i] : u[i]);
+  const bool any = g() % 4 == 0;
+  const float a0 = Uniform(g, 0, 6.2831853f);
+  for (uint32_t k = 0; k < n; k++) {
+    float p[3];
+    if (any) {
+      for (float& x : p) x = Value(g, -w.size, w.size, w.special);
+    } else {
+      const float ang = a0 + 6.2831853f * (float(k) + Uniform(g, 0, 0.5f)) / float(n);
+      for (int i = 0; i < 3; i++) p[i] = c[i] + r * (std::cos(ang) * u[i] + std::sin(ang) * v[i]);
+      const float d = Dot3(p, nrm) - dist + (g() % 8 ? 0.0f : Pick(g, {-1, 1}) * 0.001f);
+      for (int i = 0; i < 3; i++) p[i] -= d * nrm[i];
+    }
+    WrVec(pts + 0xC * k, p);
+  }
+}
+
+// A view origin on a lattice: two axes about 2^22 (equal or 0.5 apart,
+// either sign) and one short, so that it and points 0.5 and 1 off it are
+// exact floats, and planes of normals (+-1, +-1, +-1) through it and
+// such points have distances whose products cancel to 2^-30 of them.
+void Lattice(std::mt19937& g, float* o) {
+  const uint32_t j = g() % 3;
+  const float A = std::round(std::ldexp(Uniform(g, 1, 2), 22) * 2) / 2;
+  for (uint32_t k = 0; k < 3; k++)
+    o[k] = k == j ? std::ldexp(1 + float(g() % 16) / 16, -8) * (g() % 2 ? 1 : -1)
+                  : (k == (j + 1) % 3 || g() % 2 ? A : A + 0.5f) * (g() % 2 ? 1 : -1);
+  WrVec(kCullOrigin, o);
+}
+
+void Aperture(Arena& a, std::mt19937& g, const World& w) {
+  const uint32_t v = a.Alloc(0x24);
+  Wr(kAperture, v);
+  WrF(v + 0x1C, g() % 3 ? Uniform(g, 0, 1) : g() % 2 ? 0.0f : Value(g, -1, 1, w.special));
+}
+
+// The view origin (now and then huge, so that planes through it and
+// points near 0 have distances that cancel) and random view-projection
+// matrices.
+bool CullView(std::mt19937& g, const World& w) {
+  const bool huge = g() % 4 == 0;
+  for (uint32_t i = 0; i < 3; i++)
+    WrF(kCullOrigin + 4 * i, huge ? Wide(g, 25, 40) : Value(g, -w.size, w.size, w.special));
+  for (uint32_t va = kViewProj; va < kViewProj + 0x80; va += 4) WrF(va, Value(g, -2, 2, w.special));
+  return huge;
+}
+
+// An occluder (0x24 bytes): faces (+0, count +4) through points (+0x14,
+// count +0x10) and edges (+0xC, count +8) between its faces (or another
+// plane) with two of its points.
+uint32_t Occluder(Arena& a, std::mt19937& g, const World& w, uint32_t nf) {
+  const uint32_t o = a.Alloc(0x24), np = g() % 8 ? 1 + g() % 5 : 0, ne = g() % 6;
+  const uint32_t faces = a.Alloc(nf * 0x14 + 4), pts = a.Alloc(np * 0xC + 4), edges = a.Alloc(ne * 0x10);
+  for (uint32_t i = 0; i < nf; i++) {
+    std::memcpy(g_mem.ptr<uint8_t>(faces + 0x14 * i), g_mem.ptr<uint8_t>(NewPlane(a, g, w)), 0x13);
+    g_mem.write<uint8_t>(faces + 0x14 * i + 0x13, uint8_t(g() % 3));
+  }
+  float o3[3];
+  RdVec(kCullOrigin, o3);
+  for (uint32_t i = 0; i < np; i++)
+    for (uint32_t k = 0; k < 3; k++)
+      WrF(pts + 0xC * i + 4 * k, g() % 2 ? o3[k] + Uniform(g, -w.size, w.size) : Value(g, -w.size, w.size, w.special));
+  for (uint32_t i = 0; i < ne; i++) {
+    for (uint32_t k = 0; k < 2; k++) {
+      uint32_t f = nf && g() % 8 ? faces + 0x14 * (g() % nf) : NewPlane(a, g, w);
+      if (f != faces && (f < faces || f >= faces + 0x14 * nf)) g_mem.write<uint8_t>(f + 0x13, uint8_t(g() % 2));
+      Wr(edges + 0x10 * i + 4 * k, f);
+    }
+    for (uint32_t k = 2; k < 4; k++) Wr(edges + 0x10 * i + 4 * k, np && g() % 8 ? pts + 0xC * (g() % np) : NewPlane(a, g, w));
+  }
+  Wr(o, faces);
+  Wr(o + 4, nf);
+  Wr(o + 8, ne);
+  Wr(o + 0xC, edges);
+  Wr(o + 0x10, np);
+  Wr(o + 0x14, pts);
+  for (uint32_t i = 0x18; i < 0x24; i += 4) Wr(o + i, g());
+  return o;
+}
+
+// The cull's lists: room for n occluders and m planes.
+void CullLists(Arena& a, std::mt19937& g, uint32_t n, uint32_t m) {
+  Wr(kCullList, g() % 8);
+  Wr(kCullList + 4, a.Alloc(4 * n));
+  Wr(kCullList + 8, g() % 8);
+  Wr(kCullList + 0xC, a.Alloc(0x14 * m));
+}
+
+// A portal (0x24 bytes): a plane mostly with the view origin behind it, the
+// cell beyond (+0x14), a polygon on it (+0x18, count +0x1C) and the walk's
+// flag (+0x20).
+void Portal(Arena& a, std::mt19937& g, const World& w, uint32_t p, uint32_t beyond) {
+  float n[3], o[3];
+  Normal(g, n);
+  RdVec(kCullOrigin, o);
+  const float dist = g() % 8 ? Dot3(o, n) + Pick(g, {0, 1, 1, 2, 5}) * Uniform(g, 0, 1) * w.size / 8 +
+                                   (g() % 4 ? 0.0f : Pick(g, {-1, 1}) * Uniform(g, 0.99f, 1.01f))
+                             : Value(g, -w.size, w.size, w.special);
+  WrVec(p, n);
+  WrF(p + 0xC, dist);
+  // On an axis, the view exactly 1 behind it now and then.
+  const int axis = n[0] != 0 && n[1] == 0 && n[2] == 0 ? 0 : n[1] != 0 && n[0] == 0 && n[2] == 0 ? 1 : n[2] != 0 && n[0] == 0 && n[1] == 0 ? 2 : -1;
+  if (axis >= 0 && g() % 2 && std::isfinite(o[axis])) {
+    const float x = std::round(std::fmod(o[axis], 4096.0f));
+    WrF(kCullOrigin + 4 * uint32_t(axis), x);
+    WrF(p + 0xC, x * n[axis] + 1);
+  }
+  Wr(p + 0x10, g());
+  Wr(p + 0x14, beyond);
+  const uint32_t np = g() % 8 ? 3 + g() % 4 : g() % 3, pts = a.Alloc(np * 0xC + 4);
+  Polygon(g, w, pts, np, n, dist, Uniform(g, 1, w.size / 2));
+  Wr(p + 0x18, pts);
+  Wr(p + 0x1C, np);
+  Wr(p + 0x20, g() % 8 ? 0 : 1);
+}
+
+// Cells for the walk (0x40 bytes): surfaces (+0x18), portals (+0x1C,
+// count +0x20; three in all at most), static models (+0x24, count +0x28),
+// occluders (+0x2C, count +0x30), entities (+0x38) and references to the
+// static models (+0x3C).
+void WalkCells(Arena& a, std::mt19937& g, const World& w, uint32_t cells, uint32_t numCells, uint32_t models,
+               uint32_t numModels) {
+  uint32_t budget = 3;
+  for (uint32_t i = 0; i < numCells; i++) {
+    const uint32_t cell = NewCell(a, g, w, cells + 0x40 * i, models, numModels);
+    const uint32_t surfs = a.Alloc(0x28);
+    Wr(cell + 0x18, surfs);
+    Refs(a, g, w, surfs + 0x18, g() % 4);
+    if (g() % 2) {
+      const uint32_t k = g() % 3, nodes = a.Alloc(k * 0x28);
+      for (uint32_t j = 0; j < k; j++) NewNode(a, g, w, nodes + 0x28 * j, 2);
+      Wr(surfs + 0x20, nodes);
+      Wr(surfs + 0x24, k);
+    }
+    const uint32_t np = std::min(budget, uint32_t(g() % 3)), portals = a.Alloc(np * 0x24);
+    budget -= np;
+    for (uint32_t j = 0; j < np; j++) Portal(a, g, w, portals + 0x24 * j, cells + 0x40 * (g() % numCells));
+    Wr(cell + 0x1C, portals);
+    Wr(cell + 0x20, np);
+    const uint32_t nm = g() % 3, ms = a.Alloc(4 * nm);
+    for (uint32_t j = 0; j < nm; j++) Wr(ms + 4 * j, NewModel(a, g, w));
+    Wr(cell + 0x24, ms);
+    Wr(cell + 0x28, nm);
+    const uint32_t no = g() % 3, os = a.Alloc(4 * no);
+    for (uint32_t j = 0; j < no; j++) Wr(os + 4 * j, Occluder(a, g, w, g() % 4));
+    Wr(cell + 0x2C, os);
+    Wr(cell + 0x30, no);
+    uint32_t link = 0;
+    for (uint32_t j = g() % 3; j; j--) {
+      const uint32_t l = a.Alloc(8);
+      Wr(l, NewEntity(a, g, w));
+      Wr(l + 4, link);
+      link = l;
+    }
+    Wr(cell + 0x38, link);
+  }
+}
+
+// The world's coronas (+0xC0, count +0xC4).
+void Coronas(Arena& a, std::mt19937& g, const World& w, uint32_t world) {
+  const uint32_t n = g() % 5, list = a.Alloc(n * 0x20);
+  for (uint32_t i = 0; i < n; i++) {
+    const uint32_t f = list + 0x20 * i, shader = a.Alloc(0x48);
+    Wr(shader + 0x44, g());
+    Wr(f, shader);
+    for (uint32_t k = 0; k < 3; k++) WrF(f + 4 + 4 * k, Value(g, -w.size, w.size, w.special));
+    // The view at a corona's origin now and then (a zero direction).
+    if (g() % 8 == 0)
+      for (uint32_t k = 0; k < 3; k++) Wr(0x1536330 + 4 * k, Rd(f + 4 + 4 * k));
+    WrF(f + 0x10, Value(g, 0, w.size / 8, w.special));
+    const float l0 = Value(g, -1, 1, w.special);
+    WrF(f + 0x14, l0);
+    WrF(f + 0x18, g() % 4 ? Uniform(g, -1, std::isfinite(l0) ? l0 : 1) : Value(g, -1, 1, w.special));
+    Wr(f + 0x1C, g());
+  }
+  Wr(world + 0xC0, list);
+  Wr(world + 0xC4, n);
+}
+
+void WalkCases(Arena& a, std::mt19937& g, const World& w, Stats& s) {
+  const bool huge = CullView(g, w);
+  Aperture(a, g, w);
+  const uint32_t numPlanes = uint32_t(std::max(w.numPlanes, 0));
+  std::vector<Window> win = {a.All(), {kPlaneBits, 4}, {kCullList, 0x10}, {kNumDrawSurfs, 8}};
+  switch (g() % 6) {
+    case 0: {
+      // Up to the 0x400 points of a clip now and then.
+      const uint32_t plane = NewPlane(a, g, w);
+      const int32_t n = g() % 16 ? int32_t(g() % 9) : Pick(g, {-1, 0, 1000, 1020, 1024});
+      const uint32_t len = n > 0 ? uint32_t(n) : 0;
+      const uint32_t pts = a.Alloc(0xC * len + 4), out = a.Alloc(0xC * (2 * len + 2)), countp = a.Alloc(4);
+      float nrm[3];
+      RdVec(plane, nrm);
+      const float dist = g_mem.read<float>(plane + 0xC);
+      if (g() % 4 == 0 && std::isfinite(nrm[0] + nrm[1] + nrm[2])) {
+        // A plane through 0 and points about 0.001 along its normal: their
+        // distances (sums of products) within an ulp of +-0.001 as floats.
+        WrF(plane + 0xC, 0);
+        for (uint32_t i = 0; i < len; i++) {
+          float c = Pick(g, {-1, 1}) * 0.001f;
+          for (int u = int(g() % 7) - 3; u; u += u > 0 ? -1 : 1) c = std::nextafter(c, u > 0 ? 1.0f : -1.0f);
+          for (uint32_t k = 0; k < 3; k++) WrF(pts + 0xC * i + 4 * k, c * nrm[k]);
+        }
+      } else if (g() % 4 == 0) {
+        // An axial plane at 1..4 and points within ulps of 0.001 from it,
+        // whose distances round to it as floats or not.
+        const uint32_t ax = g() % 3;
+        const float sign = g() % 2 ? 1.0f : -1.0f, d = Uniform(g, 1, 4);
+        for (uint32_t k = 0; k < 4; k++) WrF(plane + 4 * k, k == ax ? sign : k == 3 ? d : 0.0f);
+        for (uint32_t i = 0; i < len; i++) {
+          float x = float((double(d) + Pick(g, {-1, 1}) * 0.001) * sign);
+          for (int u = int(g() % 7) - 3; u; u += u > 0 ? -1 : 1) x = std::nextafter(x, u > 0 ? 8.0f : -8.0f);
+          for (uint32_t k = 0; k < 3; k++) WrF(pts + 0xC * i + 4 * k, k == ax ? x : Uniform(g, -4, 4));
+        }
+      } else if (g() % 2 && std::isfinite(nrm[0] + nrm[1] + nrm[2] + dist)) {
+        Polygon(g, w, pts, len, nrm, dist, Uniform(g, 0.001f, w.size));
+        // Points pushed to either side, or left on it.
+        for (uint32_t i = 0; i < len; i++) {
+          const float d = Pick(g, {-1, 0, 1}) * (g() % 2 ? Uniform(g, 0, 0.002f) : Uniform(g, 0, w.size));
+          for (uint32_t k = 0; k < 3; k++) WrF(pts + 0xC * i + 4 * k, g_mem.read<float>(pts + 0xC * i + 4 * k) + d * nrm[k]);
+        }
+      } else {
+        for (uint32_t i = 0; i < 3 * len; i++) WrF(pts + 4 * i, Value(g, -w.size, w.size, w.special));
+      }
+      Wr(countp, uint32_t(n));
+      win[0] = a.All();
+      Run({0x4D7F30, 0, plane, 0, 0, 0, 0, {pts, countp, out}}, win, g, s, "random");
+      break;
+    }
+    case 1: {
+      const int32_t n = g() % 8 ? int32_t(g() % 8) : Pick(g, {0, 12});
+      const uint32_t len = n > 0 ? uint32_t(n) : 0, pts = a.Alloc(0xC * len + 4), countp = a.Alloc(4);
+      float nrm[3];
+      Normal(g, nrm);
+      Polygon(g, w, pts, len, nrm, Value(g, -w.size, w.size, w.special), Uniform(g, 1, w.size));
+      if (huge)
+        for (uint32_t i = 0; i < 3 * len; i++) WrF(pts + 4 * i, Uniform(g, -4, 4));
+      if (len && g() % 3 == 0) {
+        // A row of the projection that cancels on one point (in a group
+        // of four or after them).
+        float cn[3], cp[3];
+        Cancel3(g, cn, cp);
+        const uint32_t row = kViewProj + 0x10 * uint32_t(Pick(g, {0, 1, 3}));
+        for (uint32_t k = 0; k < 3; k++) WrF(row + 4 * k, cn[k]);
+        WrF(row + 0xC, 0);
+        WrVec(pts + 0xC * (g() % len), cp);
+      }
+      if (len && g() % 4 == 0) {
+        // Points 1 off a lattice origin in turn on two axes: every edge's
+        // plane of a normal (+-1, +-1, +-1).
+        float o[3];
+        Lattice(g, o);
+        for (uint32_t i = 0; i < len; i++) {
+          const float v[2][3] = {{1, 1, 0}, {0, 1, 1}};
+          for (uint32_t k = 0; k < 3; k++) WrF(pts + 0xC * i + 4 * k, o[k] + v[i % 2][k]);
+        }
+      } else if (!len && g() % 3 == 0) {
+        // The first two corners 1 off a lattice origin on two axes (the
+        // inverse's fourth row 0, 0, 1; its x column 0).
+        float o[3];
+        Lattice(g, o);
+        const float c[3] = {0.5f, 1, 0.5f}, e[3] = {-0.5f, 0, 0.5f};
+        for (uint32_t j = 0; j < 4; j++) {
+          WrF(0x11BEBD0 + 4 * j, 0);
+          WrF(0x11BEBE0 + 4 * j, j < 3 ? e[j] : 0.0f);
+          WrF(0x11BEC00 + 4 * j, j < 3 ? o[j] + c[j] : 1.0f);
+        }
+      } else if (!len && g() % 2) {
+        // Without points the rectangle is 1..-1 as it starts: an inverse
+        // whose terms cancel at one corner, a huge one against a small.
+        const uint32_t k0 = g() % 4;
+        const float cx = k0 >= 2 ? -1.0f : 1.0f, cy = k0 == 1 || k0 == 2 ? 1.0f : -1.0f;
+        for (uint32_t j = 0; j < 4; j++) {
+          const float A = std::ldexp(Uniform(g, 1, 2), 30 + int(g() % 20)), B = Uniform(g, -2, 2);
+          WrF(0x11BEBD0 + 4 * j, A);
+          WrF(0x11BEBE0 + 4 * j, B);
+          WrF(0x11BEC00 + 4 * j, -A * cx);
+        }
+      }
+      win[0] = a.All();
+      win.push_back({kHeap, 0x1000});
+      Run({0x4D6BC0, 0, 0, 0, 0, 0, 0, {countp, uint32_t(n), pts, uint32_t(g())}}, win, g, s, "random");
+      break;
+    }
+    case 2: {
+      const uint32_t portal = a.Alloc(0x24), countp = a.Alloc(4);
+      Portal(a, g, w, portal, g());
+      const uint32_t from = g() % 2 ? Rd(kNearPlane) : NewPlane(a, g, w);
+      win[0] = a.All();
+      win.push_back({kHeap, 0x1000});
+      Run({0x4D80F0, 0, countp, numPlanes, 0, 0, 0, {portal, from, w.planes}}, win, g, s, "random");
+      break;
+    }
+    case 3: {
+      // At the limits now and then: 0x401 occluders (one, again and again),
+      // 0x1801 faces (one occluder's, all facing the view).
+      const uint32_t cell = a.Alloc(0x40), kind = g() % 32;
+      uint32_t n = g() % 4, faces = 0;
+      const uint32_t list = a.Alloc(4 * 0x401);
+      if (kind == 0) {
+        const uint32_t o = Occluder(a, g, w, g() % 3);
+        // A point in front of the near plane.
+        const uint32_t near = Rd(kNearPlane), pts = Rd(o + 0x14);
+        if (Rd(o + 0x10))
+          for (uint32_t k = 0; k < 3; k++)
+            WrF(pts + 4 * k, g_mem.read<float>(near + 4 * k) * (g_mem.read<float>(near + 0xC) + 10));
+        n = g() % 2 ? 0x400 : 0x401;
+        for (uint32_t i = 0; i < n; i++) Wr(list + 4 * i, o);
+        faces = n * (Rd(o + 4) + Rd(o + 8));
+      } else {
+        for (uint32_t i = 0; i < n; i++) {
+          const uint32_t o = Occluder(a, g, w, kind == 1 && i == 0 ? 0x1801 : g() % 5);
+          if (kind == 1 && i == 0) {
+            float o3[3];
+            RdVec(kCullOrigin, o3);
+            for (uint32_t j = 0; j < 0x1801; j++) {
+              float nrm[3];
+              Normal(g, nrm);
+              const uint32_t f = Rd(o) + 0x14 * j;
+              WrVec(f, nrm);
+              WrF(f + 0xC, Dot3(o3, nrm) - 10);
+            }
+          }
+          Wr(list + 4 * i, o);
+          faces += Rd(o + 4) + Rd(o + 8);
+        }
+      }
+      Wr(cell + 0x2C, list);
+      Wr(cell + 0x30, n);
+      CullLists(a, g, 0x410, faces + 0x10);
+      uint32_t planes = w.planes;
+      if (kind >= 2 && kind < 10) {
+        // The near plane and the first plane through 0 with normals whose
+        // products cancel on each occluder's first point.
+        float cn[3], cp[3];
+        Cancel3(g, cn, cp);
+        planes = a.Alloc(7 * 0x14);
+        std::memcpy(g_mem.ptr<uint8_t>(planes), g_mem.ptr<uint8_t>(w.planes), 7 * 0x14);
+        for (uint32_t q : {Rd(kNearPlane), planes}) {
+          WrVec(q, cn);
+          WrF(q + 0xC, 0);
+        }
+        for (uint32_t i = 0; i < n; i++)
+          if (Rd(Rd(list + 4 * i) + 0x10)) WrVec(Rd(Rd(list + 4 * i) + 0x14), cp);
+      }
+      win[0] = a.All();
+      Run({0x4D7A70, 0, 0, 0, 0, 0, 0, {cell, planes, kind == 0 ? 0 : numPlanes}}, win, g, s, "random");
+      break;
+    }
+    case 4: {
+      StaticCvars(a, g);
+      const uint32_t numCells = 1 + g() % 3, cells = a.Alloc(numCells * 0x40);
+      WalkCells(a, g, w, cells, numCells, 0, 0);
+      CullLists(a, g, 0x40, 0x100);
+      win[0] = a.All();
+      win.push_back({kHeap, 0x10000});
+      Run({0x4D96E0, 0, 0, 0, 0, 0, 0,
+           {cells + 0x40 * uint32_t(g() % numCells), Rd(kNearPlane), w.planes, numPlanes, DlightBits(g)}},
+          win, g, s, "random");
+      break;
+    }
+    default: {
+      // Finite directions (the CRT's square root of a NaN reports through
+      // the Windows API, which the test does not have).
+      World f = w;
+      f.special = 0;
+      const uint32_t world = a.Alloc(0x128);
+      Wr(kWorld, world);
+      for (uint32_t k = 0; k < 3; k++) WrF(0x1536330 + 4 * k, Value(g, -w.size, w.size, 0));
+      Coronas(a, g, f, world);
+      win[0] = a.All();
+      Run({0x4D9A10, 0, 0, 0, 0, 0, 0, {w.planes, uint32_t(w.numPlanes)}}, win, g, s, "random");
+      break;
+    }
+  }
+}
+
+// The world walk over a world of cells, static models, coronas and world
+// models, from a random view (in a cell, outside, without a world), with
+// finite values (the links through the BSP).
+void WorldWalkCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
+  World w = base;
+  w.special = 0;
+  StaticCvars(a, g);
+  CullView(g, w);
+  Aperture(a, g, w);
+  for (uint32_t cvar : {0x1534490u, 0x1534510u, 0x15346D8u, 0x153450Cu}) {
+    const uint32_t v = a.Alloc(0x24);
+    Wr(cvar, v);
+    Wr(v + 0x20, cvar == 0x1534490 ? (g() % 16 ? 1 : 0) : g() % 4 == 0);
+  }
+  const uint32_t far = a.Alloc(0x24);
+  Wr(0x15343F0, far);
+  WrF(far + 0x1C, g() % 2 ? 0.0f : Uniform(g, 0, 2 * w.size));
+  Wr(0x1535920, uint32_t(Pick(g, {0x800, 0x2601, 0})));
+  WrF(0x1535920 + 0x24, Uniform(g, 0, 2 * w.size));
+  Wr(0x1535950, g() % 2);
+  Wr(0x13F9CF8, uint32_t(Pick(g, {0, 1})));
+  Wr(0x1536364, g() % 16 ? 0 : 1);
+  Wr(0x1536474, g() % 8 ? g() % 33 : g());
+  Wr(0x564550, g() % 2);
+  // The view: origin, axes, frustum planes, a portal's near plane, the
+  // view and projection matrices.
+  float o[3], n[3];
+  for (float& x : o) x = Uniform(g, -w.size, w.size);
+  Normal(g, n);
+  WrVec(0x1536030, o);
+  WrVec(0x153603C, n);
+  for (uint32_t va = 0x1536048; va < 0x1536060; va += 4) WrF(va, Uniform(g, -1, 1));
+  for (uint32_t i = 0; i < 4; i++)
+    std::memcpy(g_mem.ptr<uint8_t>(0x15361F8 + 0x14 * i), g_mem.ptr<uint8_t>(NewPlane(a, g, w)), 0x14);
+  Wr(0x1536138, g() % 4 ? 0 : 1);
+  std::memcpy(g_mem.ptr<uint8_t>(0x1536144), g_mem.ptr<uint8_t>(NewPlane(a, g, w)), 0x14);
+  for (uint32_t va = 0x15360E8; va < 0x1536128; va += 4) WrF(va, Uniform(g, -2, 2));
+  for (uint32_t va = 0x1536178; va < 0x15361F8; va += 4) WrF(va, Uniform(g, -2, 2));
+  // The static models and their XModels.
+  for (uint32_t i = 0; i < 4; i++) {
+    const uint32_t x = a.Alloc(0x50), b = a.Alloc(0x18);
+    LocalBounds(g, w, b);
+    Wr(x + 0x4C, b);
+    Wr(kXModels + 4 * i, x);
+  }
+  const uint32_t nm = g() % 5, models = a.Alloc(0x2B8 * (nm + 1));
+  for (uint32_t i = 0; i < nm; i++) StaticModel(a, g, w, models + 0x2B8 * i);
+  Wr(kNumStaticModels, nm);
+  Wr(kStaticModels, models);
+  // The view origin is the world's for the cells' portals.
+  WrVec(kCullOrigin, o);
+  const uint32_t numCells = g() % 8 ? 1 + g() % 3 : 0, cells = a.Alloc(numCells * 0x40 + 4);
+  WalkCells(a, g, w, cells, numCells, models, nm);
+  const uint32_t world = a.Alloc(0x150);
+  Wr(kWorld, world);
+  Wr(world + 0x120, numCells);
+  Wr(world + 0x124, cells);
+  const uint32_t box = a.Alloc(0x18);
+  for (uint32_t k = 0; k < 3; k++) {
+    WrF(box + 4 * k, o[k] - Uniform(g, 0, w.size));
+    WrF(box + 0xC + 4 * k, o[k] + Uniform(g, 0, w.size));
+  }
+  Wr(world + 0x98, LinkBsp(a, g, w, numCells, box, 0));
+  const uint32_t k = g() % 4, list = a.Alloc(4 * k);
+  for (uint32_t i = 0; i < k; i++) Wr(list + 4 * i, NewRef(a, g, w));
+  Wr(world + 0xA4, k);
+  Wr(world + 0xA8, list);
+  for (uint32_t i = 0; i < 3; i++) WrF(0x1536330 + 4 * i, o[i]);
+  Coronas(a, g, w, world);
+  const uint32_t nw = g() % 3, wm = a.Alloc(nw * 0x24);
+  for (uint32_t i = 0; i < nw; i++) std::memcpy(g_mem.ptr<uint8_t>(wm + 0x24 * i), g_mem.ptr<uint8_t>(NewModel(a, g, w)), 0x24);
+  Wr(world + 0x144, nw);
+  Wr(world + 0x148, wm);
+  std::vector<Window> win = {a.All(), {0x11BEA00, 0x224}, {0x1535900, 0xB80}, {kNumDrawSurfs, 8},
+                             {0x564550, 4}, {kHeap, 0x10000}};
+  Run({0x4D9E20, 0, 0, 0, 0, 0, 0, {}}, win, g, s, "random");
+}
+
 // ---- captures ------------------------------------------------------------------
 
 bool ReadCaptures(const char* path, std::vector<Record>& out) {
@@ -1759,10 +2360,13 @@ int main(int argc, char** argv) {
   }
   g_mem.Commit(kArena, kArenaSize, recomp::Prot::RW);
   g_mem.Commit(kStack, kStackSize, recomp::Prot::RW);
+  g_mem.Commit(kHeap, kHeapSize, recomp::Prot::RW);
   // R_CellForCamera reads its node through a null world (after ri.Error).
   g_mem.Commit(0, 0x1000, recomp::Prot::RW);
   Wr(kErrorPtr, kError);
   Wr(kPrintfPtr, kPrintf);
+  Wr(kAllocPtr, kAlloc);
+  Wr(kFreePtr, kFree);
   // The reference: the x87 model's exact arithmetic throughout.
   recomp::x87::run::g_doubles = false;
 
@@ -1775,6 +2379,8 @@ int main(int argc, char** argv) {
     NewWorld(a, g, w, special);
     for (int i = 0; i < 20; i++) CullCases(a, g, w, s);
     for (int i = 0; i < 8; i++) StaticCases(a, g, w, s);
+    for (int i = 0; i < 8; i++) WalkCases(a, g, w, s);
+    WorldWalkCase(a, g, w, s);
   }
   for (int i = 0; i < 150000; i++) SkyCase(a, g, s, i < 50000 ? 0 : i < 100000 ? 4 : 48);
   for (int i = 0; i < 20; i++) SkyErrorCase(a, g, s);
