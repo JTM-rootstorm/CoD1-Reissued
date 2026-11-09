@@ -160,6 +160,9 @@ speed.
   identical (45 between two runs of main); mean 1.772-1.783 ms (main) and
   1.729-1.731 ms; errors 3. (Whether the run's level draws a portal
   surface at all is not known: the frames do not show the portal view.)
+  With layer 6: 13 of 13 shared, 45 of 1640 in-level identical (47
+  between two runs of main); mean 1.796-1.878 ms (main) and 1.747-1.855
+  ms (a noisier run for both); errors 3.
 - Layer 4, the cell walk (2026-11-09): a polygon's clip 0x4D7F30 (ECX
   plane; stack points, &count, out: distances z + x + y less the plane's,
   behind below -0.001, in front above 0.001; none in front: count 0, EAX
@@ -289,6 +292,54 @@ speed.
   two terms of about 2^35 that cancel, where only the range test shows
   the order), portals whose first axis and old origin cancel, and the
   stub's change of the view were added.
+- Layer 6, the scene (2026-11-09): R_AddEntitySurfaces 0x4CB0C0 (its
+  "Bad reType" error: with the cvar 0x15343D4 set, each entity as the
+  current one (0x1536024, reloaded after each, so a callee's change
+  shows; << 7 at 0x1536028; 0x1535D68; +0x9C cleared), none with flag 4
+  inside a portal's view; by type through a byte table: 0 and 2 to
+  0x500830 and 0x4FA790 (EAX the entity), 1 to 0x506980 (stack), 3 and
+  above 0xF ri.Error, 0xB none, the rest a draw surface on the surface
+  0x5646C8 of the shader their handle (+0x68) names, unsigned-checked
+  against 0x153C528 with a level-2 warning and the default 0x1535AE8,
+  but not with flag 2 outside a portal's view); a view's surfaces
+  0x4CB210 (8-aligned frame: the projection, the world's 0x4D9E20 when
+  the world has cells (+0x124) or the cvar 0x14E43FC is set, but
+  0x500920 for its value 3 or -3, the polygons' 0x4DE980, the entities'
+  and the debug draw 0x4AC890 with the cvar 0x15344D0); a view's render
+  0x4CB270 (no viewport: none; else the view count bumped twice around
+  the parms' copy into the view, four cvars' values clamped for the back
+  end at 0xA8F800 (with a byte of whether 0x15346FC's was not below 0),
+  0x4C97D0, the frustum, 0x4CB210 and R_SortDrawSurfs of the surfaces
+  it added); RE_RenderScene 0x4DEEC0 (string; registered 0x1535A20, the
+  cvar 0x15343A4, the log file's line, ri.Milliseconds around it into
+  0x15364F0, ri.Error without a world unless flag 1, the refdef's copy,
+  the scene's arrays in the back end's data from this scene's first
+  entity, dlight, polygon and vertex counts, the dlights by the cvar
+  0x1534548 (at 3 it prints the zeroed count), the parms (y from the
+  bottom, the smaller fov's tangent over tan 40 degrees times the cvar
+  0x1534484 by FPTAN on the x87 model, as 0x4C9C00 has it), rendered,
+  and the counts made the next scene's first). Still lifted under them:
+  0x4C97D0 (native in the back end), the entity types' surfaces, 0x500920,
+  0x4DE980, 0x4AC890, the CRT's fprintf and the cookie check.
+- Layer 6 oracle and mutations: the entity types' surfaces, 0x500920,
+  0x4DE980 (adding up to two draw surfaces in a scene), 0x4AC890 and
+  fprintf are stubs; the entity stubs now and then bump the current
+  entity's number; ri.Milliseconds returns a time growing with the
+  calls. The portal view and the draw surface sort now reach the real
+  render (no world, the scene's cvars and back end). New cases: 20k of
+  entities of every type and flags, and one scene per world over the
+  world walk's data (or without a world, or a world without cells): the
+  view's surfaces, a view rendered from the view's parms and
+  RE_RenderScene from a refdef of the view's origin and axes with the
+  walk's static models and dlights moved into the back end's data; fovs
+  of +0 and -0 and NaN without a world. 737k random cases, 0 mismatched;
+  ctest 37 of 37. 80 mutants: all caught but five equivalent (stores of
+  the current entity in another order or its number from the counter,
+  positive floats stored without the round trip, the height reloaded
+  after a print that leaves it, and the fov test written the other way
+  round); the first run missed a world without cells, negative debug
+  cvars, the view's last dword, the registered flag above its low byte,
+  0x1536498 left stale and the fovs' signed zeros.
 
 ## Renderer back end (2026-10-25, branch render-backend)
 The back end is going native from the bottom up (src/render_backend.cpp),

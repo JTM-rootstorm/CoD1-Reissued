@@ -6,10 +6,11 @@
 // not replace are stubs (tests/render_stubs.manifest) that record each
 // call: its address, return address, ESP, the registers the callee reads
 // and its stack arguments, which must be the same on both sides; they
-// leave EAX, ECX and EDX changed; the debug polygon and line, an added
-// entity and a rendered view also record a hash of what they are handed
-// (on the caller's stack). The refimport's temporary allocation hands out blocks of a heap
-// that starts again for each side. Each case runs one entry through the
+// leave EAX, ECX and EDX changed; the debug polygon and line and an added
+// entity also record a hash of what they are handed (on the caller's
+// stack). ri.Milliseconds' time grows with the calls. The refimport's
+// temporary allocation hands out blocks of a heap that starts again for
+// each side. Each case runs one entry through the
 // lifted original and the native code from the same guest memory, and both
 // must leave the same bytes in the case's memory (the structures, the
 // globals, the stack arguments), the same calls, and the same ESP, EBX,
@@ -42,7 +43,9 @@
 // coronas and world models from a random view; portal surfaces (none,
 // polygons, triangles; finite and not degenerate) with entities about
 // their planes, mirrors and rotating portals, for the portal orientations
-// and views, which the draw surface sort reaches too. Values are now and then
+// and views, which the draw surface sort reaches too; entities of every
+// type; scenes over the world walk's (or without a world): the view's
+// surfaces, a view rendered and RE_RenderScene. Values are now and then
 // zeros, denormals, infinities, NaNs or huge. Captures
 // (tests/render_capture.h) add the game's own calls.
 
@@ -89,6 +92,8 @@ constexpr uint32_t kPrintfPtr = 0x1549600, kPrintf = 0x7FFE0010;
 // a case.
 constexpr uint32_t kAllocPtr = 0x1549610, kAlloc = 0x7FFE0020;
 constexpr uint32_t kFreePtr = 0x154961C, kFree = 0x7FFE0030;
+// ri.Milliseconds (0x1549608): a time that grows with the calls.
+constexpr uint32_t kMillisecondsPtr = 0x1549608, kMilliseconds = 0x7FFE0040;
 constexpr uint32_t kHeap = 0x6FE00000, kHeapSize = 0x100000;
 uint32_t g_heap_top = kHeap;
 
@@ -100,6 +105,7 @@ struct CallRec {
   bool operator==(const CallRec&) const = default;
 };
 std::vector<CallRec> g_calls;
+bool g_scene_surfs = false;
 
 // What each stub compares: the registers its callee reads (and for the
 // texture coordinate callees the callee-saved ones, which ComputeTexCoords
@@ -114,7 +120,13 @@ constexpr StubInfo kStubs[] = {
     {0x4AD760, kEbx | kEsi | kEdi, 0},          // debug line
     {0x4DEC10, 0, 2},                           // adds an entity
     {0x4CA8D0, 0, 2},                           // a portal surface off the screen
-    {0x4CB270, 0, 1},                           // renders a view
+    {0x500830, kEax, 0},                        // an entity's surfaces by type
+    {0x506980, 0, 1},
+    {0x4FA790, kEax, 0},
+    {0x500920, 0, 0},                           // a debug cvar's surfaces
+    {0x4DE980, 0, 0},                           // the polygons' surfaces
+    {0x4AC890, 0, 0},                           // a debug draw
+    {0x51D45A, 0, 3},                           // fprintf to the log
     {0x427E80, kEax | kEcx, 0},                 // a matrix's inverse
     {0x50A2B0, kSaved | kEax, 0},               // tcGens
     {0x50ABF0, kSaved | kEax, 0},
@@ -156,13 +168,20 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
   if (va == 0x4DEC10) r.args[2] = hash(r.args[0], 0x9C);
   if (va == 0x4AD630 && c.ebx <= 0x1000) r.args[2] = hash(r.args[0], 0xC * c.ebx);
   if (va == 0x4AD760) r.args[2] = hash(c.ebx, 0xC) ^ hash(c.edi, 0xC) * 3;
-  if (va == 0x4CB270) r.args[2] = hash(r.args[0], 0x260);
   g_calls.push_back(r);
-  // Rendering a view (0x4CB270) takes the view it is handed as the
-  // current one and changes it (here every dword).
-  if (va == 0x4CB270)
-    for (uint32_t i = 0; i < 0x260; i += 4)
-      Wr(0x1536030 + i, Rd(r.args[0] + i) ^ uint32_t(g_calls.size()));
+  // An entity's surfaces now and then change the current entity's number
+  // (as 0x500920 sets it), which R_AddEntitySurfaces reloads.
+  if ((va == 0x500830 || va == 0x506980 || va == 0x4FA790) && g_calls.size() % 5 == 0)
+    Wr(0x1536024, Rd(0x1536024) + 1);
+  // The polygons' surfaces, in a scene with room for them (g_scene_surfs),
+  // add up to two draw surfaces for the sort.
+  if (va == 0x4DE980 && g_scene_surfs)
+    for (uint32_t k = g_calls.size() % 3; k; k--) {
+      const uint32_t n = Rd(0x1536490);
+      Wr(Rd(0x1536494) + 8 * n, uint32_t((g_calls.size() * 5 + k) % 0x1000) << 18 | (k << 7));
+      Wr(Rd(0x1536494) + 8 * n + 4, 0x5646C8);
+      Wr(0x1536490, n + 1);
+    }
   const uint32_t junk = 0xC0DE0000u + uint32_t(g_calls.size());
   // A portal surface now and then off the screen (EAX 1).
   c.eax = va == 0x4CA8D0 ? g_calls.size() % 4 == 0 : junk;
@@ -231,6 +250,10 @@ void f_004D9A10_lifted(Ctx& c);
 void f_004D9E20_lifted(Ctx& c);
 void f_004CA240_lifted(Ctx& c);
 void f_004CAB80_lifted(Ctx& c);
+void f_004CB0C0_lifted(Ctx& c);
+void f_004CB210_lifted(Ctx& c);
+void f_004CB270_lifted(Ctx& c);
+void f_004DEEC0_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_native.cpp renames
 // its entries).
 void f_004D68E0(Ctx& c) { f_004D68E0_lifted(c); }
@@ -283,6 +306,10 @@ void f_004D9A10(Ctx& c) { f_004D9A10_lifted(c); }
 void f_004D9E20(Ctx& c) { f_004D9E20_lifted(c); }
 void f_004CA240(Ctx& c) { f_004CA240_lifted(c); }
 void f_004CAB80(Ctx& c) { f_004CAB80_lifted(c); }
+void f_004CB0C0(Ctx& c) { f_004CB0C0_lifted(c); }
+void f_004CB210(Ctx& c) { f_004CB210_lifted(c); }
+void f_004CB270(Ctx& c) { f_004CB270_lifted(c); }
+void f_004DEEC0(Ctx& c) { f_004DEEC0_lifted(c); }
 // unzCloseCurrentFile and tolower, native in the game (src/unzip.cpp,
 // src/crt.cpp): here only lifted code the stubs stand for reaches them.
 void f_0049EAA0_lifted(Ctx& c);
@@ -293,8 +320,8 @@ void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 // reaches it.
 void f_00508940_lifted(Ctx& c);
 void f_00508940(Ctx& c) { f_00508940_lifted(c); }
-// Native in the game (src/cm_trace.cpp, src/render_backend.cpp): lifted
-// code the stubs 0x4CA8D0 and 0x4CB270 stand for reaches them.
+// Native in the game (src/cm_trace.cpp, src/render_backend.cpp): the
+// lifted renderer code reaches them.
 void f_0041CD60_lifted(Ctx& c);
 void f_0041CD60(Ctx& c) { f_0041CD60_lifted(c); }
 void f_004AA0F0_lifted(Ctx& c);
@@ -365,6 +392,10 @@ void n_004D9A10(Ctx& c);
 void n_004D9E20(Ctx& c);
 void n_004CA240(Ctx& c);
 void n_004CAB80(Ctx& c);
+void n_004CB0C0(Ctx& c);
+void n_004CB210(Ctx& c);
+void n_004CB270(Ctx& c);
+void n_004DEEC0(Ctx& c);
 // The stubs.
 #define COD1_STUB(va) \
   void f_##va(Ctx& c) { StubFor(c, 0x##va); }
@@ -373,7 +404,13 @@ COD1_STUB(004AD630)
 COD1_STUB(004AD760)
 COD1_STUB(004DEC10)
 COD1_STUB(004CA8D0)
-COD1_STUB(004CB270)
+COD1_STUB(00500830)
+COD1_STUB(00506980)
+COD1_STUB(004FA790)
+COD1_STUB(00500920)
+COD1_STUB(004DE980)
+COD1_STUB(004AC890)
+COD1_STUB(0051D45A)
 COD1_STUB(00427E80)
 COD1_STUB(0050A2B0)
 COD1_STUB(0050ABF0)
@@ -408,6 +445,11 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
       c.eax = g_heap_top;
       g_heap_top += (size + 15) & ~15u;
     }
+    return;
+  }
+  if (target == kMilliseconds) {
+    Stub(c, kMillisecondsPtr, 0, 0);
+    c.eax = 1000 + 7 * uint32_t(g_calls.size());
     return;
   }
   if (target == kError || target == kPrintf) {
@@ -518,6 +560,8 @@ const Entry kEntries[] = {
     COD1_ENTRY(004D96E0, "cell walk"),          COD1_ENTRY(004D9A10, "coronas"),
     COD1_ENTRY(004D9E20, "world walk"),
     COD1_ENTRY(004CA240, "portal orientations"), COD1_ENTRY(004CAB80, "portal view"),
+    COD1_ENTRY(004CB0C0, "R_AddEntitySurfaces"), COD1_ENTRY(004CB210, "view's surfaces"),
+    COD1_ENTRY(004CB270, "render view"),       COD1_ENTRY(004DEEC0, "RE_RenderScene"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -571,7 +615,8 @@ uint32_t ScrubDepth(uint32_t fn) {
     case 0x4D96E0: return 0x40000;
     case 0x4D9E20: return 0x80000;
     case 0x4CA240: return 0x400;
-    case 0x4CAB80: return 0x2000;
+    case 0x4CAB80: return 0x4000;
+    case 0x4CB210: case 0x4CB270: case 0x4DEEC0: return 0x90000;
     default: return 0;
   }
 }
@@ -1371,6 +1416,42 @@ void ViewCase(Arena& a, std::mt19937& g, Stats& s, uint32_t special) {
 // through the Windows API.
 constexpr uint32_t kNumEntities = 0x153646C, kEntities = 0x1536470, kViewWorld = 0x15360AC;
 
+// The scene's cvars: 0x15343D4 (the entities drawn) mostly set, the debug
+// ones mostly clear, 0x14E43FC now and then 3 or -3 (0x500920's surfaces)
+// or, with a world, another value (the world's surfaces without its
+// cells), the back end's four values (0xA8F800..) about 0 or special and
+// the view's (kViewCvars; with a world, the far clip's of its walk kept).
+void SceneCvars(Arena& a, std::mt19937& g, uint32_t special, bool world) {
+  auto cvar = [&](uint32_t va, uint32_t i, float f) {
+    const uint32_t v = a.Alloc(0x24);
+    Wr(va, v);
+    Wr(v + 0x20, i);
+    WrF(v + 0x1C, f);
+  };
+  cvar(0x15343D4, g() % 8 ? 1 : 0, 0);
+  cvar(0x14E43FC, g() % 2 ? 0 : world ? uint32_t(Pick(g, {1, 3, -3, 2})) : uint32_t(Pick(g, {3, -3})), 0);
+  cvar(0x15344D0, g() % 8 ? 0 : uint32_t(Pick(g, {1, -1})), 0);
+  cvar(0x1534400, g() % 4 == 0, 0);
+  for (uint32_t va : {0x15346FCu, 0x1534528u, 0x153448Cu, 0x1534678u})
+    cvar(va, 0, g() % 4 ? Value(g, -2, 2, 256) : g() % 2 ? 0.0f : -0.0f);
+  for (uint32_t va : kViewCvars)
+    if (!world || va != 0x15343F0)
+      cvar(va, g() % 3 ? 0 : uint32_t(Pick(g, {1, 4, 5})), g() % 4 ? Value(g, 0, 8192, special) : 0);
+}
+
+// The back end's data (the draw surface list section).
+void BackEndData(std::mt19937& g, std::vector<Window>& win);
+
+// A view rendered from a portal's: no world, the scene's cvars and back
+// end, and windows for what the render writes.
+void PortalScene(Arena& a, std::mt19937& g, uint32_t special, std::vector<Window>& win) {
+  Wr(0x1535A34, 0);
+  SceneCvars(a, g, special, false);
+  BackEndData(g, win);
+  win.push_back({0x1534000, 0x3000});
+  win.push_back({0xA8F800, 0x40});
+}
+
 // The view's world orientation (finite axes), now and then a portal's view
 // (0x1536134), the cvars 0x1534514 and 0x153457C (mostly 0), the flag
 // 0x1534790, the time and n entities (0x2B8 bytes: types 0-3 or 0xB, finite
@@ -1536,6 +1617,7 @@ void PortalCase(Arena& a, std::mt19937& g, Stats& s, uint32_t special) {
       WrF(ents + 0x2B8 * i + 0x54 + 4 * k, cp[k]);
     }
   }
+  PortalScene(a, g, special, win);
   if (g() % 2) {
     const uint32_t surf = a.Alloc(0x30), cam = a.Alloc(0x30), pvs = a.Alloc(12), mirror = a.Alloc(4);
     win.push_back(a.All());
@@ -1608,13 +1690,13 @@ void SurfListCase(Arena& a, std::mt19937& g, Stats& s, uint32_t special) {
       const uint32_t surface = PortalSurface(a, g, p0);
       PortalEntities(g, g() % 2 ? 0x7FE : g() % 4, p0);
       win.push_back({0x1535D60, 8});
+      PortalScene(a, g, special, win);
       const uint32_t surfs = a.Alloc(len * 8 + 8);
       for (uint32_t i = 0; i < len; i++) {
         Wr(surfs + 8 * i, uint32_t((g() % 16) << 18 | (g() % 4) << 7 | (g() & 0x7F)));
         if (i && g() % 4 == 0) Wr(surfs + 8 * i, Rd(surfs + 8 * i - 8));
         Wr(surfs + 8 * i + 4, surface);
       }
-      BackEndData(g, win);
       win.push_back(a.All());
       Run({0x4CAFC0, 0, 0, 0, 0, 0, 0, {surfs, n}}, win, g, s, "random");
       break;
@@ -2420,7 +2502,8 @@ void WalkCases(Arena& a, std::mt19937& g, const World& w, Stats& s) {
 // The world walk over a world of cells, static models, coronas and world
 // models, from a random view (in a cell, outside, without a world), with
 // finite values (the links through the BSP).
-void WorldWalkCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
+// A world walk's view, world, cells, static models and their windows.
+std::vector<Window> WorldWalkScene(Arena& a, std::mt19937& g, const World& base) {
   World w = base;
   w.special = 0;
   StaticCvars(a, g);
@@ -2490,9 +2573,152 @@ void WorldWalkCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
   for (uint32_t i = 0; i < nw; i++) std::memcpy(g_mem.ptr<uint8_t>(wm + 0x24 * i), g_mem.ptr<uint8_t>(NewModel(a, g, w)), 0x24);
   Wr(world + 0x144, nw);
   Wr(world + 0x148, wm);
-  std::vector<Window> win = {a.All(), {0x11BEA00, 0x224}, {0x1535900, 0xB80}, {kNumDrawSurfs, 8},
-                             {0x564550, 4}, {kHeap, 0x10000}};
-  Run({0x4D9E20, 0, 0, 0, 0, 0, 0, {}}, win, g, s, "random");
+  return {a.All(), {0x11BEA00, 0x224}, {0x1535900, 0xB80}, {kNumDrawSurfs, 8}, {0x564550, 4}, {kHeap, 0x10000}};
+}
+
+void WorldWalkCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
+  Run({0x4D9E20, 0, 0, 0, 0, 0, 0, {}}, WorldWalkScene(a, g, base), g, s, "random");
+}
+
+// ---- the scene -------------------------------------------------------------------
+
+// The scene's shaders: none a portal's (sort 1.0), now and then SS_BAD (0);
+// all 0x1000 sorted ones, those of the entities' handles (0x153C528 of
+// them at 0x153C52C, now and then none) and the default (0x1535AE8).
+void SceneShaders(Arena& a, std::mt19937& g) {
+  const uint32_t sh = a.Alloc(8 * 0x60);
+  for (uint32_t i = 0; i < 8 * 0x60; i += 4) Wr(sh + i, g());
+  for (uint32_t i = 0; i < 8; i++) WrF(sh + 0x60 * i + 0x58, float(Pick(g, {0, 2, 2, 3, 5})) / 4);
+  for (uint32_t i = 0; i < 0x1000; i++) Wr(kSortedShaders + 4 * i, sh + 0x60 * (g() % 8));
+  Wr(0x153C528, g() % 8 ? 4 : uint32_t(Pick(g, {0, -1})));
+  for (uint32_t i = 0; i < 4; i++) Wr(0x153C52C + 4 * i, sh + 0x60 * (g() % 8));
+  Wr(0x1535AE8, sh + 0x60 * (g() % 8));
+}
+
+// A viewport (now and then empty) and fovs (with a world finite and in
+// 1..179, so that the frustum the walk culls by is).
+void Viewport(std::mt19937& g, uint32_t xywh, uint32_t fovs, bool world) {
+  for (uint32_t k : {0u, 4u}) Wr(xywh + k, g() % 1000);
+  for (uint32_t k : {8u, 0xCu}) Wr(xywh + k, g() % 8 ? 1 + g() % 1920 : uint32_t(Pick(g, {0, -1, INT32_MIN})));
+  for (uint32_t k : {0u, 4u})
+    WrF(fovs + k, world || g() % 8 ? Uniform(g, 1, 179) : Pick(g, {0, 180, -90, 360}));
+  // Equal fovs of different bits (+0 and -0), or a NaN.
+  if (!world && g() % 8 == 0) {
+    const uint32_t k = 4 * (g() % 2);
+    Wr(fovs + k, g() % 2 ? 0x7FC00000 : 0);
+    Wr(fovs + 4 - k, g() % 2 ? 0x80000000 : std::bit_cast<uint32_t>(Uniform(g, 1, 179)));
+  }
+}
+
+// Entities of every type (0x2B8 bytes: type, flags +4, shader handle
+// +0x68) for R_AddEntitySurfaces, now and then inside a portal's view.
+void EntityCase(Arena& a, std::mt19937& g, Stats& s) {
+  a.Reset();
+  for (uint32_t va = 0x1536000; va < 0x1536500; va += 4) Wr(va, g());
+  SceneShaders(a, g);
+  const uint32_t cvar = a.Alloc(0x24);
+  Wr(0x15343D4, cvar);
+  Wr(cvar + 0x20, g() % 8 ? uint32_t(Pick(g, {1, -1, 2})) : 0);
+  Wr(0x1536134, g() % 4 == 0);
+  const uint32_t n = g() % 16 ? g() % 8 : uint32_t(Pick(g, {0, -1, INT32_MIN})), m = n < 8 ? n : 0;
+  const uint32_t ents = a.Alloc(m * 0x2B8 + 4);
+  for (uint32_t i = 0; i < m * 0x2B8; i += 4) Wr(ents + i, g());
+  for (uint32_t i = 0; i < m; i++) {
+    const uint32_t e = ents + 0x2B8 * i;
+    Wr(e, uint32_t(Pick(g, {0, 1, 2, 3, 4, 5, 10, 11, 11, 12, 15, 16, -1})));
+    Wr(e + 4, g() % 4 ? g() & 7 : g());
+    Wr(e + 0x68, g() % 4 ? g() % 4 : uint32_t(Pick(g, {-1, 4, 5, INT32_MAX})));
+  }
+  Wr(kNumEntities, n);
+  Wr(kEntities, ents);
+  const uint32_t surfs = a.Alloc(0x100);
+  Wr(kNumDrawSurfs, g() % 4);
+  Wr(kNumDrawSurfs + 4, surfs);
+  Wr(0x1549548, g());
+  Run({0x4CB0C0, uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), {}}, {{0x1536000, 0x500}, {0x1535D60, 8}, a.All()}, g, s, "random");
+}
+
+// A scene over a world walk's (or without a world): the view's surfaces
+// (0x4CB210), the view rendered from parms (the view's, with a viewport,
+// fovs, now and then a portal's) or RE_RenderScene from a refdef with the
+// view's origin and axes (the walk's static models and dlights moved into
+// the back end's data, as the scene's after its first ones). Polygons add
+// draw surfaces for the sort (g_scene_surfs).
+void SceneCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
+  std::vector<Window> win = WorldWalkScene(a, g, base);
+  const bool world = g() % 4 != 0;
+  if (!world) Wr(kWorld, 0);
+  // A world without cells now and then.
+  if (world && g() % 8 == 0) Wr(Rd(kWorld) + 0x124, 0);
+  Wr(0x1536498, g());
+  SceneCvars(a, g, 0, world);
+  SceneShaders(a, g);
+  Wr(0x1536134, g() % 8 == 0);
+  BackEndData(g, win);
+  Wr(kNumDrawSurfs, g() % 4);
+  Wr(kNumDrawSurfs + 4, a.Alloc(0x1000 * 8));
+  win.push_back({0x1534000, 0x3000});
+  win.push_back({0xA8F800, 0x40});
+  g_scene_surfs = true;
+  switch (g() % 3) {
+    case 0:
+      win.push_back(a.All());
+      Run({0x4CB210, uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), {}}, win, g, s, "random");
+      break;
+    case 1: {
+      const uint32_t parms = a.Alloc(0x260);
+      std::memcpy(g_mem.ptr<uint8_t>(parms), g_mem.ptr<uint8_t>(0x1536030), 0x260);
+      Viewport(g, parms + 0x128, parms + 0x138, world);
+      Wr(parms + 0x104, g() % 8 == 0);
+      for (uint32_t k = 0x250; k < 0x260; k += 4) Wr(parms + k, g());
+      win.push_back(a.All());
+      Run({0x4CB270, uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), {parms}}, win, g, s, "random");
+      break;
+    }
+    default: {
+      const uint32_t b = Rd(kBackEndData), n = Rd(kNumStaticModels), first = g() % 4;
+      const uint32_t ents = b + 0x81700 + first * 0x2B8;
+      std::memcpy(g_mem.ptr<uint8_t>(ents), g_mem.ptr<uint8_t>(Rd(kStaticModels)), n * 0x2B8);
+      win.push_back({ents, n * 0x2B8 + 4});
+      Wr(0x154D72C, first);
+      Wr(0x154D70C, first + n);
+      const uint32_t dfirst = g() % 4, dl = b + 0x80000 + dfirst * 0x88;
+      std::memcpy(g_mem.ptr<uint8_t>(dl), g_mem.ptr<uint8_t>(Rd(kRefdef)), 0x74 + 32 * 0x88);
+      win.push_back({dl, 0x74 + 32 * 0x88});
+      Wr(0x154D718, dfirst);
+      Wr(0x154D714, dfirst + g() % 33);
+      const uint32_t dsfirst = g() % 4;
+      Wr(0x154D724, dsfirst);
+      win.push_back({b, 0x1000 * 8});
+      for (uint32_t va : {0x154D728u, 0x154D720u}) Wr(va, g() % 4);
+      Wr(0x154D710, Rd(0x154D728) + g() % 4);
+      Wr(0x154D730, Rd(0x154D720) + g() % 4);
+      Wr(0x154D734, g() % 2);
+      win.push_back({0x154D700, 0x40});
+      Wr(0x1535A20, g() % 16 ? (g() % 4 ? 1 : 0x100) : 0);
+      Wr(0x1830CE4, g() % 8 ? 0 : g() | 1);
+      auto cvar = [&](uint32_t va, uint32_t i, float f) {
+        const uint32_t v = a.Alloc(0x24);
+        Wr(va, v);
+        Wr(v + 0x20, i);
+        WrF(v + 0x1C, f);
+      };
+      cvar(0x15343A4, g() % 16 ? 0 : uint32_t(Pick(g, {1, -1})), 0);
+      cvar(0x1534548, uint32_t(Pick(g, {0, 1, 1, 2, 3})), 0);
+      cvar(0x1534484, 0, Value(g, 0, 2, 64));
+      cvar(0x1534430, 0, Value(g, 0, 8192, 64));
+      Wr(0x15347C8, g() % 2048);
+      const uint32_t fd = a.Alloc(0x50);
+      Viewport(g, fd, fd + 0x10, world);
+      std::memcpy(g_mem.ptr<uint8_t>(fd + 0x18), g_mem.ptr<uint8_t>(0x1536030), 0x30);
+      Wr(fd + 0x48, g() % 4 ? g() % 100000 : g());
+      Wr(fd + 0x4C, g() % 4 ? g() & 0x1F : g());
+      win.push_back(a.All());
+      Run({0x4DEEC0, uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), {fd}}, win, g, s, "random");
+      break;
+    }
+  }
+  g_scene_surfs = false;
 }
 
 // ---- captures ------------------------------------------------------------------
@@ -2577,6 +2803,7 @@ int main(int argc, char** argv) {
   Wr(kPrintfPtr, kPrintf);
   Wr(kAllocPtr, kAlloc);
   Wr(kFreePtr, kFree);
+  Wr(kMillisecondsPtr, kMilliseconds);
   // The reference: the x87 model's exact arithmetic throughout.
   recomp::x87::run::g_doubles = false;
 
@@ -2591,6 +2818,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 8; i++) StaticCases(a, g, w, s);
     for (int i = 0; i < 8; i++) WalkCases(a, g, w, s);
     WorldWalkCase(a, g, w, s);
+    SceneCase(a, g, w, s);
   }
   for (int i = 0; i < 150000; i++) SkyCase(a, g, s, i < 50000 ? 0 : i < 100000 ? 4 : 48);
   for (int i = 0; i < 20; i++) SkyErrorCase(a, g, s);
@@ -2602,6 +2830,7 @@ int main(int argc, char** argv) {
   for (int i = 0; i < 30000; i++) SurfListCase(a, g, s, i < 15000 ? 0 : 48);
   for (int i = 0; i < 40000; i++) WorldViewCase(a, g, s, i < 20000 ? 0 : i < 30000 ? 4 : 48);
   for (int i = 0; i < 40000; i++) PortalCase(a, g, s, i < 20000 ? 0 : 48);
+  for (int i = 0; i < 20000; i++) EntityCase(a, g, s);
   const int random = s.cases;
   for (int i = 2; i < argc; i++)
     if (!RunCaptures(argv[i], g, s)) return 1;

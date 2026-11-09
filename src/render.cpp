@@ -7,7 +7,8 @@
 // the cells, and a cell's models and surfaces; the cell walk (polygon
 // clips, the planes through a portal, a cell's occluders, the walk through
 // the portals, the coronas and the world's surfaces); the view through a
-// portal (a portal surface's orientations and its view);
+// portal (a portal surface's orientations and its view); the scene
+// (RE_RenderScene, a view's render and its surfaces, R_AddEntitySurfaces);
 // the back end's sky clipping (ClipSkyPolygon, AddSkyPolygon), texture
 // coordinates (ComputeTexCoords); and the draw surface sort (qsortFast),
 // the 4x4 matrix product and the memcpy 0x42B0A0 under both. Replacements of lifted
@@ -35,6 +36,7 @@
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
+#include <utility>
 #include <vector>
 
 #include "runtime/log.h"
@@ -63,6 +65,14 @@ void f_004273C0(Ctx& c);  // a vector across EBX into EDX
 void f_00426AB0(Ctx& c);  // rotates a point about EAX (out, point, degrees)
 void f_0052E6D0(Ctx& c);  // the CRT's trigonometric function of ST0 called by the portal rotation
 void f_004CB270(Ctx& c);  // renders a view (view parms)
+void f_004C97D0(Ctx& c);  // the viewer's orientation (src/render_backend.cpp)
+void f_00500830(Ctx& c);  // an entity's surfaces, type 0 (EAX entity)
+void f_00506980(Ctx& c);  // an entity's surfaces, type 1 (entity)
+void f_004FA790(Ctx& c);  // an entity's surfaces, type 2 (EAX entity)
+void f_00500920(Ctx& c);  // the surfaces of the debug cvar 0x14E43FC's value 3
+void f_004DE980(Ctx& c);  // the scene's polygons' surfaces
+void f_004AC890(Ctx& c);  // a debug draw of the cvar 0x15344D0
+void f_0051D45A(Ctx& c);  // the CRT's fprintf
 // ComputeTexCoords' texture coordinate generators and modifiers.
 void f_0050A2B0(Ctx& c);
 void f_0050ABF0(Ctx& c);
@@ -2792,6 +2802,253 @@ void f_004CAB80(Ctx& c) {
   Call(c, f_004CB270, 0x4CAD32);
   MovsD(0x1536030, old, 0x98);
   done(1);
+}
+
+// ---- the front end: the scene ----------------------------------------------
+
+// R_AddEntitySurfaces (its "Bad reType" error): with r_drawentities
+// (0x15343D4) set, each of the scene's entities (0x153646C of 0x2B8 bytes
+// at 0x1536470) as the current one (number 0x1536024, reloaded after each,
+// its << 7 at 0x1536028, pointer 0x1535D68, +0x9C cleared); none with flag
+// 4 (+4) inside a portal's view (0x1536134). By type (+0): 0 and 2 the
+// models of 0x500830 and 0x4FA790 (EAX the entity), 1 0x506980 (stack), 3
+// and above 0xF ri.Error, 0xB none; the others a draw surface of the
+// shader their handle (+0x68) names (out of range: a warning and the
+// default shader 0x1535AE8) on the surface 0x5646C8 with the fog
+// 0x1549548, but not with flag 2 outside a portal's view.
+void f_004CB0C0(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi;
+  if (!CvarInt(0x15343D4)) return void(c.esp = e + 4);
+  c.esp = e - 4;
+  Put(0x1536024, 0u);
+  for (int32_t i = 0; i < I32(0x153646C);) {
+    const uint32_t ep = uint32_t(i) * 0x2B8 + U32(0x1536470);
+    Put(0x1535D68, ep);
+    Put(ep + 0x9C, 0u);
+    Put(0x1536028, U32(0x1536024) << 7);
+    const uint32_t portal = U32(0x1536134), flags = U32(ep + 4), type = U32(ep);
+    c.esi = portal;
+    if (!((flags & 4) && portal)) {
+      if (type == 0 || type == 2) {
+        c.eax = ep;
+        Call(c, type ? f_004FA790 : f_00500830, type ? 0x4CB1B1 : 0x4CB19F);
+      } else if (type == 1) {
+        Push(c, ep);
+        Call(c, f_00506980, 0x4CB1A7);
+      } else if (type == 3 || type > 0xF) {
+        Push(c, 0x54307C);
+        Push(c, 1);
+        CallPtr(c, U32(0x1549604), 0x4CB1C0, 0x4CB1BA);
+      } else if (type != 0xB && !((flags & 2) && !portal)) {
+        const int32_t h = I32(ep + 0x68);
+        uint32_t shader;
+        if (h < 0 || h >= I32(0x153C528)) {
+          Push(c, uint32_t(h));
+          Push(c, 0x53C2C0);
+          Push(c, 2);
+          CallPtr(c, U32(kPrintfPtr), 0x4CB16D, 0x4CB167);
+          shader = U32(0x1535AE8);
+        } else {
+          shader = U32(0x153C52C + 4 * uint32_t(h));
+        }
+        c.esp = e - 4;
+        for (uint32_t v : {0u, 0u, 0u, 0x5646C8u}) Push(c, v);
+        c.edx = shader;
+        c.eax = U32(0x1549548);
+        Call(c, f_004CAF00, 0x4CB195);
+      }
+      c.esp = e - 4;
+    }
+    i = I32(0x1536024) + 1;
+    Put(0x1536024, uint32_t(i));
+  }
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// A view's surfaces (from 0x4CB270, ESP 8-aligned): the projection
+// (0x4C9C00); the world's (0x4D9E20) with a world that has cells (+0x124)
+// or the debug cvar 0x14E43FC set, but for its value 3 or -3 those of
+// 0x500920 instead; the polygons' (0x4DE980), the entities'
+// (R_AddEntitySurfaces) and the debug draw 0x4AC890 with its cvar
+// 0x15344D0.
+void f_004CB210(Ctx& c) {
+  const uint32_t e = c.esp, ebp = c.ebp;
+  c.ebp = e - 4;
+  c.esp = (e - 4) & ~7u;
+  Call(c, f_004C9C00, 0x4CB21B);
+  if (const int32_t v = CvarInt(0x14E43FC)) {
+    if ((v < 0 ? 0u - uint32_t(v) : uint32_t(v)) == 3)
+      Call(c, f_00500920, 0x4CB236);
+    else
+      Call(c, f_004D9E20, 0x4CB250);
+  } else if (const uint32_t w = U32(0x1535A34); w && U32(w + 0x124)) {
+    Call(c, f_004D9E20, 0x4CB250);
+  }
+  Call(c, f_004DE980, 0x4CB255);
+  Call(c, f_004CB0C0, 0x4CB25A);
+  if (CvarInt(0x15344D0)) Call(c, f_004AC890, 0x4CB26C);
+  c.ebp = ebp;
+  c.esp = e + 4;
+}
+
+// Renders a view (stack: its parms, 0x260 bytes): none without a viewport
+// (width +0x130, height +0x134); else the view count (0x1535A28) counted
+// twice around the parms' copy into the view (0x1536030), the view's
+// frame and scene counts (+0x10C, +0x110) from 0x1535A2C and 0x1535A24,
+// four cvars' values for the back end (0xA8F800..: 0x15346FC's clamped
+// to 0 with a flag of whether it was not below 0 or unordered, 0x1534528's
+// and 0x153448C's clamped to 0, 0x1534678's when above 0, else 0), the
+// viewer's orientation (0x4C97D0), the frustum (0x4C9D30), the surfaces
+// (0x4CB210) and the sort of those added (R_SortDrawSurfs).
+void f_004CB270(Ctx& c) {
+  const uint32_t e = c.esp, parms = Arg(c, e, 1);
+  if (I32(parms + 0x130) <= 0 || I32(parms + 0x134) <= 0) return void(c.esp = e + 4);
+  const uint32_t esi = c.esi;
+  const F32 zero = Ld(0x55B584);
+  Put(0x1535A28, U32(0x1535A28) + 1);
+  MovsD(0x1536030, parms, 0x98);
+  Put(0x153613C, U32(0x1535A2C));
+  Put(0x1535A28, U32(0x1535A28) + 1);
+  Put(0x1536140, U32(0x1535A24));
+  const uint32_t start = U32(kNumDrawSurfs);
+  const F32 v0 = Ld(U32(0x15346FC) + 0x1C);
+  lift::Wr<uint8_t>(g_guest_base, 0xA8F804u, uint8_t(St(v0) >= zero));
+  Put(0xA8F808, Fst(St(v0) < zero ? St(zero) : St(v0)));
+  for (const auto [cvar, out] : {std::pair{0x1534528u, 0xA8F81Cu}, std::pair{0x153448Cu, 0xA8F830u}}) {
+    const F32 v = Ld(U32(cvar) + 0x1C);
+    Put(out, Fst(St(v) < zero ? St(zero) : St(v)));
+  }
+  const F32 v3 = Ld(U32(0x1534678) + 0x1C);
+  Put(0xA8F800, St(v3) > zero ? Fst(St(v3)).bits : 0u);
+  c.esi = start;
+  c.esp = e - 4;
+  Call(c, f_004C97D0, 0x4CB383);
+  Call(c, f_004C9D30, 0x4CB388);
+  Call(c, f_004CB210, 0x4CB38D);
+  Push(c, U32(kNumDrawSurfs) - start);
+  Push(c, U32(kDrawSurfs) + start * 8);
+  Call(c, f_004CAFC0, 0x4CB3A4);
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// RE_RenderScene (its log line and errors; stack: the refdef, 0x50 bytes):
+// with the renderer registered (0x1535A20) and the cvar 0x15343A4 clear,
+// timed by ri.Milliseconds into 0x15364F0; ri.Error without a world
+// (0x1535A34) unless the refdef has flag 1 (+0x4C); the refdef copied
+// (0x1536318), flag 8 latching 0x154D734 and flag 0x10 into 0x154D708, the
+// time in seconds (0x1536368); the scene's entities, dlights, polygons and
+// their vertices from the back end's data (0x1549698) and the counts of
+// this scene's first (0x154D72C, 0x154D718, 0x154D728, 0x154D720) and of
+// all (0x154D70C, 0x154D714, 0x154D710, 0x154D730), the draw surfaces'
+// first (0x154D724); with the cvar 0x1534548 at 0 no dlights, at anything
+// but 1 none of the first count (and at 3 a print of that 0). Then the
+// view's parms from the refdef rendered (0x4CB270): origin and axes, the
+// viewport with y from the bottom of the screen (0x15347C8 its height),
+// the fovs, the PVS origin, the cvar 0x1534430's value (+0x140) and the
+// cvar 0x1534484's times the tangent of half the smaller fov over tan 40
+// degrees (+0x144; FPTAN keeps 64 significant bits, so the x87 model's
+// arithmetic as in 0x4C9C00). This scene's counts become the next one's
+// first. The locals are at the original's (8-aligned) addresses; the
+// cookie check is left out.
+void f_004DEEC0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, ebp = c.ebp, fd = Arg(c, e, 1);
+  const uint32_t s = (((e - 4) & ~7u) - 0x26C) - 0xC, parms = s + 0x10;
+  auto done = [&] {
+    c.ebx = ebx;
+    c.esi = esi;
+    c.edi = edi;
+    c.ebp = ebp;
+    c.esp = e + 4;
+  };
+  c.ebp = e - 4;
+  c.esp = s;
+  if (!U32(0x1535A20)) return done();
+  if (const uint32_t log = U32(0x1830CE4)) {
+    Push(c, 0x541C08);
+    Push(c, 0x55B2B4);
+    Push(c, log);
+    Call(c, f_0051D45A, 0x4DEF04);
+    c.esp = s;
+  }
+  if (CvarInt(0x15343A4)) return done();
+  CallPtr(c, U32(0x1549608), 0x4DEF1D, 0x4DEF17);
+  const uint32_t t0 = c.eax;
+  if (!U32(0x1535A34) && !(U8(fd + 0x4C) & 1)) {
+    Push(c, 0x541BE8);
+    Push(c, 1);
+    CallPtr(c, U32(0x1549604), 0x4DEF40, 0x4DEF3A);
+    c.esp = s;
+  }
+  MovsD(0x1536318, fd, 0x14);
+  uint32_t height = U32(0x1536324);
+  const uint32_t flags = U32(fd + 0x4C);
+  if (flags & 8) Put(0x154D734, 1u);
+  Put(0x154D708, (flags >> 4) & 1);
+  Put(0x1536368, Fst(FromInt(I32(kTime)) * Ld(0x55B58C)));
+  const uint32_t b = U32(kBackEndData);
+  Put(0x153646C, U32(0x154D70C) - U32(0x154D72C));
+  Put(kNumDrawSurfs, U32(0x154D724));
+  Put(0x153649C, b + 0x1DD700);
+  Put(0x1536470, U32(0x154D72C) * 0x2B8 + b + 0x81700);
+  const uint32_t dlights = U32(0x154D714) - U32(0x154D718);
+  Put(0x153647C, U32(0x154D718) * 0x88 + b + 0x80000);
+  Put(0x1536484, U32(0x154D728) * 0x30 + b + 0x81100);
+  Put(0x1536480, U32(0x154D710) - U32(0x154D728));
+  Put(kDrawSurfs, b);
+  Put(0x1536498, 0u);
+  Put(0x1536474, dlights);
+  Put(0x1536478, dlights);
+  Put(0x1536488, U32(0x154D730) - U32(0x154D720));
+  Put(0x153648C, (U32(0x154D720) + 0x1FD70) * 16 + b);
+  const int32_t dl = CvarInt(0x1534548);
+  if (dl == 0) Put(0x1536478, 0u);
+  if (dl != 1) Put(0x1536474, 0u);
+  if (dl == 3) {
+    Push(c, 0);  // the count, zeroed for any value but 1
+    Push(c, 0x541BCC);
+    Push(c, 0);
+    CallPtr(c, U32(kPrintfPtr), 0x4DF124, 0x4DF11E);
+    c.esp = s;
+    height = U32(0x1536324);
+  }
+  const uint32_t width = U32(0x1536320);
+  for (uint32_t k = 0; k < 0x260; k += 4) Put(parms + k, 0u);
+  Put(parms + 0x128, U32(0x1536318));
+  Put(parms + 0x12C, U32(0x15347C8) - height - U32(0x153631C));
+  Put(parms + 0x138, U32(kRefdefFovX));
+  Put(parms + 0x13C, U32(kRefdefFovY));
+  Put(parms + 0x130, width);
+  Put(parms + 0x134, height);
+  const F32 fx = Ld(parms + 0x138), fy = Ld(parms + 0x13C);
+  x87::State& f = c.fpu;
+  using x87::Op;
+  x87::LoadF32(f, (St(fx) <= fy ? fx : fy).bits);
+  x87::ArithF32(f, Op::Mul, U32(0x55B7B4));
+  x87::Ptan(f);
+  x87::Pop(f);
+  x87::LoadF64(f, lift::Rd<uint64_t>(g_guest_base, 0x55B8E8u));
+  x87::Ptan(f);
+  x87::Pop(f);
+  x87::ArithStiSt0(f, Op::Div, 1);
+  x87::Pop(f);
+  x87::ArithF32(f, Op::Mul, U32(U32(0x1534484) + 0x1C));
+  Put(parms + 0x144, x87::StoreF32(f));
+  x87::Pop(f);
+  Put(parms + 0x140, U32(U32(0x1534430) + 0x1C));
+  MovsD(parms, fd + 0x18, 0xC);
+  MovsD(parms + 0xF8, fd + 0x18, 3);
+  Push(c, parms);
+  Call(c, f_004CB270, 0x4DF26A);
+  c.esp = s;
+  Put(0x154D724, U32(kNumDrawSurfs));
+  Put(0x154D72C, U32(0x154D70C));
+  Put(0x154D718, U32(0x154D714));
+  Put(0x154D720, U32(0x154D730));
+  CallPtr(c, U32(0x1549608), 0x4DF29F, 0x4DF299);
+  Put(0x15364F0, U32(0x15364F0) + (c.eax - t0));
+  done();
 }
 
 }  // namespace recomp::gen

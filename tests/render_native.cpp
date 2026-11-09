@@ -50,4 +50,8 @@
 #define f_004D9E20 n_004D9E20
 #define f_004CA240 n_004CA240
 #define f_004CAB80 n_004CAB80
+#define f_004CB0C0 n_004CB0C0
+#define f_004CB210 n_004CB210
+#define f_004CB270 n_004CB270
+#define f_004DEEC0 n_004DEEC0
 #include "../src/render.cpp"
