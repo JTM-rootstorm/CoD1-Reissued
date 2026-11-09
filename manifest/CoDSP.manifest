@@ -69,7 +69,13 @@ replace 00519140
 
 # The renderer (src/render.cpp). Front end: the culling of a surface AABB
 # tree's nodes and surfaces, a cell's static models and entities, the
-# dlight bits of a bounds and adding a world surface. Back end:
+# dlight bits of a bounds and adding a world surface; the view: the culls
+# of a local bounds and of a sphere, a vector into the world, the fog
+# transition, the far clip, the projection and the frustum, and a point
+# and a vector between two orientations; the draw surface list:
+# R_AddDrawSurf, R_SortDrawSurfs and its command; the world's view: its
+# planes and far distance, the view-projection matrix, R_CellForCamera and
+# a polygon against planes. Back end:
 # ClipSkyPolygon, AddSkyPolygon and ComputeTexCoords. Under both:
 # qsortFast of the draw surfaces, the 4x4 matrix product and the memcpy
 # 0x42B0A0.
@@ -86,6 +92,25 @@ replace 004F5940
 replace 004CADC0
 replace 004C94D0
 replace 0042B0A0
+replace 004C8D50
+replace 004C9070
+replace 004C90F0
+replace 004C9930
+replace 004C9B90
+replace 004C9C00
+replace 004C9D30
+replace 004C9FF0
+replace 004CA0C0
+replace 004CAF00
+replace 004CAFC0
+replace 004D4230
+replace 004D6830
+replace 004D6880
+replace 004D6A10
+replace 004D6AB0
+replace 004D7DF0
+replace 004D7E70
+replace 004D7ED0
 
 # The renderer back end (src/render_backend.cpp): GL_Bind, the cull face,
 # the texture environment, the state bits and the client arrays, fog on

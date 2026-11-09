@@ -22,7 +22,11 @@
 // entry; sky polygons clipped from every stage; shaders with random
 // tcGens, vectors and texmods over a random tessellator; draw surface
 // sorts of random keys and widths; matrix products, aliased too; and the
-// memcpy 0x42B0A0, overlapping too. Values are now and then zeros, denormals,
+// memcpy 0x42B0A0, overlapping too; the view's globals, fogs, times and
+// cvars for its culls, transforms, fog transition, far clip, projection and
+// frustum, with grazing spheres and sums of products that nearly cancel
+// (where the order of a sum shows), and ri.Printf's calls compared by the
+// arguments their formats take. Values are now and then zeros, denormals,
 // infinities, NaNs or huge. Captures (tests/render_capture.h) add the
 // game's own calls.
 
@@ -59,14 +63,16 @@ uint32_t Rd(uint32_t va) { return g_mem.read<uint32_t>(va); }
 void Wr(uint32_t va, uint32_t v) { g_mem.write<uint32_t>(va, v); }
 void WrF(uint32_t va, float f) { g_mem.write<float>(va, f); }
 
-// ri.Error, through the refimport table at 0x1549604.
+// ri.Error and ri.Printf, through the refimport table at 0x1549604 and
+// 0x1549600.
 constexpr uint32_t kErrorPtr = 0x1549604, kError = 0x7FFE0000;
+constexpr uint32_t kPrintfPtr = 0x1549600, kPrintf = 0x7FFE0010;
 
 enum Reg { kEax = 1, kEcx = 2, kEdx = 4, kEbx = 8, kEsi = 16, kEdi = 32, kEbp = 64 };
 constexpr int kSaved = kEbx | kEsi | kEdi | kEbp;
 
 struct CallRec {
-  uint32_t va, ret, esp, regs[7], args[4];
+  uint32_t va, ret, esp, regs[7], args[8];
   bool operator==(const CallRec&) const = default;
 };
 std::vector<CallRec> g_calls;
@@ -81,7 +87,8 @@ struct StubInfo {
 constexpr StubInfo kStubs[] = {
     {0x4AD7E0, kEax | kEcx | kEdx, 0},          // debug box
     {0x4DEC10, 0, 2},                           // adds an entity
-    {0x4CAF00, kEax | kEdx, 4},                 // R_AddDrawSurf
+    {0x4CAB80, 0, 1},                           // a portal's view
+    {0x427E80, kEax | kEcx, 0},                 // a matrix's inverse
     {0x50A2B0, kSaved | kEax, 0},               // tcGens
     {0x50ABF0, kSaved | kEax, 0},
     {0x50A7C0, kSaved | kEax, 1},
@@ -113,7 +120,8 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
   for (int i = 0; i < args; i++) r.args[i] = Rd(c.esp + 4 + 4 * i);
   g_calls.push_back(r);
   const uint32_t junk = 0xC0DE0000u + uint32_t(g_calls.size());
-  c.eax = junk;
+  // A portal's view now and then not drawn (EAX 0).
+  c.eax = va == 0x4CAB80 && g_calls.size() % 3 == 0 ? 0 : junk;
   c.ecx = junk ^ 1;
   c.edx = junk ^ 2;
   c.esp += 4;
@@ -142,6 +150,25 @@ void f_004F5940_lifted(Ctx& c);
 void f_004CADC0_lifted(Ctx& c);
 void f_004C94D0_lifted(Ctx& c);
 void f_0042B0A0_lifted(Ctx& c);
+void f_004C8D50_lifted(Ctx& c);
+void f_004C9070_lifted(Ctx& c);
+void f_004C90F0_lifted(Ctx& c);
+void f_004C9930_lifted(Ctx& c);
+void f_004C9B90_lifted(Ctx& c);
+void f_004C9C00_lifted(Ctx& c);
+void f_004C9D30_lifted(Ctx& c);
+void f_004C9FF0_lifted(Ctx& c);
+void f_004CA0C0_lifted(Ctx& c);
+void f_004CAF00_lifted(Ctx& c);
+void f_004CAFC0_lifted(Ctx& c);
+void f_004D4230_lifted(Ctx& c);
+void f_004D6830_lifted(Ctx& c);
+void f_004D6880_lifted(Ctx& c);
+void f_004D6A10_lifted(Ctx& c);
+void f_004D6AB0_lifted(Ctx& c);
+void f_004D7DF0_lifted(Ctx& c);
+void f_004D7E70_lifted(Ctx& c);
+void f_004D7ED0_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_native.cpp renames
 // its entries).
 void f_004D68E0(Ctx& c) { f_004D68E0_lifted(c); }
@@ -157,6 +184,25 @@ void f_004F5940(Ctx& c) { f_004F5940_lifted(c); }
 void f_004CADC0(Ctx& c) { f_004CADC0_lifted(c); }
 void f_004C94D0(Ctx& c) { f_004C94D0_lifted(c); }
 void f_0042B0A0(Ctx& c) { f_0042B0A0_lifted(c); }
+void f_004C8D50(Ctx& c) { f_004C8D50_lifted(c); }
+void f_004C9070(Ctx& c) { f_004C9070_lifted(c); }
+void f_004C90F0(Ctx& c) { f_004C90F0_lifted(c); }
+void f_004C9930(Ctx& c) { f_004C9930_lifted(c); }
+void f_004C9B90(Ctx& c) { f_004C9B90_lifted(c); }
+void f_004C9C00(Ctx& c) { f_004C9C00_lifted(c); }
+void f_004C9D30(Ctx& c) { f_004C9D30_lifted(c); }
+void f_004C9FF0(Ctx& c) { f_004C9FF0_lifted(c); }
+void f_004CA0C0(Ctx& c) { f_004CA0C0_lifted(c); }
+void f_004CAF00(Ctx& c) { f_004CAF00_lifted(c); }
+void f_004CAFC0(Ctx& c) { f_004CAFC0_lifted(c); }
+void f_004D4230(Ctx& c) { f_004D4230_lifted(c); }
+void f_004D6830(Ctx& c) { f_004D6830_lifted(c); }
+void f_004D6880(Ctx& c) { f_004D6880_lifted(c); }
+void f_004D6A10(Ctx& c) { f_004D6A10_lifted(c); }
+void f_004D6AB0(Ctx& c) { f_004D6AB0_lifted(c); }
+void f_004D7DF0(Ctx& c) { f_004D7DF0_lifted(c); }
+void f_004D7E70(Ctx& c) { f_004D7E70_lifted(c); }
+void f_004D7ED0(Ctx& c) { f_004D7ED0_lifted(c); }
 // unzCloseCurrentFile and tolower, native in the game (src/unzip.cpp,
 // src/crt.cpp): here only lifted code the stubs stand for reaches them.
 void f_0049EAA0_lifted(Ctx& c);
@@ -167,6 +213,30 @@ void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 // reaches it.
 void f_00508940_lifted(Ctx& c);
 void f_00508940(Ctx& c) { f_00508940_lifted(c); }
+// Native in the game (src/cm_trace.cpp, src/render_backend.cpp): the
+// lifted portal view the stub 0x4CAB80 stands for reaches them.
+void f_0041CD60_lifted(Ctx& c);
+void f_0041CD60(Ctx& c) { f_0041CD60_lifted(c); }
+void f_004AA0F0_lifted(Ctx& c);
+void f_004AA0F0(Ctx& c) { f_004AA0F0_lifted(c); }
+void f_004C9250_lifted(Ctx& c);
+void f_004C9250(Ctx& c) { f_004C9250_lifted(c); }
+void f_004C9580_lifted(Ctx& c);
+void f_004C9580(Ctx& c) { f_004C9580_lifted(c); }
+void f_004C97D0_lifted(Ctx& c);
+void f_004C97D0(Ctx& c) { f_004C97D0_lifted(c); }
+void f_004CA170_lifted(Ctx& c);
+void f_004CA170(Ctx& c) { f_004CA170_lifted(c); }
+void f_004CA770_lifted(Ctx& c);
+void f_004CA770(Ctx& c) { f_004CA770_lifted(c); }
+void f_004CA8D0_lifted(Ctx& c);
+void f_004CA8D0(Ctx& c) { f_004CA8D0_lifted(c); }
+void f_004F4A20_lifted(Ctx& c);
+void f_004F4A20(Ctx& c) { f_004F4A20_lifted(c); }
+void f_004F4AB0_lifted(Ctx& c);
+void f_004F4AB0(Ctx& c) { f_004F4AB0_lifted(c); }
+void f_005040D0_lifted(Ctx& c);
+void f_005040D0(Ctx& c) { f_005040D0_lifted(c); }
 void n_004D68E0(Ctx& c);
 void n_004D6970(Ctx& c);
 void n_004D8280(Ctx& c);
@@ -180,12 +250,32 @@ void n_004F5940(Ctx& c);
 void n_004CADC0(Ctx& c);
 void n_004C94D0(Ctx& c);
 void n_0042B0A0(Ctx& c);
+void n_004C8D50(Ctx& c);
+void n_004C9070(Ctx& c);
+void n_004C90F0(Ctx& c);
+void n_004C9930(Ctx& c);
+void n_004C9B90(Ctx& c);
+void n_004C9C00(Ctx& c);
+void n_004C9D30(Ctx& c);
+void n_004C9FF0(Ctx& c);
+void n_004CA0C0(Ctx& c);
+void n_004CAF00(Ctx& c);
+void n_004CAFC0(Ctx& c);
+void n_004D4230(Ctx& c);
+void n_004D6830(Ctx& c);
+void n_004D6880(Ctx& c);
+void n_004D6A10(Ctx& c);
+void n_004D6AB0(Ctx& c);
+void n_004D7DF0(Ctx& c);
+void n_004D7E70(Ctx& c);
+void n_004D7ED0(Ctx& c);
 // The stubs.
 #define COD1_STUB(va) \
   void f_##va(Ctx& c) { StubFor(c, 0x##va); }
 COD1_STUB(004AD7E0)
 COD1_STUB(004DEC10)
-COD1_STUB(004CAF00)
+COD1_STUB(004CAB80)
+COD1_STUB(00427E80)
 COD1_STUB(0050A2B0)
 COD1_STUB(0050ABF0)
 COD1_STUB(0050A7C0)
@@ -208,10 +298,24 @@ COD1_STUB(0050AE10)
 }  // namespace gen
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
-  if (target == kError) {
-    // ri.Error(code, fmt, ...): the texmod error passes two more.
-    const bool texmod = Rd(c.esp + 8) == 0x53C06C;
-    Stub(c, kErrorPtr, texmod ? kSaved | kEcx | kEdx : 0, texmod ? 4 : 2);
+  if (target == kError || target == kPrintf) {
+    // ri.Error and ri.Printf(code, fmt, ...): the arguments their formats
+    // take (a double for each %f); the texmod error passes two more and
+    // the registers ComputeTexCoords leaves.
+    if (target == kError && Rd(c.esp + 8) == 0x53C06C) {
+      Stub(c, kErrorPtr, kSaved | kEcx | kEdx, 4);
+      return;
+    }
+    int n = 2;
+    for (uint32_t p = Rd(c.esp + 8);; p++) {
+      const char ch = char(g_mem.read<uint8_t>(p));
+      if (!ch) break;
+      if (ch != '%') continue;
+      while (std::strchr("0123456789.-", char(g_mem.read<uint8_t>(p + 1)))) p++;
+      const char conv = char(g_mem.read<uint8_t>(++p));
+      if (conv != '%') n += conv == 'f' ? 2 : 1;
+    }
+    Stub(c, target == kError ? kErrorPtr : kPrintfPtr, 0, n);
     return;
   }
   std::printf("unexpected call to %08X from %08X\n", target, va);
@@ -273,6 +377,16 @@ const Entry kEntries[] = {
     COD1_ENTRY(004DB660, "ClipSkyPolygon"),  COD1_ENTRY(004F5940, "ComputeTexCoords"),
     COD1_ENTRY(004CADC0, "qsortFast"),       COD1_ENTRY(004C94D0, "matrix product"),
     COD1_ENTRY(0042B0A0, "memcpy"),
+    COD1_ENTRY(004C8D50, "local bounds cull"), COD1_ENTRY(004C9070, "sphere cull"),
+    COD1_ENTRY(004C90F0, "vector to world"),   COD1_ENTRY(004C9930, "fog transition"),
+    COD1_ENTRY(004C9B90, "far clip"),          COD1_ENTRY(004C9C00, "projection"),
+    COD1_ENTRY(004C9D30, "frustum"),           COD1_ENTRY(004C9FF0, "point between orientations"),
+    COD1_ENTRY(004CA0C0, "vector between orientations"),
+    COD1_ENTRY(004CAF00, "R_AddDrawSurf"),     COD1_ENTRY(004CAFC0, "R_SortDrawSurfs"),
+    COD1_ENTRY(004D4230, "draw surfs command"), COD1_ENTRY(004D6830, "plane nudge"),
+    COD1_ENTRY(004D6880, "far distance"),      COD1_ENTRY(004D6A10, "cull frustum"),
+    COD1_ENTRY(004D6AB0, "view projection"),   COD1_ENTRY(004D7DF0, "R_CellForCamera"),
+    COD1_ENTRY(004D7E70, "polygon behind a plane"), COD1_ENTRY(004D7ED0, "polygon behind all"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -352,10 +466,15 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   s.cases++;
   s.by_entry[EntryIndex(k.fn)]++;
   s.calls += int(lcalls.size());
-  const bool eax = k.fn == 0x4D68E0;
+  const bool eax = k.fn == 0x4D68E0 || k.fn == 0x4C8D50 || k.fn == 0x4C9070 || k.fn == 0x4D7DF0 ||
+                   k.fn == 0x4D7E70 || k.fn == 0x4D7ED0;
+  // A result on the x87 stack: its register.
+  const bool st0 = k.fn == 0x4D6880;
   bool ok = cn.esp == cl.esp && cn.ebp == cl.ebp && cn.ebx == cl.ebx && cn.esi == cl.esi &&
             cn.edi == cl.edi && cn.fpu.top == cl.fpu.top && cn.fpu.empty == cl.fpu.empty &&
-            cn.fpu.cw == cl.fpu.cw && (!eax || cn.eax == cl.eax);
+            cn.fpu.cw == cl.fpu.cw && (!eax || cn.eax == cl.eax) &&
+            (!st0 || (cn.fpu.r[cn.fpu.top].sig == cl.fpu.r[cl.fpu.top].sig &&
+                      cn.fpu.r[cn.fpu.top].se == cl.fpu.r[cl.fpu.top].se));
   if (!ok && s.failures < 20)
     std::printf("%s %s: registers differ (esp %08X/%08X ebx %08X/%08X esi %08X/%08X edi "
                 "%08X/%08X ebp %08X/%08X top %d/%d eax %08X/%08X)\n",
@@ -467,12 +586,25 @@ constexpr uint32_t kPlaneBits = 0x11BEC20, kNearPlane = 0x11BEB7C, kFarPlane = 0
                    kRefdef = 0x153647C;
 constexpr uint32_t kCvars[] = {0x15347E0, 0x15344DC, 0x153443C, 0x1534568};
 
+// The draw surfaces: a count near the limit now and then (or negative), the
+// array placed so that the next one lands in a small buffer of the arena.
+constexpr uint32_t kNumDrawSurfs = 0x1536490;
+void DrawSurfs(Arena& a, std::mt19937& g) {
+  const uint32_t buf = a.Alloc(0x20);
+  for (uint32_t i = 0; i < 0x20; i += 4) Wr(buf + i, g());
+  const uint32_t n = g() % 4 ? g() % 4 : uint32_t(Pick(g, {0xFFFF, 0x10000, 0x10001, -1, -0x8000}));
+  Wr(kNumDrawSurfs, n);
+  Wr(kNumDrawSurfs + 4, buf + 0x10 - n * 8);
+  Wr(0x1536028, g() % 4 ? g() % 2 : g());
+}
+
 struct World {
   float size;
   uint32_t special;
   uint32_t planes = 0;
   int32_t numPlanes = 0;
   uint32_t viewCount = 0;
+  uint32_t shaders = 0;  // four, 0x60 bytes each
 };
 
 void WrBounds(std::mt19937& g, const World& w, uint32_t va) {
@@ -546,6 +678,10 @@ void NewWorld(Arena& a, std::mt19937& g, World& w, uint32_t special) {
     Wr(v + 0x20, g() % 6 ? 0 : g() % 4);
   }
   Wr(0x1549548, g());
+  w.shaders = a.Alloc(4 * 0x60);
+  for (uint32_t i = 0; i < 4 * 0x60; i += 4) Wr(w.shaders + i, g());
+  for (uint32_t i = 0; i < 4; i++) Wr(w.shaders + 0x60 * i + 0x48, g() % 4 ? g() % 0x800 : g());
+  DrawSurfs(a, g);
   const uint32_t refdef = a.Alloc(0x74 + 32 * 0x88);
   Wr(kRefdef, refdef);
   for (int i = 0; i < 32; i++) {
@@ -561,7 +697,7 @@ uint32_t DlightBits(std::mt19937& g) { return g() % 2 ? 0 : g() % 2 ? g() & 0xFF
 uint32_t NewRef(Arena& a, std::mt19937& g, const World& w) {
   const uint32_t ref = a.Alloc(0xC), surf = a.Alloc(0x24);
   Wr(ref, g() % 4 ? g() % 16 : w.viewCount);
-  Wr(ref + 4, g());
+  Wr(ref + 4, w.shaders + 0x60 * (g() % 4));
   Wr(ref + 8, surf);
   Wr(surf, uint32_t(Pick(g, {0, 0x10, 0x17, 0x18, 0x19, 0x20, -5})));
   Wr(surf + 4, g());
@@ -642,7 +778,7 @@ void Graze(std::mt19937& g, const World& w, uint32_t b) {
 void CullCases(Arena& a, std::mt19937& g, World& w, Stats& s) {
   const bool graze = g() % 4 == 0;
   auto planeBits = [&] { return uint32_t(Pick(g, {-1, 0, 1, 2, 3, 4, 6})); };
-  std::vector<Window> win = {a.All(), {kPlaneBits, 4}};
+  std::vector<Window> win = {a.All(), {kPlaneBits, 4}, {kNumDrawSurfs, 8}};
   switch (g() % 7) {
     case 0: {
       const uint32_t node = a.Alloc(0x28);
@@ -884,6 +1020,351 @@ void MemcpyCase(Arena& a, std::mt19937& g, Stats& s) {
   Run({0x42B0A0, 0, 0, 0, 0, 0, 0, {dst, src, count}}, {a.All()}, g, s, "random");
 }
 
+// ---- the view ----------------------------------------------------------------
+
+// The view's globals (the fogs, the view and current orientations, the fov,
+// frustum, far clip, projection and refdef), the time and the cvars.
+constexpr uint32_t kViewGlobals = 0x1535900, kViewGlobalsEnd = 0x1536480;
+constexpr uint32_t kFog = 0x1535920, kFogFrom = 0x1535960, kFogTo = 0x15359A0, kTime = 0x1536360;
+constexpr uint32_t kViewCvars[] = {0x15344F4, 0x15346E0, 0x15347E4, 0x15343F0, 0x1534458};
+
+// Values over a few units or, wide, of any sign over 2^-30..2^30 (so that
+// the order of a sum of products shows in its rounding).
+float ViewValue(std::mt19937& g, float size, uint32_t special, bool wide) {
+  return wide ? Wide(g, -30, 30) : Value(g, -size, size, special);
+}
+
+// An orientation (origin and three axes) in the arena, or a global one.
+uint32_t Orientation(Arena& a, std::mt19937& g, uint32_t special, bool wide) {
+  if (g() % 8 == 0) return Pick(g, {0x153629C, 0x1536030});
+  const uint32_t o = a.Alloc(0x30);
+  for (uint32_t i = 0; i < 12; i++) WrF(o + 4 * i, ViewValue(g, i < 3 ? 4096 : 1, special, wide));
+  return o;
+}
+
+// A sum of three products n[i] * p[i] that nearly cancels: two of about A
+// whose sum is 0 or one ulp of A, and the third about 2^-52 of A, in
+// random places, so that the order of the sum shows in its result.
+void Cancel3(std::mt19937& g, float n[3], float p[3]) {
+  const uint32_t i = g() % 3, k = (i + 1 + g() % 2) % 3, j = 3 - i - k;
+  const float A = std::ldexp(Uniform(g, 1, 2), int(g() % 40) - 20), sign = g() % 2 ? 1.0f : -1.0f;
+  n[i] = sign;
+  n[k] = -sign;
+  p[i] = A;
+  p[k] = g() % 2 ? A : std::nextafter(A, 2 * A);
+  n[j] = g() % 2 ? 1.0f : -1.0f;
+  p[j] = std::ldexp(Uniform(g, 1, 2), std::ilogb(A) - 54 + int(g() % 5));
+}
+
+uint32_t Vector(Arena& a, std::mt19937& g, uint32_t special, float size, bool wide) {
+  const uint32_t v = a.Alloc(0x18);
+  for (uint32_t i = 0; i < 6; i++) WrF(v + 4 * i, ViewValue(g, size, special, wide));
+  return v;
+}
+
+void ViewCase(Arena& a, std::mt19937& g, Stats& s, uint32_t special) {
+  a.Reset();
+  const bool wide = g() % 4 == 0, cancel = !wide && g() % 3 == 0;
+  float cn[3], cp[3];
+  Cancel3(g, cn, cp);
+  for (uint32_t va = kViewGlobals; va < kViewGlobalsEnd; va += 4)
+    WrF(va, wide ? Wide(g, -20, 20) : Value(g, -1000, 1000, special));
+  // Unit-ish axes and plane normals.
+  for (uint32_t va = 0x153603C; va < 0x1536060; va += 4) WrF(va, ViewValue(g, 1, special, wide));
+  for (uint32_t va = 0x15362A8; va < 0x15362CC; va += 4) WrF(va, ViewValue(g, 1, special, wide));
+  for (uint32_t p = 0x15361F8; p < 0x1536248; p += 0x14)
+    for (uint32_t k = 0; k < 3; k++) WrF(p + 4 * k, ViewValue(g, 1, special, wide));
+  for (uint32_t fov : {0x1536168u, 0x153616Cu, 0x1536328u, 0x153632Cu})
+    WrF(fov, g() % 16 ? Value(g, 1, 179, special) : Pick(g, {0, 180, 360, -90}));
+  // Fogs: their modes, times and flags.
+  for (uint32_t f : {kFogFrom, kFogTo}) {
+    Wr(f, uint32_t(g() % 8 ? Pick(g, {0x800, 0x2601}) : Pick(g, {0, 1, 0x801})));
+    Wr(f + 0x38, g() % 2);
+  }
+  const int32_t time = g() % 8 ? int32_t(g() % 100000) : int32_t(g());
+  Wr(kTime, uint32_t(time));
+  const int32_t start = g() % 8 ? time - int32_t(g() % 3000) : int32_t(g());
+  Wr(kFogTo + 8, uint32_t(start));
+  Wr(kFogTo + 0xC, g() % 8 ? uint32_t(start + Pick(g, {0, 1, 500, 2000, 5000}) * int32_t(g() % 3)) :
+                             g() % 2 ? 0 : g());
+  Wr(0x15359D0, g() % 2);
+  // A linear fog ending at the far clip (now and then at -0 for a far clip
+  // of 0, equal but not the same bits).
+  if (g() % 4 == 0) {
+    if (g() % 2) Wr(0x1536248, 0);
+    const uint32_t end = Rd(0x1536248) ? Rd(0x1536248) : 0x80000000;
+    Wr(kFog + 0x24, end);
+    Wr(kFogTo + 0x24, end);
+  }
+  Wr(0x1536364, g() % 4 ? 0 : g());
+  for (uint32_t cvar : kViewCvars) {
+    const uint32_t v = a.Alloc(0x24);
+    Wr(cvar, v);
+    WrF(v + 0x1C, g() % 4 ? Value(g, 0, 8192, special) : 0);
+    Wr(v + 0x20, g() % 3 ? 0 : Pick(g, {1, 4, 5, 5}));
+  }
+  std::vector<Window> win = {{0x1534000, 0x3000}};
+  switch (g() % 9) {
+    case 0: {
+      const uint32_t b = Vector(a, g, special, g() % 2 ? 100 : 4096, wide);
+      // Ordered bounds mostly.
+      if (g() % 4)
+        for (uint32_t i = 0; i < 3; i++) {
+          const float lo = g_mem.read<float>(b + 4 * i), hi = g_mem.read<float>(b + 0xC + 4 * i);
+          if (lo > hi) {
+            WrF(b + 4 * i, hi);
+            WrF(b + 0xC + 4 * i, lo);
+          }
+        }
+      if (cancel) {
+        // Corners summed to near zero (the first component of each), or
+        // the corners as they are (no rotation) against a plane through
+        // the origin summing them to near zero.
+        const bool corners = g() % 2;
+        for (uint32_t i = 0; i < 3; i++) {
+          WrF(b + 4 * i, cp[i]);
+          WrF(b + 0xC + 4 * i, corners && g() % 2 ? cp[i] * 2 : cp[i]);
+          WrF(0x153629C + 4 * i, corners && i ? Value(g, -1000, 1000, 0) : 0.0f);
+          for (uint32_t ax = 0; ax < 3; ax++)
+            WrF(0x15362A8 + 0xC * ax + 4 * i, corners ? (i ? Value(g, -1, 1, 0) : cn[ax])
+                                                      : (ax == i ? 1.0f : 0.0f));
+        }
+        const uint32_t pl = 0x15361F8 + 0x14 * (g() % 4);
+        for (uint32_t i = 0; i < 3; i++) WrF(pl + 4 * i, corners ? (i ? 0.0f : 1.0f) : cn[i]);
+        WrF(pl + 0xC, 0);
+      }
+      win.push_back(a.All());
+      Run({0x4C8D50, b, 0, 0, 0, 0, 0, {}}, win, g, s, "random");
+      break;
+    }
+    case 1: {
+      const uint32_t p = Vector(a, g, special, 2000, wide);
+      float r = Value(g, 0, 500, special);
+      // A grazing sphere: an axis-aligned plane at an integral distance,
+      // the centre the radius (or minus it) from it.
+      if (g() % 4 == 0) {
+        r = float(g() % 64);
+        const uint32_t pl = 0x15361F8 + 0x14 * (g() % 4), k = g() % 3;
+        const float n = g() % 2 ? 1.0f : -1.0f, d = float(int32_t(g() % 200) - 100);
+        for (uint32_t i = 0; i < 3; i++) WrF(pl + 4 * i, i == k ? n : 0.0f);
+        WrF(pl + 0xC, d);
+        WrF(p + 4 * k, n * (d + (g() % 2 ? r : -r)));
+      } else if (cancel) {
+        // A plane through the origin and a centre on it but for rounding.
+        const uint32_t pl = 0x15361F8 + 0x14 * (g() % 4);
+        for (uint32_t i = 0; i < 3; i++) {
+          WrF(pl + 4 * i, cn[i]);
+          WrF(p + 4 * i, cp[i]);
+        }
+        WrF(pl + 0xC, 0);
+        r = 0;
+      }
+      win.push_back(a.All());
+      uint32_t rb;
+      std::memcpy(&rb, &r, 4);
+      Run({0x4C9070, 0, 0, p, 0, 0, 0, {rb}}, win, g, s, "random");
+      break;
+    }
+    case 2: {
+      const uint32_t in = Vector(a, g, special, 100, wide);
+      if (cancel)
+        for (uint32_t i = 0; i < 3; i++) {
+          WrF(in + 4 * i, cp[i]);
+          WrF(0x15362A8 + 0xC * i + 4 * (g() % 3), cn[i]);
+        }
+      const uint32_t out = g() % 4 ? a.Alloc(12) : in + 4 * (g() % 3);
+      win.push_back(a.All());
+      Run({0x4C90F0, in, out, 0, 0, 0, 0, {}}, win, g, s, "random");
+      break;
+    }
+    case 3: case 4: case 5: case 6: {
+      const uint32_t fn = uint32_t(Pick(g, {0x4C9930, 0x4C9B90, 0x4C9C00, 0x4C9D30}));
+      if (cancel && fn == 0x4C9D30)
+        // The view's forward axis and origin summing a plane's distance to
+        // near zero (the side axes zero).
+        for (uint32_t i = 0; i < 3; i++) {
+          WrF(0x153603C + 4 * i, cn[i]);
+          WrF(0x1536048 + 4 * i, 0);
+          WrF(0x1536054 + 4 * i, 0);
+          WrF(0x1536030 + 4 * i, cp[i]);
+        }
+      win.push_back(a.All());
+      Run({fn, 0, 0, 0, 0, 0, 0, {}}, win, g, s, "random");
+      break;
+    }
+    default: {
+      const uint32_t p = Vector(a, g, special, 4096, wide), A = Orientation(a, g, special, wide),
+                     B = Orientation(a, g, special, wide);
+      uint32_t out = a.Alloc(12);
+      if (g() % 6 == 0) out = Pick(g, {int32_t(p), int32_t(B), int32_t(A + 4)});
+      win.push_back(a.All());
+      if (g() % 2)
+        Run({0x4C9FF0, B, A, out, 0, p, 0, {}}, win, g, s, "random");
+      else
+        Run({0x4CA0C0, out, B, A, 0, p, 0, {}}, win, g, s, "random");
+      break;
+    }
+  }
+}
+
+// ---- the draw surface list ---------------------------------------------------
+
+constexpr uint32_t kSortedShaders = 0x154052C, kBackEndData = 0x1549698;
+
+// The back end's data placed so that its command buffer's next command
+// lands in a buffer of the arena (or it is full); windows for both.
+void BackEndData(std::mt19937& g, std::vector<Window>& win) {
+  const uint32_t cmd = kArena + 0x800000, used = g() % 8 ? g() % 0x3FC05 : 0x3FC04 + g() % 16;
+  const uint32_t counter = cmd + 0x40000 - used;  // so that the command lands at cmd
+  Wr(counter, used);
+  Wr(kBackEndData, counter - 0x28D700);
+  win.push_back({counter, 4});
+  win.push_back({cmd, 0x3F8});
+}
+
+void SurfListCase(Arena& a, std::mt19937& g, Stats& s, uint32_t special) {
+  a.Reset();
+  std::vector<Window> win = {{0x1536000, 0x500}};
+  for (uint32_t va = 0x1536000; va < 0x1536500; va += 4) Wr(va, g());
+  const uint32_t shaders = a.Alloc(8 * 0x60);
+  for (uint32_t i = 0; i < 8 * 0x60; i += 4) Wr(shaders + i, g());
+  for (uint32_t i = 0; i < 8; i++)
+    WrF(shaders + 0x60 * i + 0x58,
+        g() % 4 ? float(Pick(g, {0, 1, 1, 1, 2, 3, 5})) : Value(g, 0, 4, special));
+  for (uint32_t i = 0; i < 16; i++) Wr(kSortedShaders + 4 * i, shaders + 0x60 * (g() % 8));
+  win.push_back({kSortedShaders, 0x40});
+  for (uint32_t cvar : {0x14E43FCu, 0x1534400u}) {
+    const uint32_t v = a.Alloc(0x24);
+    Wr(cvar, v);
+    Wr(v + 0x20, g() % 4 ? 0 : 1);
+  }
+  switch (g() % 3) {
+    case 0:
+      DrawSurfs(a, g);
+      win.push_back({kNumDrawSurfs, 8});
+      win.push_back(a.All());
+      Run({0x4CAF00, uint32_t(g() % 4 ? g() % 64 : g()), 0, uint32_t(shaders + 0x60 * (g() % 8)), 0, 0,
+           0,
+           {uint32_t(g()), uint32_t(g() % 2), uint32_t(g() % 4 ? g() % 2 : g()),
+            uint32_t(g() % 4 ? g() % 2 : g())}},
+          win, g, s, "random");
+      break;
+    case 1:
+      BackEndData(g, win);
+      win.push_back(a.All());
+      Run({0x4D4230, 0, 0, uint32_t(g() % 0x10000), 0, 0, 0, {uint32_t(g())}}, win, g, s, "random");
+      break;
+    default: {
+      // Sort keys over the 16 shaders, entities and flags, now and then
+      // equal ones.
+      // Now and then more than the limit (0x10000 of them sorted).
+      const uint32_t n = g() % 8 == 0 ? Pick(g, {0, -1, 0x10001}) : g() % 40;
+      const uint32_t len = n == 0x10001 ? n : std::min(n, 64u);
+      const uint32_t surfs = a.Alloc(len * 8 + 8);
+      for (uint32_t i = 0; i < len; i++) {
+        Wr(surfs + 8 * i, uint32_t((g() % 16) << 18 | (g() % 0x800) << 7 | (g() & 0x7F)));
+        if (i && g() % 4 == 0) Wr(surfs + 8 * i, Rd(surfs + 8 * i - 8));
+        Wr(surfs + 8 * i + 4, uint32_t(g()));
+      }
+      BackEndData(g, win);
+      win.push_back(a.All());
+      Run({0x4CAFC0, 0, 0, 0, 0, 0, 0, {surfs, n}}, win, g, s, "random");
+      break;
+    }
+  }
+}
+
+// ---- the world's view -----------------------------------------------------------
+
+constexpr uint32_t kCullGlobals = 0x11BEA00, kWorld = 0x1535A34;
+
+// A random BSP of depth up to 6 over random planes; leaves have a cluster
+// (not -1) and a cell.
+uint32_t NewBsp(Arena& a, std::mt19937& g, uint32_t special, int depth) {
+  const uint32_t node = a.Alloc(0x18);
+  if (depth >= 6 || (depth && g() % 3 == 0)) {
+    Wr(node, g() % 8 ? g() % 100 : g() | 1);
+    Wr(node + 8, g());
+    return node;
+  }
+  Wr(node, 0xFFFFFFFF);
+  const uint32_t p = a.Alloc(0x14);
+  for (uint32_t i = 0; i < 4; i++) WrF(p + 4 * i, Value(g, i < 3 ? -1 : -1000, i < 3 ? 1 : 1000, special));
+  if (g() % 4 == 0) Wr(p + 0xC, 0);
+  Wr(node + 0xC, p);
+  Wr(node + 0x10, NewBsp(a, g, special, depth + 1));
+  Wr(node + 0x14, NewBsp(a, g, special, depth + 1));
+  return node;
+}
+
+void WorldViewCase(Arena& a, std::mt19937& g, Stats& s, uint32_t special) {
+  a.Reset();
+  for (uint32_t va = kCullGlobals; va < kCullGlobals + 0x200; va += 4) WrF(va, Value(g, -1000, 1000, special));
+  for (uint32_t va = 0x1535900; va < 0x1536480; va += 4) WrF(va, Value(g, -1000, 1000, special));
+  Wr(0x1535920, uint32_t(Pick(g, {0x800, 0x2601, 0x2601, 0})));
+  Wr(0x1535950, g() % 2);
+  Wr(0x13F9CF8, uint32_t(Pick(g, {-1, 0, 1, 2})));
+  const uint32_t far = a.Alloc(0x24);
+  Wr(0x15343F0, far);
+  WrF(far + 0x1C, g() % 3 ? 0.0f : Value(g, 0, 8192, special));
+  std::vector<Window> win = {{kCullGlobals, 0x200}, {0x1535900, 0xB80}, {0x13F9CF8, 4}};
+  // A view origin at 0 now and then (for distances of exactly 0).
+  if (g() % 4 == 0)
+    for (uint32_t i = 0; i < 3; i++) Wr(0x11BEAF8 + 4 * i, 0);
+  switch (g() % 7) {
+    case 0: {
+      const uint32_t p = a.Alloc(0x14);
+      for (uint32_t i = 0; i < 0x14; i += 4) WrF(p + i, Value(g, -1, 1, special));
+      // Normals of -0 and +0 now and then.
+      if (g() % 4 == 0) Wr(p + 4 * (g() % 3), g() % 2 ? 0x80000000 : 0);
+      win.push_back(a.All());
+      Run({0x4D6830, p, 0, 0, 0, 0, 0, {}}, win, g, s, "random");
+      break;
+    }
+    case 1: {
+      const uint32_t fn = uint32_t(Pick(g, {0x4D6880, 0x4D6A10, 0x4D6AB0}));
+      if (fn == 0x4D6AB0 && g() % 3 == 0) {
+        // A row of the view matrix by a column of the projection summing
+        // to near zero (its fourth term zero).
+        float n[3], p[3];
+        Cancel3(g, n, p);
+        const uint32_t r = g() % 4, col = g() % 4;
+        for (uint32_t i = 0; i < 3; i++) {
+          WrF(0x15360E8 + 16 * r + 4 * i, p[i]);
+          WrF(0x1536178 + 16 * i + 4 * col, n[i]);
+        }
+        WrF(0x15360E8 + 16 * r + 12, 0);
+      }
+      win.push_back(a.All());
+      Run({fn, 0, 0, 0, 0, 0, 0, {}}, win, g, s, "random");
+      break;
+    }
+    case 2: {
+      const uint32_t world = g() % 32 ? a.Alloc(0x9C) : 0;
+      if (world) Wr(world + 0x98, NewBsp(a, g, special, 0));
+      else Wr(0x98, NewBsp(a, g, special, 0));
+      Wr(kWorld, world);
+      win.push_back(a.All());
+      Run({0x4D7DF0, 0, 0, 0, 0, 0, 0, {}}, win, g, s, "random");
+      break;
+    }
+    default: {
+      const uint32_t poly = a.Alloc(0x20), np = g() % 6, nplanes = g() % 6;
+      const uint32_t pts = a.Alloc(np * 0xC + 4), planes = a.Alloc(nplanes * 0x14 + 4);
+      for (uint32_t i = 0; i < np * 3; i++) WrF(pts + 4 * i, Value(g, -100, 100, special));
+      for (uint32_t i = 0; i < nplanes; i++) {
+        for (uint32_t k = 0; k < 3; k++) WrF(planes + 0x14 * i + 4 * k, Value(g, -1, 1, special));
+        WrF(planes + 0x14 * i + 0xC, Value(g, -100, 100, special));
+      }
+      Wr(poly + 0x18, pts);
+      Wr(poly + 0x1C, np);
+      win.push_back(a.All());
+      Run({g() % 2 ? 0x4D7E70u : 0x4D7ED0u, poly, nplanes, planes, 0, 0, 0, {}}, win, g, s, "random");
+      break;
+    }
+  }
+}
+
 // ---- captures ------------------------------------------------------------------
 
 bool ReadCaptures(const char* path, std::vector<Record>& out) {
@@ -959,7 +1440,10 @@ int main(int argc, char** argv) {
   }
   g_mem.Commit(kArena, kArenaSize, recomp::Prot::RW);
   g_mem.Commit(kStack, kStackSize, recomp::Prot::RW);
+  // R_CellForCamera reads its node through a null world (after ri.Error).
+  g_mem.Commit(0, 0x1000, recomp::Prot::RW);
   Wr(kErrorPtr, kError);
+  Wr(kPrintfPtr, kPrintf);
   // The reference: the x87 model's exact arithmetic throughout.
   recomp::x87::run::g_doubles = false;
 
@@ -978,6 +1462,9 @@ int main(int argc, char** argv) {
   for (int i = 0; i < 10000; i++) SortCase(a, g, s);
   for (int i = 0; i < 20000; i++) MatrixCase(a, g, s, i < 10000 ? 0 : 48);
   for (int i = 0; i < 10000; i++) MemcpyCase(a, g, s);
+  for (int i = 0; i < 60000; i++) ViewCase(a, g, s, i < 20000 ? 0 : i < 40000 ? 4 : 48);
+  for (int i = 0; i < 30000; i++) SurfListCase(a, g, s, i < 15000 ? 0 : 48);
+  for (int i = 0; i < 40000; i++) WorldViewCase(a, g, s, i < 20000 ? 0 : i < 30000 ? 4 : 48);
   const int random = s.cases;
   for (int i = 2; i < argc; i++)
     if (!RunCaptures(argv[i], g, s)) return 1;

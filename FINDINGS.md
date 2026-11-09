@@ -1,5 +1,111 @@
 # Findings
 
+## Renderer front end (2026-11-09, branch frontend)
+The front end is going native from the bottom up (src/render.cpp, next to
+the culls of "Renderer" below), each layer checked against the lifted
+originals by ctest render_oracle; the aim is a fully native renderer, not
+speed.
+- What is left (main 0117892): the call closure under the scene
+  submission 0x4DEEC0 ("====== RE_RenderScene =====") holds 133
+  functions, 41 already native; of the 92 lifted (44 KB) the window and
+  display-mode setup 0x4FCFD0-0x4FDB60 (GLW_ChoosePFD, "...setting mode
+  %d:", reached only on a mode change) and the GL error check 0x4A5440
+  are platform code, not front end. The rest by role: the scene and the
+  view (0x4DEEC0, the view render 0x4CB270, the surfaces' generation
+  0x4CB210, the entities' surfaces 0x4CB0C0, a mirror's or portal's view
+  0x4CAB80 ("WARNING: recursive mirror/portal found"), the portal
+  orientations 0x4CA240), the world (0x4D6830-0x4D9E20: cells, portals,
+  static model refs "^1Max xmodel refs (%i) exceeded"), models and
+  entities (0x4DE980, 0x4DEC10 "too many visible models (more than %i)",
+  the XModel surfaces 0x506070-0x506980 with r_xdebug and "WARNING:
+  MAX_ENTSURFS exceeded", 0x4FA790, 0x4DA0F0-0x4DA9F0, 0x500830-0x500920)
+  and 0x4A9880-0x4AD8F0 (the debug draws and 0x4AB490, 2.2 KB), roles
+  still open. The draw surfaces' shortsort 0x4CAD70 is reached only from
+  qsortFast's original and 0x4CAF60 (the sort key's decomposition) from
+  nowhere; 0x4C9050, 0x4C9160 and 0x4C91E0 are not functions of the
+  table.
+- Profile (training walk, com_maxfps 0, perf cpu-clock:u, main thread):
+  with the default shadows the front end is 13.5% inclusive (the world
+  walk 0x4D9E20 7.5%, the cell walk 0x4D96E0 5.0%, the portal projection
+  0x4D6BC0 1.3%; its largest lifted pieces 0x4D6BC0 and 0x4AB490 1.0% self
+  each, the rest under 0.7%), the collision traces about 20%, Present
+  and Flush 9.7%, and glDrawElements 16% inclusive with 7.6% self: the
+  min/max scan of each draw's indices (src/render_gl.cpp), redone for
+  every stage of a flush over the same indices. With cg_shadows 2
+  (shadow.cfg, the oracle runs' setting) the shadow volumes take 41% (a
+  draw of 4 vertices per silhouette edge, as the original draws them).
+- Layer 1, the view (2026-11-09): the cull of a local bounds 0x4C8D50
+  (EAX mins/maxs; 8 corners under the current orientation 0x153629C as
+  floats against the four frustum planes 0x15361F8; EAX 0 in, 1 clipped,
+  2 out, 1 with r_nocull 0x15344F4; a plane's corners stop at one in
+  front once one was behind), of a sphere 0x4C9070 (EDX centre, radius
+  cdecl; out when below -radius stored as a float, clipped when at most
+  the radius), a vector into the world 0x4C90F0 (EAX in, ECX out), the
+  fog transition 0x4C9930 (now 0x1535920, from 0x1535960, to 0x15359A0:
+  the target's once ended or without a transition, at once between
+  GL_EXP and GL_LINEAR, else colour, start, end and density lerped by
+  the time 0x1536360 passed, clamped to 1; a linear fog's end nearer than
+  the far clip becomes it; debug level 5 (0x15346E0) prints through
+  ri.Printf with doubles from an 8-aligned frame), the far clip 0x4C9B90
+  (2048 for the refdef flag 1, the cvar 0x15343F0, 2^19 for 0), the
+  projection 0x4C9C00 (FPTAN keeps 64 bits: done on the x87 model, on the
+  guest's stack; the matrix's copy 0x15361B8 takes the depth cvar
+  0x1534458 * -2 as element 14), the frustum 0x4C9D30 (FSINCOS of the fov
+  halves, side planes non-axial with distances and sign bits) and a point
+  and a vector between two orientations 0x4C9FF0 and 0x4CA0C0 (partial
+  sums stored as floats where the original stores them).
+- Layer 2, the draw surface list and the world's view (2026-11-09):
+  R_AddDrawSurf 0x4CAF00 (the sort key: sorted index +0x48 | fog << 12,
+  then the two flags, the view flag 0x1536028 and the dlight bits; none at
+  0x10000 signed; the count and array read again for the surface),
+  R_SortDrawSurfs 0x4CAFC0 (the SS_BAD error string; qsortFast of at most
+  0x10000, the counter in the count's argument slot, the walk stopping at
+  a sort above 1.0 or with the cvar 0x14E43FC, a portal (sort exactly
+  1.0) to 0x4CAB80 with the entity or 0x7FE, which ends it without the
+  command when drawn and the cvar 0x1534400 is set), its command 0x4D4230
+  (call-graph position; id 7, 0x3F4 bytes from the back end's buffer
+  0x1549698 +0x24D30C, used +0x28D700 up to 0x3FFF8 unsigned, the refdef
+  and view by rep movs), and the world's view copies: a plane's nudge
+  0x4D6830 (-0.001, far corner offsets from the normal's signs as
+  integers, -0 as 0), the far distance 0x4D6880 (returned in ST0: the far
+  clip cvar, with it 0 the linear fog's end while fog is on; at least
+  0x11BEB84), the frustum copied and nudged 0x4D6A10, the view-projection
+  matrix 0x4D6AB0 (the view matrix 0x15360E8 by the projection in a
+  local, its inverse by 0x427E80 into 0x11BEBD0, the local transposed
+  into 0x11BEB90), R_CellForCamera 0x4D7DF0 (its error string; the BSP
+  from the world 0x1535A34 +0x98 by the origin 0x11BEAF8, in front: the
+  first child) and a polygon (+0x18 points, +0x1C count) against planes
+  0x4D7E70 (1 at a plane none is in front of, at once with no points) and
+  0x4D7ED0 (0 at a point in front of any).
+- Oracle (tests/render_test.cpp): ri.Printf and ri.Error recorded with
+  the arguments their formats take (a double per %f). R_AddDrawSurf is
+  no longer a stub: the culls' cases give their references real shaders
+  and a draw surface array whose next slot is a small buffer (counts near
+  and past the limit, negative too). Stubs: the portal view 0x4CAB80
+  (EAX 0 every third call) and the matrix inverse 0x427E80; the lifter's
+  --only follows the stubs' originals, which reach functions native in
+  the game (cm_trace, the back end), forwarded to their lifted bodies in
+  the test. Cases: the view's globals, fogs (both mode pairs, times past,
+  ended, zero span), cvars and orientations, now and then wide exponents,
+  grazing spheres (an axis plane at an integral distance, the centre the
+  radius from it), sums of three products that nearly cancel (two exact
+  opposites and a third 2^-52 of them, where the order of a sum shows),
+  linear fog ends equal to the far clip (and -0 against 0); sort arrays
+  over 16 shaders with sorts 0, 1, 2 ... and NaN, 0x10001 surfaces; back
+  end buffers full and not; BSPs with planes through the origin. 514k
+  random cases, 0 mismatched; ctest 37 of 37.
+- Mutations: 26 on layer 1, 19 on layer 2. Caught: all but the
+  equivalent ones (a cull's stop at a plane's decided corner, -radius
+  stored as a float (negation is exact), R_AddDrawSurf's second read of
+  the count (only the array on the count would show it)); the first runs
+  missed every sum order, the equal-radius and the equal-fog-end ones
+  until the cancelling, grazing and -0 cases above were added.
+- Frames (r_mode 3, com_maxfps 20, fixedtime 50, every frame), against
+  main 0117892: all 13 loading and briefing frames shared, 46 of 1640
+  in-level frames identical (45 between two runs of main). Timing (three
+  walks each, interleaved): mean frame 1.774-1.776 ms (main) and
+  1.759-1.775 ms, p95 2.4, p99 2.6 for both.
+
 ## Renderer back end (2026-10-25, branch render-backend)
 The back end is going native from the bottom up (src/render_backend.cpp),
 each layer checked against the lifted originals by ctest

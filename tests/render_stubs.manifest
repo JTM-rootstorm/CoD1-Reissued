@@ -3,7 +3,8 @@
 # tests/render_test.cpp.
 replace 004AD7E0
 replace 004DEC10
-replace 004CAF00
+replace 004CAB80
+replace 00427E80
 replace 0050A2B0
 replace 0050ABF0
 replace 0050A7C0

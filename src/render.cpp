@@ -1,6 +1,8 @@
-// The renderer's hottest lifted code, natively: the front end's culling of
-// world surfaces, static models and entities against the view frustum and
-// the cell portals, the dlight bits of a bounds and adding a world surface;
+// The renderer's front end natively, and the hottest lifted code under the
+// back end: the front end's culling of world surfaces, static models and
+// entities against the view frustum and the cell portals, the dlight bits
+// of a bounds and adding a world surface; the view (its culls, transforms,
+// fog transition, far clip, projection and frustum);
 // the back end's sky clipping (ClipSkyPolygon, AddSkyPolygon), texture
 // coordinates (ComputeTexCoords); and the draw surface sort (qsortFast),
 // the 4x4 matrix product and the memcpy 0x42B0A0 under both. Replacements of lifted
@@ -24,8 +26,10 @@
 // saved registers and locals in the original's frame below ESP, EFLAGS,
 // the x87 status word and stale registers (x87_value.h).
 
+#include <bit>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 
 #include "runtime/log.h"
 #include "x86/lifted.h"
@@ -37,6 +41,8 @@ void f_004AD7E0(Ctx& c);  // draws a debug box (ECX mins, EDX maxs, EAX colour)
 void f_004DEC10(Ctx& c);  // adds a culled-in entity (ent, ent)
 void f_004CAF00(Ctx& c);  // R_AddDrawSurf(surface, dlight, 0, 0; EAX, EDX shader)
 void f_0042B0A0_lifted(Ctx& c);  // the memcpy, for overlapping copies
+void f_004CAB80(Ctx& c);  // a portal or mirror surface's view (entity; EAX: drawn)
+void f_00427E80(Ctx& c);  // a 4x4 matrix's inverse (ECX in, EAX out)
 // ComputeTexCoords' texture coordinate generators and modifiers.
 void f_0050A2B0(Ctx& c);
 void f_0050ABF0(Ctx& c);
@@ -965,6 +971,608 @@ void f_0042B0A0(Ctx& c) {
     return;
   }
   std::memmove(g_guest_base + dst, g_guest_base + src, n);
+  c.esp += 4;
+}
+
+// ---- the front end: the view ------------------------------------------------
+
+namespace {
+
+// The current orientation (origin, then three axes; the view's or an
+// entity's), the view's own (origin 0x1536030, axes 0x153603C), its fov
+// x and y (0x1536168, 0x153616C), the four frustum planes (cplane_t, 0x14
+// bytes), the far clip, the projection matrix and its copy, and the
+// refdef's fov x and y and time.
+constexpr uint32_t kOr = 0x153629C, kViewOrigin = 0x1536030, kViewAxis = 0x153603C;
+constexpr uint32_t kFovX = 0x1536168, kFovY = 0x153616C, kFrustum = 0x15361F8;
+constexpr uint32_t kZFar = 0x1536248, kProjection = 0x1536178, kProjectionCopy = 0x15361B8;
+constexpr uint32_t kRefdefFovX = 0x1536328, kRefdefFovY = 0x153632C, kTime = 0x1536360;
+// Cvars (cvar_t*: float at +0x1C, integer at +0x20): r_nocull, the debug
+// level the fog and far clip print at (5), r_znear, the far clip's and a
+// depth one.
+constexpr uint32_t kNoCull = 0x15344F4, kFogDebug = 0x15346E0, kZNear = 0x15347E4,
+                   kFarClip = 0x15343F0, kDepthCvar = 0x1534458;
+// ri.Printf, through the refimport table.
+constexpr uint32_t kPrintfPtr = 0x1549600;
+// The fog now, at the start of a transition and at its target (16 dwords
+// each: mode (GL_EXP 0x800, GL_LINEAR 0x2601), start and end times, colour,
+// start, end, density, ...).
+constexpr uint32_t kFog = 0x1535920, kFogFrom = 0x1535960, kFogTo = 0x15359A0;
+
+int32_t CvarInt(uint32_t cvar) { return I32(U32(cvar) + 0x20); }
+
+// A float pushed as the double a varargs call takes (FLD m32, FSTP m64).
+void PushDouble(Ctx& c, F32 f) {
+  const uint64_t d = std::bit_cast<uint64_t>(St(f).v);
+  c.esp -= 8;
+  Put(c.esp, uint32_t(d));
+  Put(c.esp + 4, uint32_t(d >> 32));
+}
+// ri.Printf(PRINT_ALL, fmt, ...) with the doubles already pushed, from the
+// call site at va (returning to ret); the caller's add esp follows.
+void Printf(Ctx& c, uint32_t fmt, uint32_t ret, uint32_t va) {
+  Push(c, fmt);
+  Push(c, 0);
+  CallPtr(c, U32(kPrintfPtr), ret, va);
+}
+
+// FSINCOS of x on the guest's x87 stack, the cosine stored first, then the
+// sine (out of range FSINCOS pushes nothing: x is stored as the cosine and
+// the register below it as the sine, which the second pop takes too).
+void SinCos(Ctx& c, F32 x, F32& cos, F32& sin) {
+  x87::LoadF32(c.fpu, x.bits);
+  x87::SinCos(c.fpu);
+  cos.bits = x87::StoreF32(c.fpu);
+  x87::Pop(c.fpu);
+  sin.bits = x87::StoreF32(c.fpu);
+  x87::Pop(c.fpu);
+}
+
+}  // namespace
+
+// The cull of a local bounds (EAX: mins, maxs) under the current
+// orientation against the four frustum planes: 0 all in front of every
+// plane, 2 all behind one, else 1; 1 with r_nocull. Its eight corners are
+// transformed to floats first; a plane's test stops at a corner in front
+// once one has been behind.
+void f_004C8D50(Ctx& c) {
+  const uint32_t b = c.eax;
+  c.esp += 4;
+  if (CvarInt(kNoCull)) {
+    c.eax = 1;
+    return;
+  }
+  F32 v[8][3];
+  for (uint32_t i = 0; i < 8; i++) {
+    const St x = St(Ld(b + 0xC * (i & 1))), y = St(Ld(b + 4 + 0xC * ((i >> 1) & 1))),
+             z = St(Ld(b + 8 + 0xC * ((i >> 2) & 1)));
+    for (uint32_t k = 0; k < 3; k++)
+      v[i][k] = Fst(St(Ld(kOr + 0x24 + 4 * k)) * z + St(Ld(kOr + 0x18 + 4 * k)) * y +
+                    St(Ld(kOr + 0xC + 4 * k)) * x + Ld(kOr + 4 * k));
+  }
+  bool clipped = false;
+  for (uint32_t p = kFrustum; p < kFrustum + 4 * 0x14; p += 0x14) {
+    bool back = false, front = false;
+    for (uint32_t i = 0; i < 8; i++) {
+      const St d = St(v[i][2]) * Ld(p + 8) + St(v[i][1]) * Ld(p + 4) + St(v[i][0]) * Ld(p);
+      if (!(d > Ld(p + 0xC))) {
+        back = true;
+      } else {
+        front = true;
+        if (back) break;
+      }
+    }
+    if (!front) {
+      c.eax = 2;
+      return;
+    }
+    clipped |= back;
+  }
+  c.eax = clipped;
+}
+
+// The cull of a sphere (EDX centre; radius on the stack, cdecl) against
+// the four frustum planes: 2 behind one by more than the radius, else 1
+// when one is within it, else 0; 1 with r_nocull.
+void f_004C9070(Ctx& c) {
+  const uint32_t e = c.esp, pt = c.edx;
+  const F32 r = Ld(e + 4);
+  c.esp = e + 4;
+  if (CvarInt(kNoCull)) {
+    c.eax = 1;
+    return;
+  }
+  const F32 nr = Fst(-St(r));
+  bool clipped = false;
+  for (uint32_t p = kFrustum; p < kFrustum + 4 * 0x14; p += 0x14) {
+    const St d =
+        St(Ld(p)) * Ld(pt) + St(Ld(p + 8)) * Ld(pt + 8) + St(Ld(p + 4)) * Ld(pt + 4) - Ld(p + 0xC);
+    if (d < nr) {
+      c.eax = 2;
+      return;
+    }
+    if (d <= r) clipped = true;
+  }
+  c.eax = clipped;
+}
+
+// A local vector (EAX) rotated into the world by the current orientation's
+// axes, into ECX (each component stored before the next is read).
+void f_004C90F0(Ctx& c) {
+  const uint32_t in = c.eax, out = c.ecx;
+  for (uint32_t k = 0; k < 3; k++)
+    Put(out + 4 * k, Fst(St(Ld(kOr + 0xC + 4 * k)) * Ld(in) + St(Ld(kOr + 0x24 + 4 * k)) * Ld(in + 8) +
+                         St(Ld(kOr + 0x18 + 4 * k)) * Ld(in + 4)));
+  c.esp += 4;
+}
+
+// The fog for this frame: the target's (the transition copied whole, its
+// flag 0x153595C clear) once the transition has ended or with none; with
+// one between GL_EXP and GL_LINEAR (either way) the target's at once (its
+// end time cleared); else the start's colour, start, end and density moved
+// towards the target's by the time passed (at most all of it). A linear
+// fog's end nearer than the far clip becomes the far clip. The debug level
+// 5 prints the far clip (and does nothing else) while the target's flag
+// 0x15359D0 is clear, else the fog's end, the far clip and density.
+void f_004C9930(Ctx& c) {
+  const uint32_t e = c.esp;
+  // push ebp; and esp, -8; sub esp, 8; four registers pushed.
+  const uint32_t sp = (((e - 4) & ~7u) - 8) - 16;
+  if (CvarInt(kFogDebug) == 5 && !U32(0x15359D0)) {
+    c.esp = sp;
+    PushDouble(c, Ld(kZFar));
+    Printf(c, 0x543190, 0x4C996C, 0x4C9966);
+    c.esp = e + 4;
+    return;
+  }
+  const int32_t end = I32(kFogTo + 0xC), time = I32(kTime);
+  const uint32_t from = U32(kFogFrom), to = U32(kFogTo);
+  if (!end || end < time) {
+    std::memmove(g_guest_base + kFog, g_guest_base + kFogTo, 0x40);
+    Put(kFog + 0x3C, 0);
+  } else if ((from == 0x800 && to == 0x2601) || (from == 0x2601 && to == 0x800)) {
+    std::memmove(g_guest_base + kFog, g_guest_base + kFogTo, 0x40);
+    Put(kFogTo + 0xC, 0);
+    Put(kFog + 0x3C, 1);
+  } else {
+    const int32_t start = I32(kFogTo + 8), span = end - start > 0 ? end - start : 1;
+    St f = FromInt(time - start) / FromInt(span);
+    if (f > Ld(0x55B580)) f = St(Ld(0x55B580));
+    Put(kFog, to);
+    Put(kFog + 0x30, 1);
+    for (uint32_t k : {0x20u, 0x24u, 0x2Cu, 0x10u, 0x14u, 0x18u})
+      Put(kFog + k, Fst((St(Ld(kFogTo + k)) - Ld(kFogFrom + k)) * f + Ld(kFogFrom + k)));
+    Put(kFog + 0x38, U32(kFogTo + 0x38) || U32(kFogFrom + 0x38));
+    Put(kFog + 0x3C, 1);
+  }
+  const uint32_t mode = U32(kFog);
+  if (mode == 0x2601 && St(Ld(kFog + 0x24)) < Ld(kZFar)) Put(kZFar, U32(kFog + 0x24));
+  if (CvarInt(kFogDebug) == 5) {
+    c.esp = sp;
+    PushDouble(c, Ld(kFog + 0x24));
+    PushDouble(c, Ld(kZFar));
+    PushDouble(c, Ld(kFog + 0x2C));
+    if (mode == 0x2601)
+      Printf(c, 0x543150, 0x4C9B6E, 0x4C9B68);
+    else
+      Printf(c, 0x543110, 0x4C9B85, 0x4C9B7F);
+  }
+  c.esp = e + 4;
+}
+
+// The far clip: 2048 for a refdef flag 1; else the far clip cvar's when
+// it is not zero (printed at the debug level 5 after the fog), else 2^19;
+// then the fog's (f_004C9930, a tail call in the last case).
+void f_004C9B90(Ctx& c) {
+  const uint32_t e = c.esp;
+  if (U8(0x1536364) & 1) {
+    Put(kZFar, 0x45000000);
+    c.esp = e + 4;
+    return;
+  }
+  const uint32_t far = U32(kFarClip);
+  if (St(Ld(far + 0x1C)) == Ld(0x55B584)) {
+    Put(kZFar, 0x49000000);
+    f_004C9930(c);
+    return;
+  }
+  Put(kZFar, U32(far + 0x1C));
+  Call(c, f_004C9930, 0x4C9BC7);
+  if (CvarInt(kFogDebug) == 5) {
+    PushDouble(c, Ld(kZFar));
+    Printf(c, 0x5430E8, 0x4C9BEC, 0x4C9BE6);
+    c.esp = e;
+  }
+  c.esp = e + 4;
+}
+
+// The projection matrix (column-major, 16 floats) from the refdef's fov
+// and r_znear, after the far clip (f_004C9B90), and its copy, whose
+// element 14 then takes the depth cvar's value instead. FPTAN keeps 64
+// significant bits, so the arithmetic is the x87 model's, on the guest's
+// stack as the original has it.
+void f_004C9C00(Ctx& c) {
+  const uint32_t e = c.esp;
+  c.esp = e - 0xC;  // ECX, ESI and EDI pushed
+  Call(c, f_004C9B90, 0x4C9C08);
+  x87::State& f = c.fpu;
+  using x87::Op;
+  auto m = [](int i) { return kProjection + 4 * uint32_t(i); };
+  auto tan = [&](uint32_t fov) {
+    x87::LoadF32(f, U32(fov));
+    x87::ArithF32(f, Op::Mul, U32(0x55B7B4));
+    x87::Ptan(f);
+    x87::Pop(f);
+  };
+  auto store = [&](uint32_t va) {
+    Put(va, x87::StoreF32(f));
+    x87::Pop(f);
+  };
+  x87::LoadF32(f, U32(U32(kZNear) + 0x1C));
+  tan(kRefdefFovY);
+  for (int i : {4, 12, 1, 13, 2, 6, 3, 7, 15}) Put(m(i), 0);
+  Put(m(10), 0xBF800000);
+  Put(m(11), 0xBF800000);
+  x87::LoadSt(f, 0);
+  x87::Chs(f);  // -tan y
+  tan(kRefdefFovX);
+  x87::LoadSt(f, 0);
+  x87::Chs(f);  // -tan x
+  x87::LoadSt(f, 1);
+  x87::ArithSt0Sti(f, Op::Sub, 1);  // width
+  x87::LoadSt(f, 4);
+  x87::ArithSt0Sti(f, Op::Sub, 4);  // height
+  const uint32_t height = x87::StoreF32(f);
+  x87::Pop(f);
+  x87::ArithF32(f, Op::DivR, U32(0x55B580));
+  x87::LoadSt(f, 0);
+  x87::ArithSt0Sti(f, Op::Add, 1);
+  store(m(0));
+  x87::Xch(f, 1);
+  x87::ArithSt0Sti(f, Op::Add, 2);
+  x87::ArithSt0Sti(f, Op::Mul, 1);
+  store(m(8));
+  x87::Pop(f);
+  x87::Pop(f);
+  x87::LoadF32(f, U32(0x55B580));
+  x87::ArithF32(f, Op::Div, height);
+  x87::LoadSt(f, 0);
+  x87::ArithSt0Sti(f, Op::Add, 1);
+  store(m(5));
+  x87::Xch(f, 1);
+  x87::ArithSt0Sti(f, Op::Add, 2);
+  x87::ArithSt0Sti(f, Op::Mul, 1);
+  store(m(9));
+  x87::Pop(f);
+  x87::Pop(f);
+  x87::ArithF32(f, Op::Mul, U32(0x55B710));
+  store(m(14));
+  x87::LoadF32(f, U32(U32(kDepthCvar) + 0x1C));
+  x87::ArithF32(f, Op::Mul, U32(0x55B710));
+  std::memmove(g_guest_base + kProjectionCopy, g_guest_base + kProjection, 0x40);
+  store(kProjectionCopy + 0x38);
+  c.esp = e + 4;
+}
+
+// The frustum's four side planes from the view's axes and fov: left and
+// right from the x fov, bottom and top from the y one (each normal the
+// forward axis by the sine plus or minus the side axis by the cosine),
+// non-axial, with their distances from the view origin and sign bits.
+void f_004C9D30(Ctx& c) {
+  for (uint32_t side = 0; side < 2; side++) {
+    const uint32_t fov = side ? kFovY : kFovX, axis = kViewAxis + 0xC * (side + 1);
+    const uint32_t p0 = kFrustum + 0x28 * side, p1 = p0 + 0x14;
+    const F32 a = Fst(St(Ld(fov)) / Ld(0x55B6D8) * Ld(0x55B7AC));
+    F32 cs, sn;
+    SinCos(c, a, cs, sn);
+    for (uint32_t k = 0; k < 3; k++) {
+      const F32 v = Fst(St(Ld(kViewAxis + 4 * k)) * sn);
+      Put(p0 + 4 * k, v);
+      Put(p1 + 4 * k, v);
+    }
+    for (uint32_t k = 0; k < 3; k++) Put(p0 + 4 * k, Fst(St(Ld(axis + 4 * k)) * cs + Ld(p0 + 4 * k)));
+    const F32 ncs = Fst(-St(cs));
+    for (uint32_t k = 0; k < 3; k++) Put(p1 + 4 * k, Fst(St(ncs) * Ld(axis + 4 * k) + Ld(p1 + 4 * k)));
+  }
+  for (uint32_t p = kFrustum; p < kFrustum + 4 * 0x14; p += 0x14) {
+    Wr<uint8_t>(g_guest_base, p + 0x10, 3);
+    Put(p + 0xC, Fst(St(Ld(kViewOrigin + 8)) * Ld(p + 8) + St(Ld(kViewOrigin + 4)) * Ld(p + 4) +
+                     St(Ld(kViewOrigin)) * Ld(p)));
+    uint8_t bits = 0;
+    for (uint32_t k = 0; k < 3; k++)
+      if (St(Ld(p + 4 * k)) < Ld(0x55B584)) bits |= uint8_t(1 << k);
+    Wr<uint8_t>(g_guest_base, p + 0x11, bits);
+  }
+  c.esp += 4;
+}
+
+// A point (ESI) from one orientation (ECX: origin, axes) into another
+// (EAX), into EDX: the offset from ECX's origin along each of its axes,
+// then along EAX's axes, summed with partial sums stored as floats where
+// the original stores them, plus EAX's origin.
+void f_004C9FF0(Ctx& c) {
+  const uint32_t p = c.esi, a = c.ecx, b = c.eax, out = c.edx;
+  const St dx = St(Ld(p)) - Ld(a), dy = St(Ld(p + 4)) - Ld(a + 4), dz = St(Ld(p + 8)) - Ld(a + 8);
+  const St l0 = dz * Ld(a + 0x14) + dy * Ld(a + 0x10) + dx * Ld(a + 0xC);
+  const St x0 = l0 * Ld(b + 0xC);
+  F32 y = Fst(l0 * Ld(b + 0x10)), z = Fst(l0 * Ld(b + 0x14));
+  const St l1 = dz * Ld(a + 0x20) + dy * Ld(a + 0x1C) + dx * Ld(a + 0x18);
+  const F32 l1f = Fst(l1), x = Fst(l1 * Ld(b + 0x18) + x0);
+  y = Fst(St(l1f) * Ld(b + 0x1C) + y);
+  z = Fst(St(l1f) * Ld(b + 0x20) + z);
+  const St l2 = dz * Ld(a + 0x2C) + dy * Ld(a + 0x28) + dx * Ld(a + 0x24);
+  const St x2 = l2 * Ld(b + 0x24) + x;
+  y = Fst(l2 * Ld(b + 0x28) + y);
+  z = Fst(l2 * Ld(b + 0x2C) + z);
+  Put(out, Fst(x2 + Ld(b)));
+  Put(out + 4, Fst(St(y) + Ld(b + 4)));
+  Put(out + 8, Fst(St(z) + Ld(b + 8)));
+  c.esp += 4;
+}
+
+// A vector (ESI) along one orientation's axes (EDX) into another's (ECX),
+// into EAX: zeroed, then each of EDX's components added along ECX's axes.
+void f_004CA0C0(Ctx& c) {
+  const uint32_t out = c.eax, a = c.edx, v = c.esi, b = c.ecx;
+  for (uint32_t k = 0; k < 3; k++) Put(out + 8 - 4 * k, 0);
+  for (uint32_t i = 0; i < 3; i++) {
+    const uint32_t ax = a + 0xC + 0xC * i, bx = b + 0xC + 0xC * i;
+    const St l = St(Ld(ax + 8)) * Ld(v + 8) + St(Ld(ax + 4)) * Ld(v + 4) + St(Ld(ax)) * Ld(v);
+    for (uint32_t k = 0; k < 3; k++)
+      Put(out + 4 * k, i ? Fst(l * Ld(bx + 4 * k) + Ld(out + 4 * k)) : Fst(l * Ld(bx + 4 * k)));
+  }
+  c.esp += 4;
+}
+
+// ---- the front end: the draw surface list ------------------------------------
+
+namespace {
+
+// The draw surfaces (count, array of 8 bytes: sort key, surface), the
+// shaders by sorted index, and the back end's data (its command buffer at
+// +0x24D30C, the bytes used at +0x28D700).
+constexpr uint32_t kNumDrawSurfs = 0x1536490, kDrawSurfs = 0x1536494, kSortedShaders = 0x154052C;
+constexpr uint32_t kBackEndData = 0x1549698;
+
+// rep movs of n dwords.
+void MovsD(uint32_t dst, uint32_t src, uint32_t n) {
+  for (; n; n--, dst += 4, src += 4) Put(dst, U32(src));
+}
+
+}  // namespace
+
+// R_AddDrawSurf(surface, dlight bits, a, b; cdecl; EAX fog, EDX shader):
+// the sort key is the shader's sorted index (+0x48) with the fog above it,
+// then a and b, the view's flag 0x1536028 and the dlight bits; nothing
+// once there are 0x10000 (a signed count). The count and array are read
+// again for the surface after the key is stored.
+void f_004CAF00(Ctx& c) {
+  const uint32_t e = c.esp, n = U32(kNumDrawSurfs);
+  if (int32_t(n) < 0x10000) {
+    uint32_t key = U32(c.edx + 0x48) | c.eax << 12;
+    key = key << 16 | Arg(c, e, 3);
+    key = key << 1 | Arg(c, e, 4);
+    key = (key << 1 | U32(0x1536028)) | Arg(c, e, 2);
+    Put(U32(kDrawSurfs) + n * 8, key);
+    const uint32_t m = U32(kNumDrawSurfs);
+    Put(U32(kDrawSurfs) + m * 8 + 4, Arg(c, e, 1));
+    Put(kNumDrawSurfs, U32(kNumDrawSurfs) + 1);
+  }
+  c.esp = e + 4;
+}
+
+// R_AddDrawSurfCmd(draw surfaces; EDX their count): a command of 0x3F4
+// bytes from the back end's buffer (none once it would pass 0x3FFF8 bytes,
+// unsigned): its id 7, the surfaces and count, the refdef and the view.
+void f_004D4230(Ctx& c) {
+  const uint32_t bed = U32(kBackEndData), used = U32(bed + 0x28D700) + 0x3F4;
+  if (used <= 0x3FFF8) {
+    Put(bed + 0x28D700, used);
+    const uint32_t cmd = used + bed + 0x24D30C;
+    if (cmd) {
+      Put(cmd + 0x3EC, Arg(c, c.esp, 1));
+      Put(cmd, 7);
+      Put(cmd + 0x3F0, c.edx);
+      MovsD(cmd + 4, 0x1536318, 0x62);
+      MovsD(cmd + 0x18C, 0x1536030, 0x98);
+    }
+  }
+  c.esp += 4;
+}
+
+// R_SortDrawSurfs(draw surfaces, count; cdecl): sorted (qsortFast, at most
+// 0x10000), then up to the first shader sorted after 1.0 (or all of them
+// with the cvar 0x14E43FC) each opaque one checked: ri.Error for a sort of
+// 0 (SS_BAD), and for a portal (exactly 1.0) the view through it
+// (f_004CAB80 with the entity, 0x7FE for bit 1), which ends it without the
+// command when drawn and the cvar 0x1534400 is set; then the command
+// (f_004D4230). The loop's counter is in the count's argument slot. The
+// registers are the original's for the callees.
+void f_004CAFC0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, ebp = c.ebp;
+  int32_t num = I32(e + 8);
+  if (num < 1) {
+    c.esp = e - 4;
+    Push(c, Arg(c, e, 1));
+    c.edx = uint32_t(num);
+    Call(c, f_004D4230, 0x4CAFD6);
+    c.esp = e + 4;
+    return;
+  }
+  if (num > 0x10000) num = 0x10000;
+  const uint32_t surfs = Arg(c, e, 1);
+  c.esp = e - 0x10;
+  c.ebx = 8;
+  c.eax = uint32_t(num);
+  c.ecx = surfs;
+  Call(c, f_004CADC0, 0x4CAFFD);
+  Put(e + 8, 0);
+  for (uint32_t p = surfs;; p += 8) {
+    const uint32_t sort = U32(p);
+    uint32_t ent = (sort >> 7) & 0x7FF;
+    const uint32_t shader = U32(kSortedShaders + 4 * ((sort >> 18) & 0xFFF));
+    if (sort & 2) ent = 0x7FE;
+    if (St(Ld(shader + 0x58)) > Ld(0x55B580)) break;
+    if (St(Ld(shader + 0x58)) == Ld(0x55B584)) {
+      c.esp = e - 0x10;
+      Push(c, shader);
+      Push(c, 0x5430A0);
+      Push(c, 1);
+      CallPtr(c, U32(0x1549604), 0x4CB066, 0x4CB060);
+    }
+    if (CvarInt(0x14E43FC)) break;
+    if (U32(shader + 0x58) == 0x3F800000) {
+      c.esp = e - 0x10;
+      c.ebx = p;
+      c.esi = ent;
+      c.edi = shader;
+      c.ebp = uint32_t(num);
+      Push(c, ent);
+      Call(c, f_004CAB80, 0x4CB085);
+      c.ebx = ebx;
+      c.esi = esi;
+      c.edi = edi;
+      c.ebp = ebp;
+      if (c.eax && CvarInt(0x1534400)) {
+        c.esp = e + 4;
+        return;
+      }
+    }
+    const int32_t i = I32(e + 8) + 1;
+    Put(e + 8, uint32_t(i));
+    if (i >= num) break;
+  }
+  c.esp = e - 0x10;
+  Push(c, Arg(c, e, 1));
+  c.edx = uint32_t(num);
+  Call(c, f_004D4230, 0x4CB0B8);
+  c.ebx = ebx;
+  c.esp = e + 4;
+}
+
+// ---- the front end: the world's view -------------------------------------------
+
+namespace {
+
+// The world's copies of the view: its origin, the frustum planes (with the
+// far corners' offsets, nudged 0.001 back), the far plane's distance, the
+// view-projection matrix (transposed) and its inverse; the world.
+constexpr uint32_t kCullOrigin = 0x11BEAF8, kCullFrustum = 0x11BEB04, kCullFar = 0x11BEB84;
+constexpr uint32_t kViewProj = 0x11BEB90, kViewProjInverse = 0x11BEBD0, kWorld = 0x1535A34;
+
+// A plane (cplane_t) nudged 0.001 back, with its far corner's offsets
+// within a bounds from its normal's signs as integers (-0 counts as 0).
+void NudgePlane(uint32_t p) {
+  Put(p + 0xC, Fst(St(Ld(p + 0xC)) - Ld(0x55B58C)));
+  for (uint32_t k = 0; k < 3; k++)
+    Wr<uint8_t>(g_guest_base, p + 0x10 + k, uint8_t((I32(p + 4 * k) <= 0 ? 0 : 0xC) + 4 * k));
+}
+
+// A point's distance along a plane's normal (z + y + x).
+St Dot(uint32_t pt, uint32_t p) {
+  return St(Ld(pt + 8)) * Ld(p + 8) + St(Ld(pt + 4)) * Ld(p + 4) + St(Ld(pt)) * Ld(p);
+}
+
+}  // namespace
+
+// The nudge of a plane (EAX).
+void f_004D6830(Ctx& c) {
+  NudgePlane(c.eax);
+  c.esp += 4;
+}
+
+// The far distance, returned on the x87 stack: the far clip cvar's, or
+// with it 0 the linear fog's end while there is fog (0x13F9CF8 > 0 and
+// 0x1535950); at least the far plane's.
+void f_004D6880(Ctx& c) {
+  uint32_t v = U32(U32(kFarClip) + 0x1C);
+  if (St(F32{v}) == Ld(0x55B584) && I32(0x13F9CF8) > 0 && U32(0x1535950) && U32(kFog) == 0x2601)
+    v = U32(kFog + 0x24);
+  if (St(F32{v}) < Ld(kCullFar)) v = U32(kCullFar);
+  x87::LoadF32(c.fpu, v);
+  c.esp += 4;
+}
+
+// The frustum's four planes copied for the world's culls, each nudged.
+void f_004D6A10(Ctx& c) {
+  for (uint32_t i = 0; i < 4; i++) {
+    MovsD(kCullFrustum + 0x14 * i, kFrustum + 0x14 * i, 4);
+    NudgePlane(kCullFrustum + 0x14 * i);
+  }
+  c.esp += 4;
+}
+
+// The view-projection matrix: the view's matrix 0x15360E8 by the
+// projection into a local, its inverse (0x427E80, from the local), and the
+// local transposed.
+void f_004D6AB0(Ctx& c) {
+  const uint32_t e = c.esp, m = e - 0x40;
+  for (uint32_t col = 0; col < 4; col++)
+    for (uint32_t r = 0; r < 4; r++) {
+      const uint32_t q = 0x15360F0 + 16 * r, pc = kProjection + 4 * col;
+      Put(m + 16 * r + 4 * col, Fst(St(Ld(q + 4)) * Ld(pc + 0x30) + St(Ld(q - 8)) * Ld(pc) +
+                                    St(Ld(q - 4)) * Ld(pc + 0x10) + St(Ld(pc + 0x20)) * Ld(q)));
+    }
+  c.esp = m;
+  c.eax = kViewProjInverse;
+  c.ecx = m;
+  Call(c, f_00427E80, 0x4D6B20);
+  for (uint32_t r = 0; r < 4; r++)
+    for (uint32_t col = 0; col < 4; col++) Put(kViewProj + 16 * col + 4 * r, U32(m + 16 * r + 4 * col));
+  c.esp = e + 4;
+}
+
+// R_CellForCamera: the world's BSP walked from its node (+0x98) by the
+// view origin (in front of a node's plane: its first child) down to a leaf
+// (cluster not -1); EAX its cell (+8). ri.Error without a world.
+void f_004D7DF0(Ctx& c) {
+  const uint32_t e = c.esp;
+  if (!U32(kWorld)) {
+    Push(c, 0x5425EC);
+    Push(c, 1);
+    CallPtr(c, U32(0x1549604), 0x4D7E06, 0x4D7E00);
+    c.esp = e;
+  }
+  uint32_t node = U32(U32(kWorld) + 0x98);
+  while (U32(node) == 0xFFFFFFFF) {
+    const uint32_t p = U32(node + 0xC);
+    node = U32(node + (Dot(kCullOrigin, p) - Ld(p + 0xC) > Ld(0x55B584) ? 0x10 : 0x14));
+  }
+  c.eax = U32(node + 8);
+  c.esp = e + 4;
+}
+
+// Whether a polygon (EAX: points at +0x18, 12 bytes each, count at +0x1C)
+// lies wholly behind (or on) one of ECX planes (EDX, 0x14 bytes each): 1 at
+// the first plane none of its points is in front of (at once without
+// points), else 0.
+void f_004D7E70(Ctx& c) {
+  const uint32_t pts = U32(c.eax + 0x18), n = U32(c.eax + 0x1C);
+  uint32_t p = c.edx;
+  c.eax = 0;
+  for (uint32_t planes = c.ecx; planes; planes--, p += 0x14) {
+    bool front = false;
+    for (uint32_t k = n, pt = pts; k && !front; k--, pt += 0xC) front = Dot(pt, p) > Ld(p + 0xC);
+    if (!front) {
+      c.eax = 1;
+      break;
+    }
+  }
+  c.esp += 4;
+}
+
+// Whether no point of a polygon (EAX, as above) is in front of any of ECX
+// planes (EDX): 0 at the first point in front of one, else 1.
+void f_004D7ED0(Ctx& c) {
+  const uint32_t pts = U32(c.eax + 0x18), n = U32(c.eax + 0x1C);
+  uint32_t p = c.edx;
+  c.eax = 1;
+  for (uint32_t planes = c.ecx; planes && c.eax; planes--, p += 0x14)
+    for (uint32_t k = n, pt = pts; k; k--, pt += 0xC)
+      if (Dot(pt, p) > Ld(p + 0xC)) {
+        c.eax = 0;
+        break;
+      }
   c.esp += 4;
 }
 
