@@ -25,20 +25,25 @@
 // manifest/CoDSP.manifest; FINDINGS.md "Renderer back end". Names and
 // evidence are in the Ghidra plate comments.
 //
-// The GL calls go through the renderer's qgl function pointers (set by
-// its QGL_Init from opengl32's exports and wglGetProcAddress; the names
-// below are the entry points it loads into each), with the original's
+// The GL calls go to the host's GL (src/render_gl.h) with the original's
+// arguments, in the original's order. The renderer's qgl function
+// pointers (set by its QGL_Init from opengl32's exports and
+// wglGetProcAddress; the names below are the entry points it loads into
+// each) still decide which extensions it uses; those the host's GL does
+// not have are called through them as the lifted call sites do, with the
 // arguments on the guest stack at the original's ESP and its return
-// addresses, as the lifted call sites make them. Calling conventions are
+// addresses, as are the lifted functions. Calling conventions are
 // the originals' (register arguments from whole-program optimisation; see
 // each function). Not reproduced: EAX, ECX and EDX on return (no caller
 // reads them), the saved registers and locals in the original's frame
 // below ESP (but for the shadow volumes', f_005082D0), EFLAGS and the x87
 // status word (x87_value.h).
 
+#include <bit>
 #include <cstdint>
 #include <initializer_list>
 
+#include "render_gl.h"
 #include "x86/lifted.h"
 #include "x87_value.h"
 
@@ -188,31 +193,21 @@ void CallPtr(Ctx& c, uint32_t ptr, uint32_t va) {
   Dispatch(c, U32(ptr), va);
 }
 uint32_t Arg(const Ctx& c, uint32_t e, int n) { return U32(e + 4 * n); }
+// A GL argument: a float from its bits, a guest address as a host pointer
+// (null stays null).
+float F(uint32_t bits) { return std::bit_cast<float>(bits); }
+template <class T = const void*>
+T Host(uint32_t va) {
+  return va ? reinterpret_cast<T>(g_guest_base + va) : nullptr;
+}
 // The integer of a cvar_t* held at va.
 uint32_t CvarInt(uint32_t va) { return U32(U32(va) + 0x20); }
 
 // The qgl pointers.
-constexpr uint32_t kglEnable = 0x1534F68, kglDisable = 0x15349E0,
-                   kglBindTexture = 0x153507C, kglTexEnvi = 0x153515C,
-                   kglCullFace = 0x1535284, kglDepthFunc = 0x1534844,
-                   kglDepthMask = 0x1534D68, kglPolygonMode = 0x1534D74,
-                   kglAlphaFunc = 0x1535208, kglColor3f = 0x1535050,
-                   kglPolygonOffset = 0x15350B0, kglBlendFunc = 0x1534ABC,
-                   kglFogfv = 0x15349F4, kglEnableClientState = 0x1534938,
-                   kglDisableClientState = 0x153495C,
-                   kglClientActiveTextureARB = 0x1534B78, kglBegin = 0x1535360,
-                   kglEnd = 0x1534EE0, kglDrawElements = 0x153513C,
-                   kglArrayElement = 0x1535104, kglLockArraysEXT = 0x1534DDC,
-                   kglActiveTextureARB = 0x1534C14, kglTexEnvfv = 0x1534A10,
-                   kglTexEnvf = 0x15349B8, kglTexCoordPointer = 0x15349A0,
-                   kglFogi = 0x1534C84, kglFogf = 0x1535598, kglHint = 0x15351A0,
-                   kglColorPointer = 0x153542C, kglNormalPointer = 0x153503C,
-                   kglVertexPointer = 0x15354F0, kglUnlockArraysEXT = 0x1534C2C,
-                   kglArrayObjectATI = 0x1535390, kglBindBufferARB = 0x1534DE4,
-                   kglDrawRangeElementsEXT = 0x1534DB0, kglDepthRange = 0x153539C,
-                   kglColor4ubv = 0x1534EB0, kglDrawArrays = 0x153501C,
-                   kglColorMask = 0x1534DF8, kglStencilFunc = 0x1534E7C,
-                   kglStencilOp = 0x1535428;
+constexpr uint32_t kglArrayElement = 0x1535104, kglLockArraysEXT = 0x1534DDC,
+                   kglUnlockArraysEXT = 0x1534C2C, kglArrayObjectATI = 0x1535390,
+                   kglBindBufferARB = 0x1534DE4, kglDrawRangeElementsEXT = 0x1534DB0,
+                   kglBindFragmentShaderATI = 0x1535014;
 // The refimport table's ri.Printf and ri.Error (cdecl).
 constexpr uint32_t kPrintf = 0x1549600, kError = 0x1549604;
 
@@ -238,14 +233,6 @@ constexpr uint32_t kTessShader = 0x17F0C70, kTessVerts = 0x17F0C88,
                    kTessNormals = 0x1698C40, kVertColors = 0x1690C40,
                    kColors = 0x16E0C40;
 
-void Enable(Ctx& c, uint32_t cap, uint32_t va) {
-  Push(c, cap);
-  CallPtr(c, kglEnable, va);
-}
-void Disable(Ctx& c, uint32_t cap, uint32_t va) {
-  Push(c, cap);
-  CallPtr(c, kglDisable, va);
-}
 
 }  // namespace
 
@@ -259,7 +246,7 @@ void f_004C89D0(Ctx& c) {
   if (!U32(0x1549B50) && !(U32(kStateBits) & 0x200000) && CvarInt(0x15347F4)) {
     const uint32_t fog = (U8(0x15496EC) & 8) ? U32(0x1535890) : U32(0x13F9CF8);
     if (fog) {
-      Enable(c, 0xB60, 0x4C8A0D);
+      glEnable(0xB60);
       Put(kStateBits, U32(kStateBits) | 0x200000);
     }
   }
@@ -284,9 +271,7 @@ void f_004C8A20(Ctx& c) {
       Put(col + 8, Fst(St(Ld(0x1534648)) * Ld(kIdentityLight)));
     }
     Put(col + 0xC, U32(0x153464C));
-    Push(c, col);
-    Push(c, 0xB66);
-    CallPtr(c, kglFogfv, 0x4C8A95);
+    glFogfv(0xB66, Host<const float*>(col));
   }
   c.esp = e + 4;
 }
@@ -313,16 +298,14 @@ void f_004CB3B0(Ctx& c) {
   if (CvarInt(0x1534460) && U32(0x1535ABC)) texnum = U32(U32(0x1535ABC) + 0x58);
   const uint32_t target = U32(kTarget + 4 * U32(kUnit));
   if (target != U32(image + 0x54)) {
-    if (target) Disable(c, target, 0x4CB402);
-    Enable(c, U32(image + 0x54), 0x4CB40C);
+    if (target) glDisable(target);
+    glEnable(U32(image + 0x54));
     Put(kTarget + 4 * U32(kUnit), U32(image + 0x54));
   }
   if (U32(kBound + 4 * U32(kUnit)) != texnum) {
     Put(image + 0x5C, U32(0x1535A24));
     Put(kBound + 4 * U32(kUnit), texnum);
-    Push(c, texnum);
-    Push(c, U32(image + 0x54));
-    CallPtr(c, kglBindTexture, 0x4CB44B);
+    glBindTexture(U32(image + 0x54), texnum);
   }
   c.esp = e + 4;
 }
@@ -341,10 +324,7 @@ void f_004CB640(Ctx& c) {
       case 0x2101: va = 0x4CB6D7; break;
     }
     if (va) {
-      Push(c, env);
-      Push(c, 0x2200);
-      Push(c, 0x2300);
-      CallPtr(c, kglTexEnvi, va);
+      glTexEnvi(0x2300, 0x2200, int32_t(env));
     } else {
       Push(c, env);
       Push(c, 0x54303C);
@@ -364,12 +344,11 @@ void f_004CB5D0(Ctx& c) {
   const uint32_t type = c.esi, cur = U32(kCullType);
   if (cur != type) {
     if (type == 2) {
-      Disable(c, 0xB44, 0x4CB5E3);
+      glDisable(0xB44);
     } else {
-      if (cur == 2) Enable(c, 0xB44, 0x4CB5FA);
+      if (cur == 2) glEnable(0xB44);
       const bool back = (type == 1) == (U32(0x1549930) == 0);
-      Push(c, back ? 0x405 : 0x404);
-      CallPtr(c, kglCullFace, back ? 0x4CB613 : 0x4CB629);
+      glCullFace(back ? 0x405 : 0x404);
     }
     Put(kCullType, type);
   }
@@ -395,63 +374,49 @@ void f_004CB710(Ctx& c) {
   }
   if (diff & 0x70000) {
     if (diff & 0x10000) {
-      if (bits & 0x10000) Disable(c, 0xB71, 0x4CB740);
-      else Enable(c, 0xB71, 0x4CB748);
+      if (bits & 0x10000) glDisable(0xB71);
+      else glEnable(0xB71);
     }
-    Push(c, (bits & 0x20000) ? 0x202 : (bits & 0x40000) ? 0x207 : 0x203);
-    CallPtr(c, kglDepthFunc, 0x4CB771);
+    glDepthFunc((bits & 0x20000) ? 0x202 : (bits & 0x40000) ? 0x207 : 0x203);
   }
   c.esp = e - 0xC;
   if (diff & 0x100) {
-    Push(c, (bits & 0x100) ? 1 : 0);
-    CallPtr(c, kglDepthMask, 0x4CB78F);
+    glDepthMask((bits & 0x100) ? 1 : 0);
   }
   if (diff & 0x1000) {
-    Push(c, (bits & 0x1000) ? 0x1B01 : 0x1B02);
-    Push(c, 0x408);
-    CallPtr(c, kglPolygonMode, 0x4CB7B4);
+    glPolygonMode(0x408, (bits & 0x1000) ? 0x1B01 : 0x1B02);
   }
   if (diff & 0x70000000) {
     switch (bits & 0x70000000) {
       case 0:
-        Disable(c, 0xBC0, 0x4CB7F8);
+        glDisable(0xBC0);
         break;
       case 0x10000000:
-        Enable(c, 0xBC0, 0x4CB7E4);
-        Push(c, 0);
-        Push(c, 0x204);
-        CallPtr(c, kglAlphaFunc, 0x4CB833);
+        glEnable(0xBC0);
+        glAlphaFunc(0x204, 0.0f);
         break;
       case 0x20000000:
-        Enable(c, 0xBC0, 0x4CB805);
-        Push(c, 0x3F000000);
-        Push(c, 0x201);
-        CallPtr(c, kglAlphaFunc, 0x4CB833);
+        glEnable(0xBC0);
+        glAlphaFunc(0x201, 0.5f);
         break;
       case 0x40000000:
-        Enable(c, 0xBC0, 0x4CB823);
-        Push(c, 0x3F000000);
-        Push(c, 0x206);
-        CallPtr(c, kglAlphaFunc, 0x4CB833);
+        glEnable(0xBC0);
+        glAlphaFunc(0x206, 0.5f);
         break;
     }
   }
   if (diff & 0x100000) {
     if (U32(U32(0x1535A34) + 0x118) && !CvarInt(0x15346C4) && (bits & 0x100000)) {
-      Enable(c, 0xB50, 0x4CB86C);
+      glEnable(0xB50);
     } else {
-      Disable(c, 0xB50, 0x4CB879);
+      glDisable(0xB50);
       if (bits & 0x100000) {
         if (U32(kArrayBits) & 0x100) {
-          Push(c, 0x8076);
-          CallPtr(c, kglDisableClientState, 0x4CB894);
+          glDisableClientState(0x8076);
           Put(kArrayBits, U32(kArrayBits) & ~0x100u);
         }
         const uint32_t white = U32(kIdentityLight);
-        Push(c, white);
-        Push(c, white);
-        Push(c, white);
-        CallPtr(c, kglColor3f, 0x4CB8AC);
+        glColor3f(F(white), F(white), F(white));
         bits &= ~0x100000u;
       }
     }
@@ -460,47 +425,37 @@ void f_004CB710(Ctx& c) {
     if (bits & 0x200000) {
       Call(c, f_004C89D0, 0x4CB8CE);
     } else if (U32(kStateBits) & 0x200000) {
-      Disable(c, 0xB60, 0x4CB8DD);
+      glDisable(0xB60);
       Put(kStateBits, U32(kStateBits) & ~0x200000u);
     }
   }
   if (diff & 0xE000) {
     if (bits & 0xE000) {
-      Enable(c, 0x8037, 0x4CB900);
+      glEnable(0x8037);
       const uint32_t units = U32(0x1534530) + 0x1C, factor = U32(0x153447C) + 0x1C;
       if (bits & 0x2000) {
-        Push(c, U32(units));
-        Push(c, U32(factor));
-        CallPtr(c, kglPolygonOffset, 0x4CB91F);
+        glPolygonOffset(F(U32(factor)), F(U32(units)));
       } else if (bits & 0x4000) {
-        c.esp -= 8;
         const St u(Ld(units));
-        Put(c.esp + 4, Fst(u + u));
+        const F32 units2 = Fst(u + u);
         const St f(Ld(factor));
-        Put(c.esp, Fst(f + f));
-        CallPtr(c, kglPolygonOffset, 0x4CB94B);
+        glPolygonOffset(F(Fst(f + f).bits), F(units2.bits));
       } else {
-        Push(c, U32(units));
-        Push(c, 0);
-        CallPtr(c, kglPolygonOffset, 0x4CB95F);
+        glPolygonOffset(0.0f, F(U32(units)));
       }
     } else {
-      Disable(c, 0x8037, 0x4CB967);
+      glDisable(0x8037);
     }
   }
   struct Cap {
-    uint32_t bit, cap, enable_va, disable_va;
+    uint32_t bit, cap;
   };
   static constexpr Cap kCaps[] = {
-      {0x2000000, 0x8620, 0x4CB984, 0x4CB98C},
-      {0x400000, 0x86DE, 0x4CB9A9, 0x4CB9B1},
-      {0x800000, 0x8522, 0x4CB9CE, 0x4CB9D6},
-      {0x1000000, 0x8920, 0x4CB9F3, 0x4CB9FB},
-  };
+      {0x2000000, 0x8620}, {0x400000, 0x86DE}, {0x800000, 0x8522}, {0x1000000, 0x8920}};
   for (const Cap& k : kCaps) {
     if (!(diff & k.bit)) continue;
-    if (bits & k.bit) Enable(c, k.cap, k.enable_va);
-    else Disable(c, k.cap, k.disable_va);
+    if (bits & k.bit) glEnable(k.cap);
+    else glDisable(k.cap);
   }
   Put(kStateBits, bits);
   if (!(diff & 0xFF)) {
@@ -531,12 +486,10 @@ void f_004CB710(Ctx& c) {
       CallPtr(c, kError, 0x4CBADC);
       c.esp += 8;
     }
-    Enable(c, 0xBE2, 0x4CBAEA);
-    Push(c, dst);
-    Push(c, src);
-    CallPtr(c, kglBlendFunc, 0x4CBAF2);
+    glEnable(0xBE2);
+    glBlendFunc(src, dst);
   } else {
-    Disable(c, 0xBE2, 0x4CBB08);
+    glDisable(0xBE2);
   }
   c.esp = e;
   f_004C8A20(c);
@@ -550,43 +503,27 @@ void f_004CBBE0(Ctx& c) {
   const uint32_t diff = U32(kArrayBits) ^ bits;
   c.esp = e - 4;
   if (diff) {
-    // Per unit: the calls selecting it, enabling, disabling and selecting
-    // the cached client unit again.
-    static constexpr uint32_t kUnitVa[8][4] = {
-        {0x4CBC06, 0x4CBC18, 0x4CBC20, 0x4CBC35}, {0x4CBC4F, 0x4CBC61, 0x4CBC69, 0x4CBC7F},
-        {0x4CBC99, 0x4CBCAB, 0x4CBCB3, 0x4CBCC9}, {0x4CBCE3, 0x4CBCF5, 0x4CBCFD, 0x4CBD13},
-        {0x4CBD2D, 0x4CBD3F, 0x4CBD47, 0x4CBD5D}, {0x4CBD77, 0x4CBD89, 0x4CBD91, 0x4CBDA7},
-        {0x4CBDC1, 0x4CBDD3, 0x4CBDDB, 0x4CBDF1}, {0x4CBE0A, 0x4CBE1D, 0x4CBE25, 0x4CBE3B},
-    };
     for (uint32_t u = 0; u < 8; u++) {
       const uint32_t bit = 1u << u;
       if (!(diff & bit)) continue;
       if (U32(kClientUnit) != u) {
-        Push(c, 0x84C0 + u);
-        CallPtr(c, kglClientActiveTextureARB, kUnitVa[u][0]);
+        glClientActiveTextureARB(0x84C0 + u);
       }
-      Push(c, 0x8078);
-      if (bits & bit) CallPtr(c, kglEnableClientState, kUnitVa[u][1]);
-      else CallPtr(c, kglDisableClientState, kUnitVa[u][2]);
+      if (bits & bit) glEnableClientState(0x8078);
+      else glDisableClientState(0x8078);
       const uint32_t cur = U32(kClientUnit);
       if (cur != u) {
-        Push(c, cur + 0x84C0);
-        CallPtr(c, kglClientActiveTextureARB, kUnitVa[u][3]);
+        glClientActiveTextureARB(cur + 0x84C0);
       }
     }
     struct Array {
-      uint32_t bit, array, enable_va, disable_va;
+      uint32_t bit, array;
     };
-    static constexpr Array kArrays[] = {
-        {0x100, 0x8076, 0x4CBE54, 0x4CBE5C},
-        {0x200, 0x8075, 0x4CBE75, 0x4CBE7D},
-        {0x400, 0x8074, 0x4CBE96, 0x4CBEA7},
-    };
+    static constexpr Array kArrays[] = {{0x100, 0x8076}, {0x200, 0x8075}, {0x400, 0x8074}};
     for (const Array& a : kArrays) {
       if (!(diff & a.bit)) continue;
-      Push(c, a.array);
-      if (bits & a.bit) CallPtr(c, kglEnableClientState, a.enable_va);
-      else CallPtr(c, kglDisableClientState, a.disable_va);
+      if (bits & a.bit) glEnableClientState(a.array);
+      else glDisableClientState(a.array);
     }
     Put(kArrayBits, bits);
   }
@@ -596,26 +533,22 @@ void f_004CBBE0(Ctx& c) {
 // ---- drawing ----------------------------------------------------------------
 
 // Triangles (EAX the indexes, numIndexes on the stack) as strips in
-// immediate mode through the element function in EDI (glArrayElement):
+// immediate mode through glArrayElement (the element function in EDI,
+// which its only caller sets to glArrayElement's qgl pointer):
 // each triangle continues the strip when it shares the edge a strip's
 // next triangle would (alternating windings), else starts a new one.
 // Counts the strips (0x11E0764) and vertices sent (0x11E0760); the
 // numIndexes slot ends up the loop's counter (0).
 void f_004F3180(Ctx& c) {
-  const uint32_t e = c.esp, element = c.edi;
+  const uint32_t e = c.esp;
   const int32_t n = I32(e + 4);
   uint32_t p = c.eax;
   Put(0x11E0764, U32(0x11E0764) + 1);
   if (n > 0) {
-    c.esp = e - 0x18;
-    Push(c, 5);
-    CallPtr(c, kglBegin, 0x4F31A3);
-    Push(c, U16(p));
-    CallTo(c, element, 0x4F31AD);  // call edi
-    Push(c, U16(p + 2));
-    CallTo(c, element, 0x4F31B4);
-    Push(c, U16(p + 4));
-    CallTo(c, element, 0x4F31BB);
+    glBegin(5);
+    glArrayElement(U16(p));
+    glArrayElement(U16(p + 2));
+    glArrayElement(U16(p + 4));
     uint32_t i0 = U16(p), i1 = U16(p + 2), i2 = U16(p + 4);
     Put(0x11E0760, U32(0x11E0760) + 3);
     if (n > 3) {
@@ -626,26 +559,20 @@ void f_004F3180(Ctx& c) {
       do {
         uint32_t sent;
         if (!odd && U16(p - 4) == i2 && U16(p - 2) == i1) {
-          Push(c, U16(p));
-          CallTo(c, element, 0x4F321A);
+          glArrayElement(U16(p));
           sent = U32(0x11E0760) + 1;
           odd = true;
         } else if (odd && i2 == U16(p - 2) && i0 == U16(p - 4)) {
-          Push(c, U16(p));
-          CallTo(c, element, 0x4F323D);
+          glArrayElement(U16(p));
           sent = U32(0x11E0760) + 1;
           odd = false;
         } else {
-          CallPtr(c, kglEnd, 0x4F3247);
-          Push(c, 5);
-          CallPtr(c, kglBegin, 0x4F324F);
+          glEnd();
+          glBegin(5);
           Put(0x11E0764, U32(0x11E0764) + 1);
-          Push(c, U16(p - 4));
-          CallTo(c, element, 0x4F3267);
-          Push(c, U16(p - 2));
-          CallTo(c, element, 0x4F326E);
-          Push(c, U16(p));
-          CallTo(c, element, 0x4F3274);
+          glArrayElement(U16(p - 4));
+          glArrayElement(U16(p - 2));
+          glArrayElement(U16(p));
           sent = U32(0x11E0760) + 3;
           odd = false;
         }
@@ -657,9 +584,7 @@ void f_004F3180(Ctx& c) {
         Put(e + 4, --left);
       } while (left);
     }
-    c.esp = e;
-    Dispatch(c, U32(kglEnd), 0x4F32AC);  // jmp [glEnd]
-    return;
+    glEnd();
   }
   c.esp = e + 4;
 }
@@ -684,11 +609,7 @@ void f_004F32C0(Ctx& c) {
   if (elements) {
     Put(0x1549B14, U32(0x1549B14) + n);
     Put(0x1549B18, U32(0x1549B18) + 1);
-    Push(c, c.eax);
-    Push(c, 0x1403);
-    Push(c, n);
-    Push(c, 4);
-    CallPtr(c, kglDrawElements, 0x4F3312);
+    glDrawElements(4, int32_t(n), 0x1403, Host(c.eax));
   } else if (strips_ret) {
     c.edi = U32(kglArrayElement);
     Push(c, n);
@@ -767,43 +688,33 @@ void f_004F3410(Ctx& c) {
   const uint32_t tgt = kTarget + 4 * unit, bound = kBound + 4 * unit, slot = kTexEnv + 4 * unit;
   if (U32(tgt) != target || U32(image + 0x58) != U32(bound) || env != U32(slot)) {
     if (unit != U32(kUnit)) {
-      Push(c, unit + 0x84C0);
-      CallPtr(c, kglActiveTextureARB, 0x4F3484);
+      glActiveTextureARB(unit + 0x84C0);
       Put(kUnit, unit);
     }
     const uint32_t cur = U32(tgt);
     if (cur != target) {
-      if (cur) Disable(c, cur, 0x4F34A0);
-      Enable(c, target, 0x4F34A7);
+      if (cur) glDisable(cur);
+      glEnable(target);
       Put(tgt, target);
     }
     if (U32(image + 0x58) != U32(bound)) {
-      Push(c, U32(image + 0x58));
-      Push(c, target);
       Put(image + 0x5C, U32(0x1535A24));
-      CallPtr(c, kglBindTexture, 0x4F34CB);
+      glBindTexture(target, U32(image + 0x58));
       Put(bound, U32(image + 0x58));
     }
     if (env != U32(slot)) {
-      Push(c, env);
-      Push(c, 0x2200);
-      Push(c, 0x2300);
-      CallPtr(c, kglTexEnvi, 0x4F34F3);
+      glTexEnvi(0x2300, 0x2200, int32_t(env));
       Put(slot, env);
     }
   }
   c.esp = e - 8;
   if (env == 0x8570) {
     if (unit != U32(kUnit)) {
-      Push(c, unit + 0x84C0);
-      CallPtr(c, kglActiveTextureARB, 0x4F3523);
+      glActiveTextureARB(unit + 0x84C0);
       Put(kUnit, unit);
     }
-    Push(c, U32(b + 0x94));
-    Push(c, 0x2201);
-    Push(c, 0x2300);
-    CallPtr(c, kglTexEnvfv, 0x4F3540);
-    // The combiner's parameters and their fields, each its own call site.
+    glTexEnvfv(0x2300, 0x2201, Host<const float*>(U32(b + 0x94)));
+    // The combiner's parameters and their fields.
     static constexpr struct {
       uint32_t pname, field;
       bool f;
@@ -813,26 +724,19 @@ void f_004F3410(Ctx& c) {
         {0x8572, 0x30}, {0xD1C, 0x4C, true},  {0x8588, 0x34}, {0x8589, 0x38},
         {0x858A, 0x3C}, {0x8598, 0x40},       {0x8599, 0x44}, {0x859A, 0x48},
     };
-    uint32_t va = 0x4F355A;
     for (const auto& k : kCombine) {
-      Push(c, U32(U32(b + 0x94) + k.field));
-      Push(c, k.pname);
-      Push(c, 0x2300);
-      CallPtr(c, k.f ? kglTexEnvf : kglTexEnvi, va);
-      va += 0x1A;
+      const uint32_t v = U32(U32(b + 0x94) + k.field);
+      if (k.f) glTexEnvf(0x2300, k.pname, F(v));
+      else glTexEnvi(0x2300, k.pname, int32_t(v));
     }
   }
   const uint32_t shader = U32(b + 0x98), on = 0x1534608 + 4 * unit;
   if (shader && (U32(shader) || U32(on))) {
     if (unit != U32(kUnit)) {
-      Push(c, unit + 0x84C0);
-      CallPtr(c, kglActiveTextureARB, 0x4F3717);
+      glActiveTextureARB(unit + 0x84C0);
       Put(kUnit, unit);
     }
-    Push(c, U32(shader));
-    Push(c, 0x86DF);
-    Push(c, 0x86DE);
-    CallPtr(c, kglTexEnvi, 0x4F3736);
+    glTexEnvi(0x86DE, 0x86DF, int32_t(U32(shader)));
     // The shader operations' cases (0x86E7 on, from the original's
     // table): 0 the offset matrix, 2 the previous texture input and the
     // dot product's, 3 the const eye vector and those, 1 the previous
@@ -841,30 +745,15 @@ void f_004F3410(Ctx& c) {
     const uint32_t op = U32(shader) - 0x86E7;
     const uint8_t k = op <= 12 ? kCase[op] : 4;
     if (k == 0) {
-      Push(c, shader + 0xC);
-      Push(c, 0x86E0);
-      Push(c, 0x86DE);
-      CallPtr(c, kglTexEnvfv, 0x4F376B);
+      glTexEnvfv(0x86DE, 0x86E0, Host<const float*>(shader + 0xC));
     } else if (k == 1) {
-      Push(c, U32(shader + 4));
-      Push(c, 0x86E4);
-      Push(c, 0x86DE);
-      CallPtr(c, kglTexEnvi, 0x4F37C0);
+      glTexEnvi(0x86DE, 0x86E4, int32_t(U32(shader + 4)));
     } else if (k != 4) {
       if (k == 3) {
-        Push(c, shader + 0xC);
-        Push(c, 0x86E5);
-        Push(c, 0x86DE);
-        CallPtr(c, kglTexEnvfv, 0x4F378C);
+        glTexEnvfv(0x86DE, 0x86E5, Host<const float*>(shader + 0xC));
       }
-      Push(c, U32(shader + 4));
-      Push(c, 0x86E4);
-      Push(c, 0x86DE);
-      CallPtr(c, kglTexEnvi, 0x4F37A6);
-      Push(c, U32(shader + 8));
-      Push(c, 0x86D9);
-      Push(c, 0x86DE);
-      CallPtr(c, kglTexEnvi, 0x4F37C0);
+      glTexEnvi(0x86DE, 0x86E4, int32_t(U32(shader + 4)));
+      glTexEnvi(0x86DE, 0x86D9, int32_t(U32(shader + 8)));
     }
     Put(on, U32(shader) != 0);
   }
@@ -878,17 +767,13 @@ void f_004F3810(Ctx& c) {
   c.esp -= 4;
   if (U32(tgt)) {
     if (unit != U32(kUnit)) {
-      Push(c, unit + 0x84C0);
-      CallPtr(c, kglActiveTextureARB, 0x4F382D);
+      glActiveTextureARB(unit + 0x84C0);
       Put(kUnit, unit);
     }
-    Disable(c, U32(tgt), 0x4F3841);
+    glDisable(U32(tgt));
     Put(tgt, 0);
     if (U32(0x1534608 + 4 * unit)) {
-      Push(c, 0);
-      Push(c, 0x86DF);
-      Push(c, 0x86DE);
-      CallPtr(c, kglTexEnvi, 0x4F3870);
+      glTexEnvi(0x86DE, 0x86DF, 0);
       Put(0x1534608 + 4 * unit, 0);
     }
   }
@@ -901,20 +786,15 @@ void f_004F3810(Ctx& c) {
 void f_004F38B0(Ctx& c) {
   const uint32_t e = c.esp, unit = c.esi;
   if (U32(kClientUnit) != unit) {
-    Push(c, unit + 0x84C0);
-    CallPtr(c, kglClientActiveTextureARB, 0x4F38C1);
+    glClientActiveTextureARB(unit + 0x84C0);
     Put(kClientUnit, unit);
   }
   if (!((1u << (U32(kClientUnit) & 31)) & U32(kArrayBits))) {
-    Push(c, 0x8078);
-    CallPtr(c, kglEnableClientState, 0x4F38E4);
+    glEnableClientState(0x8078);
     Put(kArrayBits, U32(kArrayBits) | 1u << (U32(kClientUnit) & 31));
   }
-  Push(c, Arg(c, e, 2));
-  Push(c, Arg(c, e, 3));
-  Push(c, 0x1406);
-  Push(c, U32(Arg(c, e, 1) + 0x8C));
-  CallPtr(c, kglTexCoordPointer, 0x4F3917);
+  glTexCoordPointer(int32_t(U32(Arg(c, e, 1) + 0x8C)), 0x1406, int32_t(Arg(c, e, 3)),
+                    Host(Arg(c, e, 2)));
   c.esp = e + 4;
 }
 
@@ -924,12 +804,10 @@ void f_004F3920(Ctx& c) {
   c.esp -= 4;
   if (bit & U32(kArrayBits)) {
     if (U32(kClientUnit) != unit) {
-      Push(c, unit + 0x84C0);
-      CallPtr(c, kglClientActiveTextureARB, 0x4F3942);
+      glClientActiveTextureARB(unit + 0x84C0);
       Put(kClientUnit, unit);
     }
-    Push(c, 0x8078);
-    CallPtr(c, kglDisableClientState, 0x4F3953);
+    glDisableClientState(0x8078);
     Put(kArrayBits, U32(kArrayBits) & ~bit);
   }
   c.esp += 8;
@@ -986,12 +864,10 @@ void f_004F3D80(Ctx& c) {
           const uint32_t bit = 1u << (u & 31);
           if (U32(kArrayBits) & bit) {
             if (U32(kClientUnit) != u) {
-              Push(c, u + 0x84C0);
-              CallPtr(c, kglClientActiveTextureARB, 0x4F3E59);
+              glClientActiveTextureARB(u + 0x84C0);
               Put(kClientUnit, u);
             }
-            Push(c, 0x8078);
-            CallPtr(c, kglDisableClientState, 0x4F3E6A);
+            glDisableClientState(0x8078);
             Put(kArrayBits, U32(kArrayBits) & ~bit);
           }
         }
@@ -1012,7 +888,7 @@ void f_004F3D80(Ctx& c) {
   const uint32_t frag = U32(stage + 0x644);
   if (frag != U32(0x1534670)) {
     Push(c, frag);
-    CallPtr(c, 0x1535014, 0x4F3EE6);
+    CallPtr(c, kglBindFragmentShaderATI, 0x4F3EE6);
     Put(0x1534670, frag);
   }
   c.esi = esi;
@@ -1025,13 +901,11 @@ void f_004F3D80(Ctx& c) {
 void f_004F39B0(Ctx& c) {
   const uint32_t e = c.esp, unit = c.esi;
   if (U32(kClientUnit) != unit) {
-    Push(c, unit + 0x84C0);
-    CallPtr(c, kglClientActiveTextureARB, 0x4F39C1);
+    glClientActiveTextureARB(unit + 0x84C0);
     Put(kClientUnit, unit);
   }
   if (!((1u << (U32(kClientUnit) & 31)) & U32(kArrayBits))) {
-    Push(c, 0x8078);
-    CallPtr(c, kglEnableClientState, 0x4F39E4);
+    glEnableClientState(0x8078);
     Put(kArrayBits, U32(kArrayBits) | 1u << (U32(kClientUnit) & 31));
   }
   Push(c, Arg(c, e, 3));
@@ -1091,12 +965,10 @@ void f_004F3F00(Ctx& c) {
         const uint32_t bit = 1u << (u & 31);
         if (U32(kArrayBits) & bit) {
           if (U32(kClientUnit) != u) {
-            Push(c, u + 0x84C0);
-            CallPtr(c, kglClientActiveTextureARB, 0x4F3FDE);
+            glClientActiveTextureARB(u + 0x84C0);
             Put(kClientUnit, u);
           }
-          Push(c, 0x8078);
-          CallPtr(c, kglDisableClientState, 0x4F3FEF);
+          glDisableClientState(0x8078);
           Put(kArrayBits, U32(kArrayBits) & ~bit);
         }
       }
@@ -1115,7 +987,7 @@ void f_004F3F00(Ctx& c) {
   const uint32_t frag = U32(stage + 0x644);
   if (frag != U32(0x1534670)) {
     Push(c, frag);
-    CallPtr(c, 0x1535014, 0x4F406E);
+    CallPtr(c, kglBindFragmentShaderATI, 0x4F406E);
     Put(0x1534670, frag);
   }
   c.esi = esi;
@@ -1128,7 +1000,7 @@ void f_004F3F00(Ctx& c) {
 // Fog off: disables it if the state bits have it on.
 void f_004C89A0(Ctx& c) {
   if (U32(kStateBits) & 0x200000) {
-    Disable(c, 0xB60, 0x4C89B1);
+    glDisable(0xB60);
     Put(kStateBits, U32(kStateBits) & ~0x200000u);
   }
   c.esp += 4;
@@ -1145,7 +1017,7 @@ void f_004C8830(Ctx& c) {
   c.esp = e - 4;
   if (!CvarInt(0x15347F4) || !U32(fog + 0x30)) {
     if (U32(kStateBits) & 0x200000) {
-      Disable(c, 0xB60, 0x4C8852);
+      glDisable(0xB60);
       Put(kStateBits, U32(kStateBits) & ~0x200000u);
     }
     c.esp = e + 4;
@@ -1156,38 +1028,28 @@ void f_004C8830(Ctx& c) {
   if (!U32(fog)) Put(fog, 0x2601);
   Call(c, f_004C89D0, 0x4C88A0);
   if (U32(fog) != U32(0x1534638)) {
-    Push(c, U32(fog));
-    Push(c, 0xB65);
-    CallPtr(c, kglFogi, 0x4C88B0);
+    glFogi(0xB65, int32_t(U32(fog)));
     Put(0x1534638, U32(fog));
   }
   for (uint32_t i = 0; i < 0x10; i += 4) Put(0x1534640 + i, U32(fog + 0x10 + i));
   Call(c, f_004C8A20, 0x4C88E6);
   if (!(St(Ld(fog + 0x2C)) == Ld(0x1534658))) {
-    Push(c, U32(fog + 0x2C));
-    Push(c, 0xB62);
-    CallPtr(c, kglFogf, 0x4C88FF);
+    glFogf(0xB62, F(U32(fog + 0x2C)));
     Put(0x1534658, U32(fog + 0x2C));
   }
   if (U32(0x153463C) != U32(fog + 4)) {
-    Push(c, U32(fog + 4));
-    Push(c, 0xC54);
-    CallPtr(c, kglHint, 0x4C891F);
+    glHint(0xC54, U32(fog + 4));
     Put(0x153463C, U32(fog + 4));
   }
   if (!(St(Ld(0x1534650)) == Ld(fog + 0x20))) {
-    Push(c, U32(fog + 0x20));
-    Push(c, 0xB63);
-    CallPtr(c, kglFogf, 0x4C8947);
+    glFogf(0xB63, F(U32(fog + 0x20)));
     Put(0x1534650, U32(fog + 0x20));
   }
   const uint32_t zfar = U32(0x15343F0) + 0x1C;
   const St end(Ld(!(St(Ld(zfar)) == 0.0f) ? zfar : fog + 0x24));
   Put(e - 4, Fst(end));
   if (!(end == Ld(0x1534654))) {
-    Push(c, U32(e - 4));
-    Push(c, 0xB64);
-    CallPtr(c, kglFogf, 0x4C898F);
+    glFogf(0xB64, F(U32(e - 4)));
     Put(0x1534654, U32(e - 4));
   }
   c.esp = e + 4;
@@ -1202,7 +1064,7 @@ void f_004F5D50(Ctx& c) {
   c.esp = e - 4;
   auto off = [&] {
     if (U32(kStateBits) & 0x200000) {
-      Disable(c, 0xB60, 0x4F5D6B);
+      glDisable(0xB60);
       Put(kStateBits, U32(kStateBits) & ~0x200000u);
     }
   };
@@ -1244,12 +1106,10 @@ void f_004F4090(Ctx& c) {
       const uint32_t bit = 1u << (u & 31);
       if (U32(kArrayBits) & bit) {
         if (U32(kClientUnit) != u) {
-          Push(c, u + 0x84C0);
-          CallPtr(c, kglClientActiveTextureARB, 0x4F40C1);
+          glClientActiveTextureARB(u + 0x84C0);
           Put(kClientUnit, u);
         }
-        Push(c, 0x8078);
-        CallPtr(c, kglDisableClientState, 0x4F40D2);
+        glDisableClientState(0x8078);
         Put(kArrayBits, U32(kArrayBits) & ~bit);
       }
       c.eax = u;
@@ -1258,22 +1118,17 @@ void f_004F4090(Ctx& c) {
   }
   c.esp = e;
   if (U32(kUnit)) {
-    Push(c, 0x84C0);
-    CallPtr(c, kglActiveTextureARB, 0x4F4107);
+    glActiveTextureARB(0x84C0);
     Put(kUnit, 0);
   }
   if (U32(kClientUnit)) {
-    Push(c, 0x84C0);
-    CallPtr(c, kglClientActiveTextureARB, 0x4F4123);
+    glClientActiveTextureARB(0x84C0);
     Put(kClientUnit, 0);
   }
   const uint32_t slot = kTexEnv + 4 * U32(kUnit);
   if (U32(slot) != 0x2100) {
-    Push(c, 0x2100);
-    Push(c, 0x2200);
-    Push(c, 0x2300);
     Put(slot, 0x2100);
-    CallPtr(c, kglTexEnvi, 0x4F415A);
+    glTexEnvi(0x2300, 0x2200, 0x2100);
   }
   c.esp = e + 4;
 }
@@ -2595,24 +2450,17 @@ void f_004F5DE0(Ctx& c) {
   if (!U32(kArraysSet)) {
     c.esi = 0x100;
     if (!(U32(kArrayBits) & 0x100)) {
-      Push(c, 0x8076);
-      CallPtr(c, kglEnableClientState, 0x4F5E16);
+      glEnableClientState(0x8076);
       Put(kArrayBits, U32(kArrayBits) | 0x100);
     }
-    Push(c, kColors);
-    Push(c, 0);
-    Push(c, 0x1401);
-    Push(c, 4);
-    CallPtr(c, kglColorPointer, 0x4F5E30);
+    glColorPointer(4, 0x1401, 0, Host(kColors));
   }
   uint32_t ret;
   if (U32(stage + 0xCC)) {
     c.eax = U32(stage + 0x684);
     Call(c, f_004CB710, 0x4F5E4B);
     if (U32(0x154992C)) {
-      Push(c, 0x1B02);
-      Push(c, 0x408);
-      CallPtr(c, kglPolygonMode, 0x4F5E5E);
+      glPolygonMode(0x408, 0x1B02);
     }
     Push(c, 0);
     Push(c, 0x16E8C40);
@@ -2622,11 +2470,7 @@ void f_004F5DE0(Ctx& c) {
     ret = 0x4F5E7D;
   } else {
     if (!U32(kArraysSet)) {
-      Push(c, U32(0x16E8C40));
-      Push(c, 0);
-      Push(c, 0x1406);
-      Push(c, U32(stage + 0x90));
-      CallPtr(c, kglTexCoordPointer, 0x4F5E9F);
+      glTexCoordPointer(int32_t(U32(stage + 0x90)), 0x1406, 0, Host(U32(0x16E8C40)));
     }
     if ((U32(U32(U32(kTessShader) + 0x154) + 0x684) & 0x100000) && CvarInt(0x1534438)) {
       c.esi = U32(0x1535AC4);
@@ -2650,7 +2494,7 @@ void f_004F5DE0(Ctx& c) {
     c.edi = U32(stage + 0x644);
     if (c.edi != U32(0x1534670)) {
       Push(c, c.edi);
-      CallPtr(c, 0x1535014, 0x4F5F27);
+      CallPtr(c, kglBindFragmentShaderATI, 0x4F5F27);
       Put(0x1534670, c.edi);
     }
     ret = 0x4F5F3C;
@@ -2931,33 +2775,15 @@ void f_004F60E0(Ctx& c) {
     } else {
       Put(kArraysSet, 1);
       arrays(normals ? 0x701 : 0x501, 0x4F61B1);
-      Push(c, kColors);
-      Push(c, 0);
-      Push(c, 0x1401);
-      Push(c, 4);
-      CallPtr(c, kglColorPointer, 0x4F61C2);
-      Push(c, 0x16E8C60);
-      Push(c, 0);
-      Push(c, 0x1406);
-      Push(c, U32(U32(U32(kTessShader) + 0x154) + 0x90));
-      CallPtr(c, kglTexCoordPointer, 0x4F61E7);
+      glColorPointer(4, 0x1401, 0, Host(kColors));
+      glTexCoordPointer(int32_t(U32(U32(U32(kTessShader) + 0x154) + 0x90)), 0x1406, 0,
+                        Host(0x16E8C60));
     }
     if (normals) {
-      Push(c, kTessNormals);
-      Push(c, 0xC);
-      Push(c, 0x1406);
-      CallPtr(c, kglNormalPointer, 0x4F61FD);
+      glNormalPointer(0x1406, 0xC, Host(kTessNormals));
     }
-    Push(c, kTessXyz);
-    Push(c, 0);
-    Push(c, 0x1406);
-    Push(c, U32(kXyzStride));
-    CallPtr(c, kglVertexPointer, 0x4F6216);
-    if (const uint32_t lock = U32(kglLockArraysEXT)) {
-      Push(c, U32(kTessVerts));
-      Push(c, 0);
-      CallTo(c, lock, 0x4F622E);
-    }
+    glVertexPointer(int32_t(U32(kXyzStride)), 0x1406, 0, Host(kTessXyz));
+    if (U32(kglLockArraysEXT)) glLockArraysEXT(0, I32(kTessVerts));
     if (!U32(kArraysSet)) arrays(normals ? 0x701 : 0x501, 0x4F6270);
     if (!dlights_only) {
       Push(c, kTessIndexes);
@@ -2990,7 +2816,7 @@ void f_004F60E0(Ctx& c) {
       }
       Put(0x1549B40, 0);
     }
-    if (const uint32_t unlock = U32(kglUnlockArraysEXT)) CallTo(c, unlock, 0x4F6362);
+    if (U32(kglUnlockArraysEXT)) glUnlockArraysEXT();
     Put(kArraysSet, 0);
   }
   c.ebx = ebx;
@@ -3066,10 +2892,7 @@ void f_00507F40(Ctx& c) {
         vertex(count, U32(kTessVerts) + i, false);
         vertex(count, i2, false);
         vertex(count, U32(kTessVerts) + i2, false);
-        Push(c, count);
-        Push(c, 0);
-        Push(c, U32(0x15495C8));
-        CallPtr(c, kglDrawArrays, 0x508216);
+        glDrawArrays(U32(0x15495C8), 0, int32_t(count));
         count = 0;
         Put(0x15495E8, 0);
         Put(0x15495C8, 0);
@@ -3081,14 +2904,10 @@ void f_00507F40(Ctx& c) {
   Put(0x15495C4, 0);
   if (!U32(0x1549B50) && !(U32(kStateBits) & 0x200000) && CvarInt(0x15347F4) &&
       U32(U8(0x15496EC) & 8 ? 0x1535890 : 0x13F9CF8)) {
-    Enable(c, 0xB60, 0x50829C);
+    glEnable(0xB60);
     Put(kStateBits, U32(kStateBits) | 0x200000);
   }
-  Push(c, kTessXyz);
-  Push(c, 0);
-  Push(c, 0x1406);
-  Push(c, 3);
-  CallPtr(c, kglVertexPointer, 0x5082B5);
+  glVertexPointer(3, 0x1406, 0, Host(kTessXyz));
   c.esp = e + 4;
 }
 
@@ -3169,41 +2988,27 @@ void f_005082D0(Ctx& c) {
   Call(c, f_004CB3B0, 0x50858F);
   c.eax = 0x12;
   Call(c, f_004CB710, 0x508599);
-  for (int k = 0; k < 3; k++) Push(c, 0x3E4CCCCD);  // 0.2
-  CallPtr(c, kglColor3f, 0x5085A8);
-  for (int k = 0; k < 4; k++) Push(c, 0);
-  CallPtr(c, kglColorMask, 0x5085B6);
-  Enable(c, 0xB90, 0x5085C1);
-  Push(c, 0xFF);
-  Push(c, 1);
-  Push(c, 0x207);
-  CallPtr(c, kglStencilFunc, 0x5085D3);
+  glColor3f(0.2f, 0.2f, 0.2f);
+  glColorMask(0, 0, 0, 0);
+  glEnable(0xB90);
+  glStencilFunc(0x207, 1, 0xFF);
   c.esi = esi;
   c.esp = e - 0x3C;
   if (const uint32_t cull = U32(kCullType); cull != 1) {
-    if (cull == 2) Enable(c, 0xB44, 0x5085F0);
-    Push(c, U32(0x1549930) ? 0x404 : 0x405);
-    CallPtr(c, kglCullFace, 0x50860B);
+    if (cull == 2) glEnable(0xB44);
+    glCullFace(U32(0x1549930) ? 0x404 : 0x405);
     Put(kCullType, 1);
   }
-  Push(c, 0x1E02);
-  Push(c, 0x1E00);
-  Push(c, 0x1E00);
-  CallPtr(c, kglStencilOp, 0x50862A);
+  glStencilOp(0x1E00, 0x1E00, 0x1E02);
   Call(c, f_00507F40, 0x508635);
   if (const uint32_t cull = U32(kCullType)) {
-    if (cull == 2) Enable(c, 0xB44, 0x508648);
-    Push(c, U32(0x1549930) ? 0x405 : 0x404);
-    CallPtr(c, kglCullFace, 0x508663);
+    if (cull == 2) glEnable(0xB44);
+    glCullFace(U32(0x1549930) ? 0x405 : 0x404);
     Put(kCullType, 0);
   }
-  Push(c, 0x1E03);
-  Push(c, 0x1E00);
-  Push(c, 0x1E00);
-  CallPtr(c, kglStencilOp, 0x508682);
+  glStencilOp(0x1E00, 0x1E00, 0x1E03);
   Call(c, f_00507F40, 0x50868D);
-  for (int k = 0; k < 4; k++) Push(c, 1);
-  CallPtr(c, kglColorMask, 0x508695);
+  glColorMask(1, 1, 1, 1);
   c.esp = e + 4;
 }
 
@@ -3223,7 +3028,7 @@ struct DrawRegs {
 // glDrawRangeElementsEXT over the vertices 0x17F0C8C..0x17F0C90 when it
 // is there and the range is set, else glDrawElements; counting the indexes
 // and the draws (0x1549B14, 0x1549B18).
-void DrawOptimised(Ctx& c, uint32_t range_va, uint32_t elements_va, const DrawRegs& r) {
+void DrawOptimised(Ctx& c, uint32_t range_va, const DrawRegs& r) {
   const uint32_t n = U32(0x1830C94), indexes = U32(0x1549B14) + n,
                  draws = U32(0x1549B18) + 1, range = U32(kglDrawRangeElementsEXT);
   Put(0x1549B14, indexes);
@@ -3241,11 +3046,7 @@ void DrawOptimised(Ctx& c, uint32_t range_va, uint32_t elements_va, const DrawRe
   } else {
     c.*r.indexes = indexes;
     c.*r.draws = draws;
-    Push(c, 0x17F0C94);
-    Push(c, 0x1403);
-    Push(c, n);
-    Push(c, 4);
-    CallPtr(c, kglDrawElements, elements_va);
+    glDrawElements(4, int32_t(n), 0x1403, Host(0x17F0C94));
   }
 }
 
@@ -3265,21 +3066,20 @@ struct OptimisedIterator {
     uint32_t format, va, print;  // the log line (0: none)
   } log;
   struct {
-    uint32_t replace, mode;  // glTexEnvi, f_004CB640
+    uint32_t mode;  // f_004CB640
   } env;
   struct {
     uint32_t fog, cull;  // f_004F5D50, f_004CB5D0
   } setup;
   struct {
-    uint32_t bind, colours_on, normals_off, colours, positions;
+    uint32_t bind, colours, positions;
   } arrays;
   struct {
-    uint32_t state, units, range, elements;
+    uint32_t state, units, range;
   } stage;
   // The triangles drawn over the surface for the cvar 0x15343E8.
   struct {
-    uint32_t depth, cull, state, units, colours_off, colour, colour4ubv, colour3f,
-        range, elements, depth_back;
+    uint32_t cull, state, units, colours_off, colour, range;
     DrawRegs regs;
   } tris;
   uint32_t unbind, print;  // the vertex buffer unbound; the log's end
@@ -3334,11 +3134,8 @@ void Optimised(Ctx& c, const OptimisedIterator& it) {
     if (CvarInt(0x15343B4)) {
       const uint32_t env = kTexEnv + 4 * U32(kUnit);
       if (U32(env) != 0x1E01) {
-        Push(c, 0x1E01);
-        Push(c, 0x2200);
-        Push(c, 0x2300);
         Put(env, 0x1E01);
-        CallPtr(c, kglTexEnvi, it.env.replace);
+        glTexEnvi(0x2300, 0x2200, 0x1E01);
       }
     } else {
       c.eax = U32(U32(shader + 0x154) + 0x15C);
@@ -3359,13 +3156,11 @@ void Optimised(Ctx& c, const OptimisedIterator& it) {
   }
   if (it.world && object) c.esi = 0x100;  // the colour array's bit
   if (!(U32(kArrayBits) & 0x100)) {
-    Push(c, 0x8076);
-    CallPtr(c, kglEnableClientState, it.arrays.colours_on);
+    glEnableClientState(0x8076);
     Put(kArrayBits, U32(kArrayBits) | 0x100);
   }
   if (U32(kArrayBits) & 0x200) {
-    Push(c, 0x8075);
-    CallPtr(c, kglDisableClientState, it.arrays.normals_off);
+    glDisableClientState(0x8075);
     Put(kArrayBits, U32(kArrayBits) & ~0x200u);
   }
   if (object) {
@@ -3384,16 +3179,8 @@ void Optimised(Ctx& c, const OptimisedIterator& it) {
     Push(c, 0x8074);
     CallPtr(c, kglArrayObjectATI, it.arrays.positions);
   } else {
-    Push(c, base + colours);
-    Push(c, stride);
-    Push(c, 0x1401);
-    Push(c, 4);
-    CallPtr(c, kglColorPointer, it.arrays.colours);
-    Push(c, base + positions);
-    Push(c, stride);
-    Push(c, 0x1406);
-    Push(c, 3);
-    CallPtr(c, kglVertexPointer, it.arrays.positions);
+    glColorPointer(4, 0x1401, int32_t(stride), Host(base + colours));
+    glVertexPointer(3, 0x1406, int32_t(stride), Host(base + positions));
   }
   if (!setup_first) setup();
   // The texture coordinates per unit (the world's only the first).
@@ -3416,17 +3203,13 @@ void Optimised(Ctx& c, const OptimisedIterator& it) {
         c.eax = U32(c.esi + 0x684);
         Call(c, f_004CB710, it.stage.state + 5);
         units(c.esi, it.stage.units);
-        DrawOptimised(c, it.stage.range, it.stage.elements, kStageDraw);
+        DrawOptimised(c, it.stage.range, kStageDraw);
       }
     } while (int32_t(++c.edi) < I32(kNumStages));
   }
   if (const uint32_t tris = CvarInt(0x15343E8)) {
     if (tris & 1) {
-      Push(c, 0x3FB99999);  // 0.1f as a double
-      Push(c, 0xA0000000);
-      Push(c, 0);
-      Push(c, 0);
-      CallPtr(c, kglDepthRange, it.tris.depth);
+      glDepthRange(0, 0.1f);
     }
     if (it.tris.cull) {
       c.esi = U32(U32(0x1535B5C) + 0xA8);
@@ -3437,8 +3220,7 @@ void Optimised(Ctx& c, const OptimisedIterator& it) {
     Call(c, f_004CB710, it.tris.state + 5);
     units(c.esi, it.tris.units);
     if (it.tris.colours_off && (U32(kArrayBits) & 0x100)) {
-      Push(c, 0x8076);
-      CallPtr(c, kglDisableClientState, it.tris.colours_off);
+      glDisableClientState(0x8076);
       Put(kArrayBits, U32(kArrayBits) & ~0x100u);
     }
     if (I32(U32(0x15343E8) + 0x20) >= 5) {
@@ -3446,25 +3228,15 @@ void Optimised(Ctx& c, const OptimisedIterator& it) {
       c.eax = U32(0x1830C94);
       c.edi = colour;
       Call(c, f_004F2E60, it.tris.colour + 5);
-      Push(c, colour);
-      CallPtr(c, kglColor4ubv, it.tris.colour4ubv);
+      glColor4ubv(Host<const uint8_t*>(colour));
     } else if (it.world) {
-      Push(c, U32(kIdentityLight));
-      Push(c, U32(kIdentityLight));
-      Push(c, Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits);  // 0.5
-      CallPtr(c, kglColor3f, it.tris.colour3f);
+      glColor3f(F(Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits), F(U32(kIdentityLight)),
+                F(U32(kIdentityLight)));
     } else {
-      Push(c, 0);
-      Push(c, U32(kIdentityLight));
-      Push(c, 0);
-      CallPtr(c, kglColor3f, it.tris.colour3f);
+      glColor3f(0.0f, F(U32(kIdentityLight)), 0.0f);
     }
-    DrawOptimised(c, it.tris.range, it.tris.elements, it.tris.regs);
-    Push(c, 0x3FF00000);  // 1.0
-    Push(c, 0);
-    Push(c, 0);
-    Push(c, 0);
-    CallPtr(c, kglDepthRange, it.tris.depth_back);
+    DrawOptimised(c, it.tris.range, it.tris.regs);
+    glDepthRange(0, 1);
   }
   if (it.source == OptimisedIterator::kBuffer) {
     Push(c, 0);
@@ -3490,12 +3262,11 @@ void Optimised(Ctx& c, const OptimisedIterator& it) {
 void f_004F6380(Ctx& c) {
   static constexpr OptimisedIterator it = {
       .source = OptimisedIterator::kMemory,
-      .env = {0x4F63B8, 0x4F63D2},
+      .env = {0x4F63D2},
       .setup = {0x4F6452, 0x4F6463},
-      .arrays = {0, 0x4F63E6, 0x4F6405, 0x4F642D, 0x4F644C},
-      .stage = {0x4F64A7, 0x4F64B4, 0x4F6505, 0x4F6536},
-      .tris = {0x4F656C, 0x4F657E, 0x4F6595, 0x4F65A2, 0x4F65B9, 0x4F65DE, 0x4F65E8, 0x4F65FA,
-               0x4F6649, 0x4F667A, 0x4F668B, kTrisDraw},
+      .arrays = {0, 0x4F642D, 0x4F644C},
+      .stage = {0x4F64A7, 0x4F64B4, 0x4F6505},
+      .tris = {0x4F657E, 0x4F6595, 0x4F65A2, 0x4F65B9, 0x4F65DE, 0x4F6649, kTrisDraw},
       .print = 0x4F66A5};
   Optimised(c, it);
 }
@@ -3504,12 +3275,11 @@ void f_004F66C0(Ctx& c) {
   static constexpr OptimisedIterator it = {
       .source = OptimisedIterator::kBuffer,
       .log = {0x53C01C, 0x4F66DD, 0x4F66F6},
-      .env = {0x4F6732, 0x4F674B},
+      .env = {0x4F674B},
       .setup = {0x4F67C8, 0x4F67D9},
-      .arrays = {0x4F6762, 0x4F6777, 0x4F6796, 0x4F67B1, 0x4F67C2},
-      .stage = {0x4F6818, 0x4F6825, 0x4F6876, 0x4F68A7},
-      .tris = {0x4F68DD, 0x4F68EF, 0x4F6906, 0x4F6913, 0x4F692A, 0x4F694F, 0x4F6959, 0x4F696B,
-               0x4F69BA, 0x4F69EB, 0x4F69FC, kTrisDraw},
+      .arrays = {0x4F6762, 0x4F67B1, 0x4F67C2},
+      .stage = {0x4F6818, 0x4F6825, 0x4F6876},
+      .tris = {0x4F68EF, 0x4F6906, 0x4F6913, 0x4F692A, 0x4F694F, 0x4F69BA, kTrisDraw},
       .unbind = 0x4F6A09,
       .print = 0x4F6A23};
   Optimised(c, it);
@@ -3518,12 +3288,12 @@ void f_004F66C0(Ctx& c) {
 void f_004F6A40(Ctx& c) {
   static constexpr OptimisedIterator it = {
       .source = OptimisedIterator::kObject,
-      .env = {0x4F6A8B, 0x4F6A9F},
+      .env = {0x4F6A9F},
       .setup = {0x4F6B14, 0x4F6B25},
-      .arrays = {0, 0x4F6AB3, 0x4F6AD2, 0x4F6AF5, 0x4F6B0E},
-      .stage = {0x4F6B5B, 0x4F6B69, 0x4F6BBA, 0x4F6BEB},
-      .tris = {0x4F6C21, 0x4F6C33, 0x4F6C4A, 0x4F6C58, 0x4F6C6F, 0x4F6C94, 0x4F6C9E, 0x4F6CB0,
-               0x4F6CFF, 0x4F6D30, 0x4F6D41, {&Ctx::esi, &Ctx::ebx, &Ctx::ebx, &Ctx::edi}},
+      .arrays = {0, 0x4F6AF5, 0x4F6B0E},
+      .stage = {0x4F6B5B, 0x4F6B69, 0x4F6BBA},
+      .tris = {0x4F6C33, 0x4F6C4A, 0x4F6C58, 0x4F6C6F, 0x4F6C94, 0x4F6CFF,
+               {&Ctx::esi, &Ctx::ebx, &Ctx::ebx, &Ctx::edi}},
       .print = 0x4F6D5B};
   Optimised(c, it);
 }
@@ -3532,12 +3302,11 @@ void f_004F6D70(Ctx& c) {
   static constexpr OptimisedIterator it = {
       .source = OptimisedIterator::kMemory,
       .log = {0x53BFF4, 0x4F6D8D, 0x4F6DA6},
-      .env = {0x4F6DE2, 0x4F6DFB},
+      .env = {0x4F6DFB},
       .setup = {0x4F6E7C, 0x4F6E8C},
-      .arrays = {0, 0x4F6E0F, 0x4F6E2E, 0x4F6E57, 0x4F6E76},
-      .stage = {0x4F6ED8, 0x4F6EE5, 0x4F6F36, 0x4F6F67},
-      .tris = {0x4F6F9D, 0x4F6FAF, 0x4F6FC6, 0x4F6FD3, 0x4F6FEA, 0x4F700F, 0x4F7019, 0x4F702B,
-               0x4F707A, 0x4F70AB, 0x4F70BC, kTrisDraw},
+      .arrays = {0, 0x4F6E57, 0x4F6E76},
+      .stage = {0x4F6ED8, 0x4F6EE5, 0x4F6F36},
+      .tris = {0x4F6FAF, 0x4F6FC6, 0x4F6FD3, 0x4F6FEA, 0x4F700F, 0x4F707A, kTrisDraw},
       .print = 0x4F70D6};
   Optimised(c, it);
 }
@@ -3547,10 +3316,9 @@ void f_004F70F0(Ctx& c) {
       .source = OptimisedIterator::kMemory,
       .world = true,
       .setup = {0x4F70F5, 0x4F7105},
-      .arrays = {0, 0x4F7119, 0x4F7138, 0x4F715B, 0x4F7174},
-      .stage = {0x4F71AA, 0x4F71B7, 0x4F7207, 0x4F7238},
-      .tris = {0x4F726F, 0x4F7281, 0x4F7297, 0x4F72A4, 0x4F72BB, 0x4F72E0, 0x4F72EA, 0x4F7309,
-               0x4F7358, 0x4F7389, 0x4F739A, kTrisDraw},
+      .arrays = {0, 0x4F715B, 0x4F7174},
+      .stage = {0x4F71AA, 0x4F71B7, 0x4F7207},
+      .tris = {0x4F7281, 0x4F7297, 0x4F72A4, 0x4F72BB, 0x4F72E0, 0x4F7358, kTrisDraw},
       .print = 0x4F73B4};
   Optimised(c, it);
 }
@@ -3560,10 +3328,10 @@ void f_004F73D0(Ctx& c) {
       .source = OptimisedIterator::kBuffer,
       .world = true,
       .setup = {0x4F73D5, 0x4F73E5},
-      .arrays = {0x4F73F6, 0x4F740B, 0x4F742A, 0x4F7445, 0x4F7456},
-      .stage = {0x4F748B, 0x4F7498, 0x4F74E9, 0x4F751A},
-      .tris = {0x4F7550, 0x4F7562, 0x4F7579, 0x4F7586, 0x4F759D, 0x4F75C2, 0x4F75CC, 0x4F75EB,
-               0x4F7639, 0x4F766A, 0x4F767B, {&Ctx::edi, &Ctx::esi, &Ctx::eax, &Ctx::edi}},
+      .arrays = {0x4F73F6, 0x4F7445, 0x4F7456},
+      .stage = {0x4F748B, 0x4F7498, 0x4F74E9},
+      .tris = {0x4F7562, 0x4F7579, 0x4F7586, 0x4F759D, 0x4F75C2, 0x4F7639,
+               {&Ctx::edi, &Ctx::esi, &Ctx::eax, &Ctx::edi}},
       .unbind = 0x4F7688,
       .print = 0x4F76A2};
   Optimised(c, it);
@@ -3575,10 +3343,10 @@ void f_004F76B0(Ctx& c) {
       .source = OptimisedIterator::kObject,
       .world = true,
       .setup = {0x4F7732, 0x4F7743},
-      .arrays = {0, 0x4F76D5, 0x4F76F0, 0x4F7713, 0x4F772C},
-      .stage = {0x4F7777, 0x4F7785, 0x4F77D6, 0x4F7807},
-      .tris = {0x4F783D, 0, 0x4F7855, 0x4F7863, 0, 0x4F7881, 0x4F788B, 0x4F78AA, 0x4F78F8,
-               0x4F7929, 0x4F793A, {&Ctx::ebx, &Ctx::edi, &Ctx::ebx, &Ctx::edi}}};
+      .arrays = {0, 0x4F7713, 0x4F772C},
+      .stage = {0x4F7777, 0x4F7785, 0x4F77D6},
+      .tris = {0, 0x4F7855, 0x4F7863, 0, 0x4F7881, 0x4F78F8,
+               {&Ctx::ebx, &Ctx::edi, &Ctx::ebx, &Ctx::edi}}};
   Optimised(c, it);
 }
 // The world's vertices in memory, as f_004F70F0.
@@ -3587,10 +3355,9 @@ void f_004F7950(Ctx& c) {
       .source = OptimisedIterator::kMemory,
       .world = true,
       .setup = {0x4F7955, 0x4F7965},
-      .arrays = {0, 0x4F7979, 0x4F7998, 0x4F79BB, 0x4F79D4},
-      .stage = {0x4F7A0A, 0x4F7A17, 0x4F7A67, 0x4F7A98},
-      .tris = {0x4F7ACF, 0x4F7AE1, 0x4F7AF7, 0x4F7B04, 0x4F7B1B, 0x4F7B40, 0x4F7B4A, 0x4F7B69,
-               0x4F7BB8, 0x4F7BE9, 0x4F7BFA, kTrisDraw},
+      .arrays = {0, 0x4F79BB, 0x4F79D4},
+      .stage = {0x4F7A0A, 0x4F7A17, 0x4F7A67},
+      .tris = {0x4F7AE1, 0x4F7AF7, 0x4F7B04, 0x4F7B1B, 0x4F7B40, 0x4F7BB8, kTrisDraw},
       .print = 0x4F7C14};
   Optimised(c, it);
 }
@@ -3776,34 +3543,27 @@ void LogLine(Ctx& c, uint32_t line, uint32_t va) {
 // A stage's constant colour for a static model: for rgbGen 11 white
 // (tr.identityLight) with the cvar 0x15346C4, else the entity's colour; for
 // any other its constant +0x680.
-void StaticColour(Ctx& c, uint32_t stage, uint32_t colour3f, uint32_t colour4ubv) {
+void StaticColour(uint32_t stage) {
   if (U32(stage + 0x664) == 0xB) {
     if (CvarInt(0x15346C4)) {
-      Push(c, U32(kIdentityLight));
-      Push(c, U32(kIdentityLight));
-      Push(c, U32(kIdentityLight));
-      CallPtr(c, kglColor3f, colour3f);
+      const float white = F(U32(kIdentityLight));
+      glColor3f(white, white, white);
       return;
     }
-    Push(c, U32(kEntity) + 0x6C);
+    glColor4ubv(Host<const uint8_t*>(U32(kEntity) + 0x6C));
   } else {
-    Push(c, stage + 0x680);
+    glColor4ubv(Host<const uint8_t*>(stage + 0x680));
   }
-  CallPtr(c, kglColor4ubv, colour4ubv);
 }
 
 // The surface's indexes counted (0x1549B14, 0x1549B18) and drawn; the
 // original leaves the draw count in EDI.
-void StaticDraw(Ctx& c, uint32_t surf, uint32_t indexes, uint32_t va) {
+void StaticDraw(Ctx& c, uint32_t surf, uint32_t indexes) {
   const uint32_t n = U16(surf + 0x10);
   Put(0x1549B14, U32(0x1549B14) + n);
   c.edi = U32(0x1549B18) + 1;
   Put(0x1549B18, c.edi);
-  Push(c, indexes);
-  Push(c, 0x1403);
-  Push(c, n);
-  Push(c, 4);
-  CallPtr(c, kglDrawElements, va);
+  glDrawElements(4, int32_t(n), 0x1403, Host(indexes));
 }
 
 // A static model surface drawn from its own vertices: in memory or in a
@@ -3812,18 +3572,16 @@ void StaticDraw(Ctx& c, uint32_t surf, uint32_t indexes, uint32_t va) {
 struct StaticModel {
   bool buffer, normals;
   uint32_t log, log_at;  // the line and its fprintf
-  uint32_t fog, cull, arrays, bind[2], normal_ptr, vertex_ptr;
-  // Each stage: its colour (20-byte vertices only: in memory before its
-  // state, in a buffer after its textures), its state bits, its textures,
-  // the draw.
+  uint32_t fog, cull, arrays, bind[2];
+  // Each stage: its state bits and its textures.
   struct {
-    uint32_t colour3f, colour4ubv, state, units, draw;
+    uint32_t state, units;
   } stage;
   // The triangles drawn over it for the cvar 0x15343E8: the shader
   // 0x1535B5C's first stage's textures (20-byte vertices in memory) or its
   // first bundle's image bound.
   struct {
-    uint32_t depth, state, units, image, bind, colour, colour4ubv, colour3f, draw, depth_back;
+    uint32_t state, units, image, bind, colour;
   } tris;
   uint32_t unbind[2], print;
 };
@@ -3865,16 +3623,9 @@ void DrawStaticModel(Ctx& c, const StaticModel& m) {
   }
   const uint32_t base = m.buffer ? 0 : U32(surf + 0x24);
   if (m.normals) {
-    Push(c, base + 8);
-    Push(c, stride);
-    Push(c, 0x1406);
-    CallPtr(c, kglNormalPointer, m.normal_ptr);
+    glNormalPointer(0x1406, int32_t(stride), Host(base + 8));
   }
-  Push(c, base + (m.normals ? 0x14 : 8));
-  Push(c, stride);
-  Push(c, 0x1406);
-  Push(c, 3);
-  CallPtr(c, kglVertexPointer, m.vertex_ptr);
+  glVertexPointer(3, 0x1406, int32_t(stride), Host(base + (m.normals ? 0x14 : 8)));
   const uint32_t coords = e - 0x20, indexes = m.buffer ? 0 : U32(surf + 0x20);
   Put(coords, base);
   auto units = [&](uint32_t stage, uint32_t va) {
@@ -3888,23 +3639,19 @@ void DrawStaticModel(Ctx& c, const StaticModel& m) {
   if (I32(kNumStages) > 0) {
     do {
       if (!m.normals && !m.buffer)
-        StaticColour(c, U32(U32(kTessStages) + 4 * c.esi), m.stage.colour3f, m.stage.colour4ubv);
+        StaticColour(U32(U32(kTessStages) + 4 * c.esi));
       c.edi = U32(U32(kTessStages) + 4 * c.esi);
       c.eax = U32(c.edi + 0x684);
       Call(c, f_004CB710, m.stage.state + 5);
       units(c.edi, m.stage.units);
       if (!m.normals && m.buffer)
-        StaticColour(c, U32(U32(kTessStages) + 4 * c.esi), m.stage.colour3f, m.stage.colour4ubv);
-      StaticDraw(c, surf, indexes, m.stage.draw);
+        StaticColour(U32(U32(kTessStages) + 4 * c.esi));
+      StaticDraw(c, surf, indexes);
     } while (int32_t(++c.esi) < I32(kNumStages));
   }
   if (const uint32_t tris = CvarInt(0x15343E8)) {
     if (tris & 1) {
-      Push(c, 0x3FB99999);  // 0.1f as a double
-      Push(c, 0xA0000000);
-      Push(c, 0);
-      Push(c, 0);
-      CallPtr(c, kglDepthRange, m.tris.depth);
+      glDepthRange(0, 0.1f);
     }
     c.eax = U32(U32(U32(0x1535B5C) + 0x154) + 0x684);
     Call(c, f_004CB710, m.tris.state + 5);
@@ -3923,27 +3670,17 @@ void DrawStaticModel(Ctx& c, const StaticModel& m) {
       c.eax = U16(surf + 0x10);
       c.edi = e + 4;
       Call(c, f_004F2E60, m.tris.colour + 5);
-      Push(c, e + 4);
-      CallPtr(c, kglColor4ubv, m.tris.colour4ubv);
+      glColor4ubv(Host<const uint8_t*>(e + 4));
     } else if (m.tris.units) {
-      Push(c, U32(kIdentityLight));
-      Push(c, Fst(St(Ld(kIdentityLight)) * Ld(0x55B834)).bits);  // 0.75
-      Push(c, Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits);  // 0.5
-      CallPtr(c, kglColor3f, m.tris.colour3f);
+      glColor3f(F(Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits),
+                F(Fst(St(Ld(kIdentityLight)) * Ld(0x55B834)).bits), F(U32(kIdentityLight)));
     } else {
-      Push(c, U32(kIdentityLight));
       const F32 quarter = Fst(St(Ld(kIdentityLight)) * Ld(0x55B5EC));  // 0.25
       Put(e + 4, quarter);
-      Push(c, quarter.bits);
-      Push(c, quarter.bits);
-      CallPtr(c, kglColor3f, m.tris.colour3f);
+      glColor3f(F(quarter.bits), F(quarter.bits), F(U32(kIdentityLight)));
     }
-    StaticDraw(c, surf, indexes, m.tris.draw);
-    Push(c, 0x3FF00000);  // 1.0
-    Push(c, 0);
-    Push(c, 0);
-    Push(c, 0);
-    CallPtr(c, kglDepthRange, m.tris.depth_back);
+    StaticDraw(c, surf, indexes);
+    glDepthRange(0, 1);
   }
   if (m.buffer) {
     Push(c, 0);
@@ -4029,10 +3766,9 @@ void f_004FACD0(Ctx& c) {
       .buffer = true,
       .log = 0x53BC5C, .log_at = 0x4FACE7,
       .fog = 0x4FACF2, .cull = 0x4FAD02, .arrays = 0x4FAD0C,
-      .bind = {0x4FAD21, 0x4FAD30}, .vertex_ptr = 0x4FAD41,
-      .stage = {0x4FADAB, 0x4FADC5, 0x4FAD6E, 0x4FAD7B, 0x4FADF4},
-      .tris = {0x4FAE2B, 0x4FAE42, 0, 0x4FAE5C, 0x4FAE66, 0x4FAE7F, 0x4FAE89, 0x4FAEAD, 0x4FAEDC,
-               0x4FAEED},
+      .bind = {0x4FAD21, 0x4FAD30},
+      .stage = {0x4FAD6E, 0x4FAD7B},
+      .tris = {0x4FAE42, 0, 0x4FAE5C, 0x4FAE66, 0x4FAE7F},
       .unbind = {0x4FAEFA, 0x4FAF07}, .print = 0x4FAF21};
   DrawStaticModel(c, m);
 }
@@ -4042,10 +3778,9 @@ void f_004FAF60(Ctx& c) {
       .buffer = true, .normals = true,
       .log = 0x53BC30, .log_at = 0x4FAF77,
       .fog = 0x4FAF82, .cull = 0x4FAF92, .arrays = 0x4FAF9C,
-      .bind = {0x4FAFB1, 0x4FAFC0}, .normal_ptr = 0x4FAFCF, .vertex_ptr = 0x4FAFE0,
-      .stage = {0, 0, 0x4FB00E, 0x4FB01B, 0x4FB04C},
-      .tris = {0x4FB07F, 0x4FB096, 0, 0x4FB0B0, 0x4FB0BA, 0x4FB0D3, 0x4FB0DD, 0x4FB101, 0x4FB130,
-               0x4FB141},
+      .bind = {0x4FAFB1, 0x4FAFC0},
+      .stage = {0x4FB00E, 0x4FB01B},
+      .tris = {0x4FB096, 0, 0x4FB0B0, 0x4FB0BA, 0x4FB0D3},
       .unbind = {0x4FB14E, 0x4FB15B}, .print = 0x4FB175};
   DrawStaticModel(c, m);
 }
@@ -4054,9 +3789,9 @@ void f_004FAF60(Ctx& c) {
 void f_004FB660(Ctx& c) {
   static constexpr StaticModel m = {
       .log = 0x53BBE0, .log_at = 0x4FB677,
-      .fog = 0x4FB682, .cull = 0x4FB692, .arrays = 0x4FB69C, .vertex_ptr = 0x4FB6B8,
-      .stage = {0x4FB706, 0x4FB720, 0x4FB734, 0x4FB741, 0x4FB774},
-      .tris = {0x4FB7AB, 0x4FB7C2, 0x4FB7CF, 0, 0, 0x4FB7ED, 0x4FB7F7, 0x4FB828, 0x4FB859, 0x4FB86A},
+      .fog = 0x4FB682, .cull = 0x4FB692, .arrays = 0x4FB69C,
+      .stage = {0x4FB734, 0x4FB741},
+      .tris = {0x4FB7C2, 0x4FB7CF, 0, 0, 0x4FB7ED},
       .print = 0x4FB884};
   DrawStaticModel(c, m);
 }
@@ -4064,9 +3799,9 @@ void f_004FB660(Ctx& c) {
 void f_004FBAF0(Ctx& c) {
   static constexpr StaticModel m = {
       .log = 0x53BB84, .log_at = 0x4FBB07,
-      .fog = 0x4FBB12, .cull = 0x4FBB22, .arrays = 0x4FBB2C, .vertex_ptr = 0x4FBB48,
-      .stage = {0x4FBB96, 0x4FBBB0, 0x4FBBC4, 0x4FBBD1, 0x4FBC04},
-      .tris = {0x4FBC3B, 0x4FBC52, 0x4FBC5F, 0, 0, 0x4FBC7D, 0x4FBC87, 0x4FBCB8, 0x4FBCE9, 0x4FBCFA},
+      .fog = 0x4FBB12, .cull = 0x4FBB22, .arrays = 0x4FBB2C,
+      .stage = {0x4FBBC4, 0x4FBBD1},
+      .tris = {0x4FBC52, 0x4FBC5F, 0, 0, 0x4FBC7D},
       .print = 0x4FBD14};
   DrawStaticModel(c, m);
 }
@@ -4076,11 +3811,9 @@ void f_004FB8C0(Ctx& c) {
   static constexpr StaticModel m = {
       .normals = true,
       .log = 0x53BBB0, .log_at = 0x4FB8D7,
-      .fog = 0x4FB8E2, .cull = 0x4FB8F2, .arrays = 0x4FB8FC, .normal_ptr = 0x4FB916,
-      .vertex_ptr = 0x4FB92C,
-      .stage = {0, 0, 0x4FB95F, 0x4FB96C, 0x4FB99F},
-      .tris = {0x4FB9D1, 0x4FB9E9, 0, 0x4FBA03, 0x4FBA0D, 0x4FBA26, 0x4FBA30, 0x4FBA55, 0x4FBA86,
-               0x4FBA97},
+      .fog = 0x4FB8E2, .cull = 0x4FB8F2, .arrays = 0x4FB8FC,
+      .stage = {0x4FB95F, 0x4FB96C},
+      .tris = {0x4FB9E9, 0, 0x4FBA03, 0x4FBA0D, 0x4FBA26},
       .print = 0x4FBAB1};
   DrawStaticModel(c, m);
 }
@@ -4089,11 +3822,9 @@ void f_004FBD50(Ctx& c) {
   static constexpr StaticModel m = {
       .normals = true,
       .log = 0x53BB5C, .log_at = 0x4FBD67,
-      .fog = 0x4FBD72, .cull = 0x4FBD82, .arrays = 0x4FBD8C, .normal_ptr = 0x4FBDA6,
-      .vertex_ptr = 0x4FBDBC,
-      .stage = {0, 0, 0x4FBDEF, 0x4FBDFC, 0x4FBE2F},
-      .tris = {0x4FBE61, 0x4FBE79, 0, 0x4FBE93, 0x4FBE9D, 0x4FBEB6, 0x4FBEC0, 0x4FBEE5, 0x4FBF16,
-               0x4FBF27},
+      .fog = 0x4FBD72, .cull = 0x4FBD82, .arrays = 0x4FBD8C,
+      .stage = {0x4FBDEF, 0x4FBDFC},
+      .tris = {0x4FBE79, 0, 0x4FBE93, 0x4FBE9D, 0x4FBEB6},
       .print = 0x4FBF41};
   DrawStaticModel(c, m);
 }
@@ -4138,8 +3869,7 @@ void f_004FB1B0(Ctx& c) {
   c.esp = e - 0x30;
   const bool elements = U32(kElementArray);
   if (elements) {
-    Push(c, 0x8768);
-    CallPtr(c, kglEnableClientState, 0x4FB28E);
+    glEnableClientState(0x8768);
     Push(c, U32(surf + 0x2C));
     Push(c, object);
     Push(c, 0);
@@ -4150,16 +3880,12 @@ void f_004FB1B0(Ctx& c) {
   }
   // The call sites, with and without the element array.
   struct Sites {
-    uint32_t colour3f, colour4ubv, state, units, draw;
-    uint32_t depth, tris_state, tris_units, colour, tris_colour4ubv, tris_colour3f, tris_draw,
-        depth_back;
+    uint32_t state, units, draw, tris_state, tris_units, colour, tris_draw;
   };
-  static constexpr Sites kElements = {0x4FB2EB, 0x4FB305, 0x4FB31C, 0x4FB32D, 0x4FB357,
-                                      0x4FB38D, 0x4FB3A8, 0x4FB3B9, 0x4FB3D7, 0x4FB3E1,
-                                      0x4FB411, 0x4FB439, 0x4FB44A},
-                         kIndexes = {0x4FB49C, 0x4FB4B4, 0x4FB4CC, 0x4FB4DD, 0x4FB510,
-                                     0x4FB547, 0x4FB562, 0x4FB573, 0x4FB591, 0x4FB59B,
-                                     0x4FB5CC, 0x4FB5FD, 0x4FB60E};
+  static constexpr Sites kElements = {0x4FB31C, 0x4FB32D, 0x4FB357, 0x4FB3A8,
+                                      0x4FB3B9, 0x4FB3D7, 0x4FB439},
+                         kIndexes = {0x4FB4CC, 0x4FB4DD, 0x4FB510, 0x4FB562,
+                                     0x4FB573, 0x4FB591, 0x4FB5FD};
   const Sites& at = elements ? kElements : kIndexes;
   auto units = [&](uint32_t stage, uint32_t va) {
     Push(c, U32(e + 4));
@@ -4178,17 +3904,13 @@ void f_004FB1B0(Ctx& c) {
       Push(c, 4);
       CallPtr(c, kglDrawElementArrayATI, va);
     } else {
-      Push(c, U32(surf + 0x20));
-      Push(c, 0x1403);
-      Push(c, n);
-      Push(c, 4);
-      CallPtr(c, kglDrawElements, va);
+      glDrawElements(4, int32_t(n), 0x1403, Host(U32(surf + 0x20)));
     }
   };
   c.edi = 0;
   if (I32(kNumStages) > 0) {
     do {
-      if (U32(surf) == 0x12) StaticColour(c, U32(U32(kTessStages) + 4 * c.edi), at.colour3f, at.colour4ubv);
+      if (U32(surf) == 0x12) StaticColour(U32(U32(kTessStages) + 4 * c.edi));
       const uint32_t stage = U32(U32(kTessStages) + 4 * c.edi);
       c.eax = U32(stage + 0x684);
       Call(c, f_004CB710, at.state + 5);
@@ -4198,11 +3920,7 @@ void f_004FB1B0(Ctx& c) {
   }
   if (const uint32_t tris = CvarInt(0x15343E8)) {
     if (tris & 1) {
-      Push(c, 0x3FB99999);  // 0.1f as a double
-      Push(c, 0xA0000000);
-      Push(c, 0);
-      Push(c, 0);
-      CallPtr(c, kglDepthRange, at.depth);
+      glDepthRange(0, 0.1f);
     }
     c.edi = U32(U32(0x1535B5C) + 0x154);
     c.eax = U32(c.edi + 0x684);
@@ -4212,25 +3930,17 @@ void f_004FB1B0(Ctx& c) {
       c.eax = U16(surf + 0x10);
       c.edi = e + 4;
       Call(c, f_004F2E60, at.colour + 5);
-      Push(c, e + 4);
-      CallPtr(c, kglColor4ubv, at.tris_colour4ubv);
+      glColor4ubv(Host<const uint8_t*>(e + 4));
     } else {
-      Push(c, U32(kIdentityLight));
-      Push(c, Fst(St(Ld(kIdentityLight)) * Ld(0x55B834)).bits);  // 0.75
-      Push(c, Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits);  // 0.5
-      CallPtr(c, kglColor3f, at.tris_colour3f);
+      glColor3f(F(Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits),
+                F(Fst(St(Ld(kIdentityLight)) * Ld(0x55B834)).bits), F(U32(kIdentityLight)));
     }
     draw(at.tris_draw);
     if (!elements) c.edi = U32(0x1549B18);
-    Push(c, 0x3FF00000);  // 1.0
-    Push(c, 0);
-    Push(c, 0);
-    Push(c, 0);
-    CallPtr(c, kglDepthRange, at.depth_back);
+    glDepthRange(0, 1);
   }
   if (elements) {
-    Push(c, 0x8768);
-    CallPtr(c, kglDisableClientState, 0x4FB455);
+    glDisableClientState(0x8768);
   }
   c.ebx = ebx;
   c.ebp = ebp;
@@ -5201,10 +4911,7 @@ void f_00501900(Ctx& c) {
     for (uint32_t k = 0; k < 12; k += 4) Put(b + k, U32(from + k));
     Put(0x15495E8, n + 1);
   }
-  Push(c, U32(0x15495E8));
-  Push(c, 0);
-  Push(c, U32(0x15495C8));
-  CallPtr(c, 0x153501C, 0x50208B);
+  glDrawArrays(U32(0x15495C8), 0, int32_t(U32(0x15495E8)));
   Put(0x15495E8, 0u);
   Put(0x15495C8, 0u);
   Put(0x15495C4, 0u);
@@ -5212,12 +4919,11 @@ void f_00501900(Ctx& c) {
     c.esi = 0x200000;
     if (!(U32(kStateBits) & 0x200000) && CvarInt(0x15347F4) &&
         ((U8(0x15496EC) & 8) ? U32(0x1535890) : U32(0x13F9CF8))) {
-      Enable(c, 0xB60, 0x5020E0);
+      glEnable(0xB60);
       Put(kStateBits, U32(kStateBits) | 0x200000);
     }
   }
-  for (uint32_t v : {0x1630C40u, 0u, 0x1406u, 3u}) Push(c, v);
-  CallPtr(c, 0x15354F0, 0x5020F9);
+  glVertexPointer(3, 0x1406, 0, Host(0x1630C40));
   c.ebx = ebx;
   c.esi = esi;
   c.esp = e + 4;
@@ -5237,14 +4943,13 @@ void f_00503860(Ctx& c) {
   Call(c, f_004CB3B0, 0x503871);
   c.esi = esi;
   c.esp = e;
-  auto width = [&](float w, uint32_t va) {
+  auto width = [&](float w) {
     if (!(Ld(0x15495CC) == w)) {
-      Push(c, std::bit_cast<uint32_t>(w));
       Put(0x15495CC, std::bit_cast<uint32_t>(w));
-      CallPtr(c, 0x1535744, va);
+      glLineWidth(w);
     }
   };
-  width(3.0f, 0x503894);
+  width(3.0f);
   Push(c, ebx);
   c.ebx = 0;
   Put(0x15495C8, 1u);
@@ -5258,17 +4963,13 @@ void f_00503860(Ctx& c) {
     }
   }
   c.esp += 0x48;
-  Push(c, U32(0x15495E8));
-  Push(c, 0);
-  Push(c, U32(0x15495C8));
-  CallPtr(c, 0x153501C, 0x503942);
+  glDrawArrays(U32(0x15495C8), 0, int32_t(U32(0x15495E8)));
   Put(0x15495E8, 0u);
   Put(0x15495C8, 0u);
-  width(1.0f, 0x503976);
+  width(1.0f);
   Put(0x15495C4, 0u);
   Call(c, f_004C89D0, 0x503987);
-  for (uint32_t v : {0x1630C40u, 0u, 0x1406u, 3u}) Push(c, v);
-  CallPtr(c, 0x15354F0, 0x503994);
+  glVertexPointer(3, 0x1406, 0, Host(0x1630C40));
   c.ebx = ebx;
   c.esp = e + 4;
 }
@@ -5340,12 +5041,9 @@ void f_00500A60(Ctx& c) {
 // first texture coordinates.
 void f_004F4A20(Ctx& c) {
   if (c.eax == 3) {
-    for (uint32_t v : {0x1630C40u, 0u, 0x1406u, U32(kXyzStride)}) Push(c, v);
-    CallPtr(c, kglVertexPointer, 0x4F4A37);
-    for (uint32_t v : {0x1698C40u, 0xCu, 0x1406u}) Push(c, v);
-    CallPtr(c, kglNormalPointer, 0x4F4A49);
-    for (uint32_t v : {U32(0x16E8C40), 0u, 0x1406u, 2u}) Push(c, v);
-    CallPtr(c, kglTexCoordPointer, 0x4F4A5F);
+    glVertexPointer(int32_t(U32(kXyzStride)), 0x1406, 0, Host(0x1630C40));
+    glNormalPointer(0x1406, 0xC, Host(0x1698C40));
+    glTexCoordPointer(2, 0x1406, 0, Host(U32(0x16E8C40)));
   }
   c.esp += 4;
 }
@@ -5370,23 +5068,15 @@ void f_004ADC20(Ctx& c) {
   for (uint32_t va : {0x15495C8u, 0x15495CCu, 0x15495D0u, 0x15495D4u}) Put(va, 0u);
   if (U32(0x153465C) != 3) {
     if (U32(0x153479C)) {
-      Push(c, U32(0x153479C) == 1 ? 0x851D : 0x8533);
-      CallPtr(c, kglDisableClientState, 0x4ADCA4);
-      for (uint32_t v : {0x1630C40u, 0u, 0x1406u, U32(kXyzStride)}) Push(c, v);
-      CallPtr(c, kglVertexPointer, 0x4ADCBD);
-      for (uint32_t v : {0x1698C40u, 0u, 0x1406u}) Push(c, v);
-      CallPtr(c, kglNormalPointer, 0x4ADCCF);
-      for (uint32_t v : {U32(0x16E8C40), 0u, 0x1406u, 2u}) Push(c, v);
-      CallPtr(c, kglTexCoordPointer, 0x4ADCE5);
-      for (uint32_t v : {kColors, 0u, 0x1401u, 4u}) Push(c, v);
-      CallPtr(c, kglColorPointer, 0x4ADCF9);
+      glDisableClientState(U32(0x153479C) == 1 ? 0x851D : 0x8533);
+      glVertexPointer(int32_t(U32(kXyzStride)), 0x1406, 0, Host(0x1630C40));
+      glNormalPointer(0x1406, 0, Host(0x1698C40));
+      glTexCoordPointer(2, 0x1406, 0, Host(U32(0x16E8C40)));
+      glColorPointer(4, 0x1401, 0, Host(kColors));
     } else if (U32(0x15347B8)) {
-      for (uint32_t v : {0x1630C40u, 0u, 0x1406u, U32(kXyzStride)}) Push(c, v);
-      CallPtr(c, kglVertexPointer, 0x4ADD1C);
-      for (uint32_t v : {0x1698C40u, 0xCu, 0x1406u}) Push(c, v);
-      CallPtr(c, kglNormalPointer, 0x4ADD2E);
-      for (uint32_t v : {U32(0x16E8C40), 0u, 0x1406u, 2u}) Push(c, v);
-      CallPtr(c, kglTexCoordPointer, 0x4ADD44);
+      glVertexPointer(int32_t(U32(kXyzStride)), 0x1406, 0, Host(0x1630C40));
+      glNormalPointer(0x1406, 0xC, Host(0x1698C40));
+      glTexCoordPointer(2, 0x1406, 0, Host(U32(0x16E8C40)));
     }
     Put(0x153465C, 3u);
   }
@@ -5395,17 +5085,13 @@ void f_004ADC20(Ctx& c) {
   Call(c, f_004CBBE0, 0x4ADD63);
   c.esp += 4;
   if (U32(kStateBits) & 0x200000) {
-    Disable(c, 0xB60, 0x4ADD77);
+    glDisable(0xB60);
     Put(kStateBits, U32(kStateBits) & 0xFFDFFFFF);
   }
-  for (uint32_t v : {U32(0x15495F0) + 0xC, 0x20u, 0x1406u, 2u}) Push(c, v);
-  CallPtr(c, kglTexCoordPointer, 0x4ADD9A);
-  for (uint32_t v : {U32(0x15495F0) + 0x1C, 0x20u, 0x1401u, 4u}) Push(c, v);
-  CallPtr(c, kglColorPointer, 0x4ADDB2);
-  for (uint32_t v : {0x3F800000u, 0u, 0u}) Push(c, v);
-  CallPtr(c, 0x1534DCC, 0x4ADDC1);
-  for (uint32_t v : {U32(0x15495F0), 0x20u, 0x1406u, 3u}) Push(c, v);
-  CallPtr(c, kglVertexPointer, 0x4ADDD7);
+  glTexCoordPointer(2, 0x1406, 0x20, Host(U32(0x15495F0) + 0xC));
+  glColorPointer(4, 0x1401, 0x20, Host(U32(0x15495F0) + 0x1C));
+  glNormal3f(0.0f, 0.0f, 1.0f);
+  glVertexPointer(3, 0x1406, 0x20, Host(U32(0x15495F0)));
   Put(0x15495C4, 1u);
   c.esp = e + 4;
 }
@@ -5446,14 +5132,12 @@ void f_004F44A0(Ctx& c) {
     Put(0x1830CA4, tris + 0x154);
     Put(0x1830C9C, U32(tris + 0x150));
     if (U8(cvar + 0x20) & 1) {
-      for (uint32_t v : {0x3FB99999u, 0xA0000000u, 0u, 0u}) Push(c, v);
-      CallPtr(c, kglDepthRange, 0x4F4515);
+      glDepthRange(0, 0.1f);
     }
     Push(c, 0);
     CallPtr(c, 0x1549570, 0x4F451D);
     c.esp += 4;
-    for (uint32_t v : {0x3FF00000u, 0u, 0u, 0u}) Push(c, v);
-    CallPtr(c, kglDepthRange, 0x4F4531);
+    glDepthRange(0, 1);
     Put(0x1830CA4, c.edi);
     Put(kTessShader, c.esi);
     Put(0x1830C9C, c.ebp);
@@ -5490,23 +5174,18 @@ void NormalLine(Ctx& c, uint32_t p, uint32_t d, uint32_t ret1, uint32_t ret2) {
 // What the normals' draws end with: the lines left drawn, the depth range
 // 0 to 1, the batch ended (fog back on as a flush would set it) and the
 // positions back at the tessellator's, 3 floats apart.
-void NormalsEnd(Ctx& c, uint32_t draw, uint32_t range, uint32_t enable, uint32_t pointer) {
-  Push(c, U32(0x15495E8));
-  Push(c, 0);
-  Push(c, U32(0x15495C8));
-  CallPtr(c, kglDrawArrays, draw);
-  for (uint32_t v : {0x3FF00000u, 0u, 0u, 0u}) Push(c, v);
+void NormalsEnd() {
+  glDrawArrays(U32(0x15495C8), 0, int32_t(U32(0x15495E8)));
   Put(0x15495E8, 0u);
   Put(0x15495C8, 0u);
-  CallPtr(c, kglDepthRange, range);
+  glDepthRange(0, 1);
   Put(0x15495C4, 0u);
   if (!U32(0x1549B50) && !(U32(kStateBits) & 0x200000) && CvarInt(0x15347F4) &&
       ((U8(0x15496EC) & 8) ? U32(0x1535890) : U32(0x13F9CF8))) {
-    Enable(c, 0xB60, enable);
+    glEnable(0xB60);
     Put(kStateBits, U32(kStateBits) | 0x200000);
   }
-  for (uint32_t v : {0x1630C40u, 0u, 0x1406u, 3u}) Push(c, v);
-  CallPtr(c, kglVertexPointer, pointer);
+  glVertexPointer(3, 0x1406, 0, Host(0x1630C40));
 }
 
 }  // namespace
@@ -5529,16 +5208,14 @@ void f_004F4560(Ctx& c) {
   c.ebx = 0;
   c.ebp = t;
   Call(c, f_004ADC20, 0x4F457F);
-  for (uint32_t v : {0x3FEFF7CEu, 0xE0000000u, 0u, 0u}) Push(c, v);
-  CallPtr(c, kglDepthRange, 0x4F458B);
+  glDepthRange(0, 0.999f);
   c.esi = U32(0x1535AC4);
   Call(c, f_004CB3B0, 0x4F459C);
   for (uint32_t k = 0; k < 4; k++) Wr<uint8_t>(g_guest_base, 0x15495D8 + k, 0xFF);
   if (!U32(t + 0x1D802C) || !U32(t + 0x1D8028)) Call(c, f_0050ABF0, 0x4F45CD);
   c.esi = 1;
   if (CvarInt(0x1534698) == 1) {
-    for (uint32_t v : {0u, 0u, 0u, 0u}) Push(c, v);
-    CallPtr(c, kglDepthRange, 0x4F45E2);
+    glDepthRange(0, 0);
   }
   c.eax = 0x1100;
   Call(c, f_004CB710, 0x4F45F2);
@@ -5560,10 +5237,7 @@ void f_004F4560(Ctx& c) {
       }
       NormalLine(c, c.esi, c.edi - 0x30004, 0x4F4729, 0x4F4769);
       if ((c.ebx & 0xFF) == 0xFF) {
-        Push(c, U32(0x15495E8));
-        Push(c, 0);
-        Push(c, U32(0x15495C8));
-        CallPtr(c, kglDrawArrays, 0x4F4781);
+        glDrawArrays(U32(0x15495C8), 0, int32_t(U32(0x15495E8)));
         Put(0x15495E8, 0u);
         Put(0x15495C8, 1u);
       }
@@ -5574,7 +5248,7 @@ void f_004F4560(Ctx& c) {
     c.esp += 4;
   }
   c.edi = edi;
-  NormalsEnd(c, 0x4F47C7, 0x4F47E1, 0x4F4829, 0x4F4842);
+  NormalsEnd();
   c.ebx = ebx;
   c.ebp = ebp;
   c.esi = esi;
@@ -5613,7 +5287,7 @@ void f_004F4850(Ctx& c) {
       c.edi += 0xC;
     } while (int32_t(c.ebp) < I32(t + 0x1D8048));
   }
-  NormalsEnd(c, 0x4F4987, 0x4F49A3, 0x4F49EB, 0x4F4A04);
+  NormalsEnd();
   c.ebp = ebp;
   c.esi = esi;
   c.edi = edi;
@@ -5627,10 +5301,9 @@ namespace {
 // The NV register combiners' and the ARB vertex program's entry points.
 constexpr uint32_t kglCombinerParameterfvNV = 0x1534A58, kglCombinerParameteriNV = 0x15352A0,
                    kglCombinerInputNV = 0x1535580, kglCombinerOutputNV = 0x1534810,
-                   kglCombinerStageParameterfvNV = 0x1534954,
-                   kglFinalCombinerInputNV = 0x1534AD0, kglBindProgramARB = 0x1534CA4,
-                   kglProgramLocalParameter4fvARB = 0x1534AA4,
-                   kglProgramLocalParameter4fARB = 0x1534D24, kglTexSubImage2D = 0x1534E4C;
+                   kglCombinerStageParameterfvNV = 0x1534954, kglFinalCombinerInputNV = 0x1534AD0,
+                   kglBindProgramARB = 0x1534CA4, kglProgramLocalParameter4fvARB = 0x1534AA4,
+                   kglProgramLocalParameter4fARB = 0x1534D24;
 
 // The noise's permutation (256 dwords) and its values by permutation.
 uint32_t NoisePerm(uint32_t k) { return U32(0x1195C38 + 4 * (k & 0xFF)); }
@@ -5662,8 +5335,8 @@ void f_004F3A70(Ctx& c) {
   Push(c, 0x854E);
   CallPtr(c, kglCombinerParameteriNV, 0x4F3AA1);
   if (I32(0x15347A4) >= 2) {
-    if (U32(cb + 0x5FC)) Enable(c, 0x8535, 0x4F3ABF);
-    else Disable(c, 0x8535, 0x4F3AC7);
+    if (U32(cb + 0x5FC)) glEnable(0x8535);
+    else glDisable(0x8535);
   }
   if (I32(cb + 0x5F8) > 0) {
     c.esp = e - 0x20;
@@ -6020,28 +5693,18 @@ void f_004FCE80(Ctx& c) {
     Call(c, f_004FCAE0, 0x4FCEFC);
     c.esp += 0x14;
     if (U32(kUnit) != unit) {
-      Push(c, unit + 0x84C0);
-      CallPtr(c, kglActiveTextureARB, 0x4FCF0F);
+      glActiveTextureARB(unit + 0x84C0);
       Put(kUnit, unit);
     }
     if (U32(kClientUnit) != unit) {
-      Push(c, unit + 0x84C0);
-      CallPtr(c, kglClientActiveTextureARB, 0x4FCF2A);
+      glClientActiveTextureARB(unit + 0x84C0);
       Put(kClientUnit, unit);
     }
     c.esi = U32(gen);
     Call(c, f_004CB3B0, 0x4FCF3D);
     const uint32_t image = U32(gen);
-    Push(c, texels);
-    Push(c, 0x1401);
-    Push(c, 0x1908);
-    Push(c, U16(image + 0x42));
-    Push(c, U16(image + 0x40));
-    Push(c, 0);
-    Push(c, 0);
-    Push(c, 0);
-    Push(c, 0xDE1);
-    CallPtr(c, kglTexSubImage2D, 0x4FCF63);
+    glTexSubImage2D(0xDE1, 0, 0, 0, int32_t(U16(image + 0x40)), int32_t(U16(image + 0x42)), 0x1908,
+                    0x1401, Host(texels));
     c.ebx = ebx;
     c.ebp = ebp;
     c.esi = esi;
@@ -6150,12 +5813,7 @@ void f_004F4260(Ctx& c) {
 
 namespace {
 
-constexpr uint32_t kglViewport = 0x1535480, kglScissor = 0x1535220, kglMatrixMode = 0x1534D6C,
-                   kglLoadIdentity = 0x1534804, kglOrtho = 0x1534AA0, kglClear = 0x1535384,
-                   kglFinish = 0x153534C, kglFlush = 0x1534EBC,
-                   kglCopyTexSubImage2D = 0x15357D8, kglReadPixels = 0x1534F14,
-                   kglDrawBuffer = 0x1535278, kglClearColor = 0x1535518,
-                   kglVertexArrayRangeNV = 0x15355BC;
+constexpr uint32_t kglVertexArrayRangeNV = 0x15355BC;
 // ri.Milliseconds, ri.Hunk_AllocateTempMemory and ri.Hunk_FreeTempMemory
 // (cdecl).
 constexpr uint32_t kMilliseconds = 0x1549608, kTempAlloc = 0x1549610, kTempFree = 0x154961C;
@@ -6256,36 +5914,24 @@ void f_004CCC10(Ctx& c) {
   const uint32_t e = c.esp;
   Put(kIn2D, 1u);
   Call(c, f_004F4090, 0x4CCC1F);
-  for (uint32_t ptr : {kglViewport, kglScissor}) {
-    Push(c, U32(kHeight));
-    Push(c, U32(kWidth));
-    Push(c, 0);
-    Push(c, 0);
-    CallPtr(c, ptr, ptr == kglViewport ? 0x4CCC30 : 0x4CCC47);
-  }
-  Push(c, 0x1701);
-  CallPtr(c, kglMatrixMode, 0x4CCC52);
-  CallPtr(c, kglLoadIdentity, 0x4CCC58);
-  const uint64_t w = std::bit_cast<uint64_t>(double(I32(kWidth))),
-                 h = std::bit_cast<uint64_t>(double(I32(kHeight)));
-  for (uint32_t v : {0x3FF00000u, 0u, 0u, 0u, 0u, 0u, uint32_t(h >> 32), uint32_t(h),
-                     uint32_t(w >> 32), uint32_t(w), 0u, 0u})
-    Push(c, v);
-  CallPtr(c, kglOrtho, 0x4CCC87);
-  Push(c, 0x1700);
-  CallPtr(c, kglMatrixMode, 0x4CCC92);
-  CallPtr(c, kglLoadIdentity, 0x4CCC98);
+  glViewport(0, 0, I32(kWidth), I32(kHeight));
+  glScissor(0, 0, I32(kWidth), I32(kHeight));
+  glMatrixMode(0x1701);
+  glLoadIdentity();
+  glOrtho(0, I32(kWidth), I32(kHeight), 0, 0, 1);
+  glMatrixMode(0x1700);
+  glLoadIdentity();
   c.eax = 0x10065;
   Call(c, f_004CB710, 0x4CCCA8);
   if (U32(kStateBits) & 0x200000) {
-    Disable(c, 0xB60, 0x4CCCB9);
+    glDisable(0xB60);
     Put(kStateBits, U32(kStateBits) & 0xFFDFFFFF);
   }
   if (U32(kCullType) != 2) {
-    Disable(c, 0xB44, 0x4CCCD7);
+    glDisable(0xB44);
     Put(kCullType, 2u);
   }
-  Disable(c, 0x3000, 0x4CCCEC);
+  glDisable(0x3000);
   CallPtr(c, kMilliseconds, 0x4CCCF2);
   Put(0x15496E8, c.eax);
   Put(0x15496F0, Fst(FromInt(I32(0x15496E8)) * Ld(0x55B58C)));
@@ -6301,11 +5947,9 @@ void f_005040D0(Ctx& c) {
   const uint32_t e = c.esp, mode = c.esi;
   bool ranges = true;
   if (U32(0x153465C) == 3) {
-    Push(c, 0x851D);
-    CallPtr(c, kglEnableClientState, 0x5040DE);
+    glEnableClientState(0x851D);
   } else if (mode == 3) {
-    Push(c, U32(0x153479C) == 1 ? 0x851D : 0x8533);
-    CallPtr(c, kglDisableClientState, 0x504114);
+    glDisableClientState(U32(0x153479C) == 1 ? 0x851D : 0x8533);
     ranges = false;
   }
   if (ranges && mode == 1) {
@@ -6317,14 +5961,10 @@ void f_005040D0(Ctx& c) {
     Push(c, U32(0x1549534));
     CallPtr(c, kglVertexArrayRangeNV, 0x504189);
   } else {
-    for (uint32_t v : {kTessXyz, 0u, 0x1406u, U32(kXyzStride)}) Push(c, v);
-    CallPtr(c, kglVertexPointer, 0x50412D);
-    for (uint32_t v : {kTessNormals, 0u, 0x1406u}) Push(c, v);
-    CallPtr(c, kglNormalPointer, 0x50413F);
-    for (uint32_t v : {U32(0x16E8C40), 0u, 0x1406u, 2u}) Push(c, v);
-    CallPtr(c, kglTexCoordPointer, 0x504155);
-    for (uint32_t v : {kColors, 0u, 0x1401u, 4u}) Push(c, v);
-    CallPtr(c, kglColorPointer, 0x504169);
+    glVertexPointer(int32_t(U32(kXyzStride)), 0x1406, 0, Host(kTessXyz));
+    glNormalPointer(0x1406, 0, Host(kTessNormals));
+    glTexCoordPointer(2, 0x1406, 0, Host(U32(0x16E8C40)));
+    glColorPointer(4, 0x1401, 0, Host(kColors));
   }
   c.esp = e + 4;
 }
@@ -6505,16 +6145,11 @@ void f_004CE290(Ctx& c) {
 // 0, identityLight / 2).
 void f_004CE2F0(Ctx& c) {
   const uint32_t e = c.esp, cmd = c.esi;
-  Push(c, U32(cmd + 4));
-  CallPtr(c, kglDrawBuffer, 0x4CE2F4);
+  glDrawBuffer(U32(cmd + 4));
   if (CvarInt(0x15344EC)) {
-    Push(c, 0x3F800000);
-    Push(c, Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits);
-    Push(c, 0);
-    Push(c, U32(kIdentityLight));
-    CallPtr(c, kglClearColor, 0x4CE325);
-    Push(c, 0x4100);
-    CallPtr(c, kglClear, 0x4CE330);
+    glClearColor(F(U32(kIdentityLight)), 0.0f, F(Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits),
+                 1.0f);
+    glClear(0x4100);
   }
   c.eax = cmd + 8;
   c.esp = e + 4;
@@ -6530,15 +6165,13 @@ void f_004CE340(Ctx& c) {
   c.esp = e - 0xC;
   if (!U32(kIn2D)) Call(c, f_004CCC10, 0x4CE351);
   c.esp = e - 0x14;
-  Push(c, 0x4000);
-  CallPtr(c, kglClear, 0x4CE358);
-  CallPtr(c, kglFinish, 0x4CE35E);
+  glClear(0x4000);
+  glFinish();
   CallPtr(c, kMilliseconds, 0x4CE364);
   const uint32_t start = c.eax;
   c.esi = U32(0x1535AD0);
   Call(c, f_004CB3B0, 0x4CE379);
-  for (uint32_t v : {U32(kHeight), U32(kWidth), 0u, 0u, 0u, 0u, 0u, 0xDE1u}) Push(c, v);
-  CallPtr(c, kglCopyTexSubImage2D, 0x4CE395);
+  glCopyTexSubImage2D(0xDE1, 0, 0, 0, 0, 0, int32_t(U32(kWidth)), int32_t(U32(kHeight)));
   c.esi = 0;
   if (I32(0x153A51C) > 0) {
     c.esp = e - 0x1C;
@@ -6574,7 +6207,7 @@ void f_004CE340(Ctx& c) {
     c.ebx = ebx;
     c.ebp = ebp;
   }
-  CallPtr(c, kglFinish, 0x4CE58D);
+  glFinish();
   CallPtr(c, kMilliseconds, 0x4CE593);
   Push(c, c.eax - start);
   Push(c, 0x542F70);
@@ -6597,8 +6230,7 @@ void f_004CE5C0(Ctx& c) {
   Call(c, f_004F4090, 0x4CE5E2);
   c.esi = U32(0x1535AD0);
   Call(c, f_004CB3B0, 0x4CE5ED);
-  for (uint32_t v : {U32(kHeight), U32(kWidth), 0u, 0u, 0u, 0u, 0u, 0xDE1u}) Push(c, v);
-  CallPtr(c, kglCopyTexSubImage2D, 0x4CE609);
+  glCopyTexSubImage2D(0xDE1, 0, 0, 0, 0, 0, int32_t(U32(kWidth)), int32_t(U32(kHeight)));
   Put(0x1535ADC, U32(0x15496E8));
   Put(0x1535AE0, Fst(FromInt(I32(kWidth)) / FromInt(I32(0x1535AD4))));
   Put(0x1535AE4, Fst(FromInt(I32(kHeight)) / FromInt(I32(0x1535AD8))));
@@ -6675,8 +6307,8 @@ void f_004CE730(Ctx& c) {
       CallPtr(c, kTempAlloc, 0x4CE7CD);
       c.esp += 4;
       const uint32_t buf = c.esi = c.eax;
-      for (uint32_t v : {buf, 0x1401u, 0x1901u, U32(kHeight), U32(kWidth), 0u, 0u}) Push(c, v);
-      CallPtr(c, kglReadPixels, 0x4CE7F2);
+      glReadPixels(0, 0, int32_t(U32(kWidth)), int32_t(U32(kHeight)), 0x1901, 0x1401,
+                   Host<void*>(buf));
       uint32_t sum = 0;
       const int32_t n = int32_t(U32(kHeight) * U32(kWidth));
       for (int32_t i = 0; i < n; i++) sum += U8(buf + uint32_t(i));
@@ -6694,17 +6326,13 @@ void f_004CE730(Ctx& c) {
       c.esi = U32(0x1535AC4);
       Call(c, f_004CB3B0, 0x4CE866);
       if (U32(kCullType) != 2) {
-        Disable(c, 0xB44, 0x4CE873);
+        glDisable(0xB44);
         Put(kCullType, 2u);
       }
-      CallPtr(c, kglLoadIdentity, 0x4CE87F);
-      for (int k = 0; k < 3; k++) Push(c, 0x1E00);
-      CallPtr(c, kglStencilOp, 0x4CE894);
+      glLoadIdentity();
+      glStencilOp(0x1E00, 0x1E00, 0x1E00);
       for (uint32_t ref = 0x564684, rgb = 0x56464C; int32_t(rgb) >= 0x5645B0; ref -= 4, rgb -= 0xC) {
-        Push(c, 0xFFFFFFFF);
-        Push(c, U32(ref));
-        Push(c, 0x206);
-        CallPtr(c, kglStencilFunc, 0x4CE8B0);
+        glStencilFunc(0x206, int32_t(U32(ref)), 0xFFFFFFFF);
         for (uint32_t k = 0; k < 3; k++)
           Wr<uint8_t>(g_guest_base, 0x15495D8 + k, uint8_t(Ftol(St(Ld(rgb - 8 + 4 * k)) * Ld(0x55B5FC))));
         Wr<uint8_t>(g_guest_base, 0x15495DBu, 0xFF);
@@ -6719,10 +6347,7 @@ void f_004CE730(Ctx& c) {
           Call(c, f_004ADEC0, kRet[k]);
           c.esp += 0xC;
         }
-        Push(c, U32(0x15495E8));
-        Push(c, 0);
-        Push(c, U32(0x15495C8));
-        CallPtr(c, kglDrawArrays, 0x4CE967);
+        glDrawArrays(U32(0x15495C8), 0, int32_t(U32(0x15495E8)));
         Put(0x15495E8, 0u);
         Put(0x15495C8, 0u);
       }
@@ -6730,19 +6355,18 @@ void f_004CE730(Ctx& c) {
       if (!U32(kIn2D) && !(U32(kStateBits) & 0x200000) && CvarInt(0x15347F4)) {
         const uint32_t fog = (U8(0x15496EC) & 8) ? U32(0x1535890) : U32(0x13F9CF8);
         if (fog) {
-          Enable(c, 0xB60, 0x4CE9D0);
+          glEnable(0xB60);
           Put(kStateBits, U32(kStateBits) | 0x200000);
         }
       }
-      for (uint32_t v : {kTessXyz, 0u, 0x1406u, 3u}) Push(c, v);
-      CallPtr(c, kglVertexPointer, 0x4CE9EA);
+      glVertexPointer(3, 0x1406, 0, Host(kTessXyz));
     }
     c.ebx = ebx;
     c.esi = esi;
     c.edi = edi;
     c.esp = e - 4;
   }
-  if (!U32(0x1534628)) CallPtr(c, kglFinish, 0x4CE9FC);
+  if (!U32(0x1534628)) glFinish();
   if (U32(0x1830CE4)) {
     Push(c, 0x542F38);
     Push(c, 0x55B2B4);
@@ -6753,7 +6377,7 @@ void f_004CE730(Ctx& c) {
   if (!CvarInt(0x1534710)) {
     Call(c, f_004FFB40, 0x4CEA30);
   } else {
-    CallPtr(c, kglFlush, 0x4CEA43);
+    glFlush();
     Put(0x1549B4C, 1u);
   }
   Put(kIn2D, 0u);
@@ -6765,7 +6389,6 @@ void f_004CE730(Ctx& c) {
 
 namespace {
 
-constexpr uint32_t kglLoadMatrixf = 0x1534D00;
 // The sky box's extents per side (0x11CD800 mins s, 0x11CD818 mins t,
 // 0x11CD830 maxs s, 0x11CD848 maxs t; six floats each) and the clouds'
 // texture coordinates' limits.
@@ -7416,44 +7039,35 @@ void f_004DBC40(Ctx& c) {
   Call(c, f_004CB710, 0x4DBC9E);
   c.esi = 0;
   if (U32(kCullType)) {
-    if (U32(kCullType) == 2) Enable(c, 0xB44, 0x4DBCB3);
-    Push(c, U32(0x1549930) ? 0x405 : 0x404);
-    CallPtr(c, kglCullFace, 0x4DBCCD);
+    if (U32(kCullType) == 2) glEnable(0xB44);
+    glCullFace(U32(0x1549930) ? 0x405 : 0x404);
     Put(kCullType, 0u);
   }
   Push(c, 0x401);
   Call(c, f_004CBBE0, 0x4DBCE3);
   c.esp = s;
-  for (int k = 0; k < 3; k++) Push(c, U32(kIdentityLight));
-  CallPtr(c, kglColor3f, 0x4DBCEE);
+  const float white = F(U32(kIdentityLight));
+  glColor3f(white, white, white);
   if (inner) {
-    Push(c, 0x303);
-    Push(c, 0x302);
-    CallPtr(c, kglBlendFunc, 0x4DBD07);
-    Enable(c, 0xBE2, 0x4DBD12);
+    glBlendFunc(0x302, 0x303);
+    glEnable(0xBE2);
     const uint32_t env = kTexEnv + 4 * U32(kUnit);
     if (U32(env) != 0x2100) {
-      Push(c, 0x2100);
-      Push(c, 0x2200);
-      Push(c, 0x2300);
       Put(env, 0x2100u);
-      CallPtr(c, kglTexEnvi, 0x4DBD3F);
+      glTexEnvi(0x2300, 0x2200, 0x2100);
     }
   }
   const uint32_t box = U32(0x11CE790), kind = U32(box + 4);
   bool locked = false;
-  auto pointer = [&](uint32_t ptr, uint32_t size, uint32_t data, uint32_t va) {
-    for (uint32_t v : {data, 0x18u, 0x1406u, size}) Push(c, v);
-    CallPtr(c, ptr, va);
+  auto pointers = [&](uint32_t texcoords, uint32_t positions) {
+    glTexCoordPointer(2, 0x1406, 0x18, Host(texcoords));
+    glVertexPointer(4, 0x1406, 0x18, Host(positions));
   };
   switch (kind) {
     case 0:
-      pointer(kglTexCoordPointer, 2, U32(box + 8), 0x4DBD6E);
-      pointer(kglVertexPointer, 4, U32(U32(0x11CE790) + 8) + 8, 0x4DBD8A);
+      pointers(U32(box + 8), U32(U32(0x11CE790) + 8) + 8);
       if (U32(kglLockArraysEXT)) {
-        Push(c, 0x1E6);
-        Push(c, 0);
-        CallTo(c, U32(kglLockArraysEXT), 0x4DBDA3);
+        glLockArraysEXT(0, 0x1E6);
         locked = true;
       }
       break;
@@ -7461,8 +7075,7 @@ void f_004DBC40(Ctx& c) {
       Push(c, U32(box + 8));
       Push(c, 0x8892);
       CallPtr(c, kglBindBufferARB, 0x4DBDBB);
-      pointer(kglTexCoordPointer, 2, 0, 0x4DBDCB);
-      pointer(kglVertexPointer, 4, 8, 0x4DBE40);
+      pointers(0, 8);
       break;
     case 2:
       for (uint32_t v : {U32(box + 0xC), U32(box + 8), 0x18u, 0x1406u, 2u, 0x8078u}) Push(c, v);
@@ -7472,8 +7085,7 @@ void f_004DBC40(Ctx& c) {
       CallPtr(c, kglArrayObjectATI, 0x4DBE0F);
       break;
     case 3:
-      pointer(kglTexCoordPointer, 2, U32(box + 8), 0x4DBE24);
-      pointer(kglVertexPointer, 4, U32(U32(0x11CE790) + 8) + 8, 0x4DBE40);
+      pointers(U32(box + 8), U32(U32(0x11CE790) + 8) + 8);
       break;
     default:
       return done();
@@ -7509,33 +7121,27 @@ void f_004DBC40(Ctx& c) {
     c.esi = U32(shader + (inner ? 0x7C : 0x64) + 4 * U32(0x5643C0 + 4 * i));
     c.edi = n;
     Call(c, f_004CB3B0, 0x4DC03D);
-    auto draw = [&](uint32_t va) {
+    auto draw = [&] {
       Put(0x1549B14, U32(0x1549B14) + n);
       Put(0x1549B18, U32(0x1549B18) + 1);
-      for (uint32_t v : {idx, 0x1403u, n, 7u}) Push(c, v);
-      CallPtr(c, kglDrawElements, va);
+      glDrawElements(7, int32_t(n), 0x1403, Host(idx));
     };
-    draw(0x4DC063);
+    draw();
     if (CvarInt(0x15343E8)) {
-      Push(c, 0x1B01);
-      Push(c, 0x408);
-      CallPtr(c, kglPolygonMode, 0x4DC084);
-      Disable(c, 0xDE1, 0x4DC08F);
-      for (int k = 0; k < 3; k++) Push(c, 0x3F800000);
-      CallPtr(c, kglColor3f, 0x4DC0A4);
-      draw(0x4DC0D2);
-      Enable(c, 0xDE1, 0x4DC0DD);
-      Push(c, 0x1B02);
-      Push(c, 0x408);
-      CallPtr(c, kglPolygonMode, 0x4DC0ED);
+      glPolygonMode(0x408, 0x1B01);
+      glDisable(0xDE1);
+      glColor3f(1.0f, 1.0f, 1.0f);
+      draw();
+      glEnable(0xDE1);
+      glPolygonMode(0x408, 0x1B02);
     }
     Put(0x1549B10, U32(0x1549B10) + n);
     Put(0x1549B0C, U32(0x1549B0C) + 0x1E6);
     n = 0;
   }
   c.esp = s;
-  if (locked) CallPtr(c, kglUnlockArraysEXT, 0x4DC12F);
-  if (inner) Disable(c, 0xBE2, 0x4DC145);
+  if (locked) glUnlockArraysEXT();
+  if (inner) glDisable(0xBE2);
   if (U32(U32(0x11CE790) + 4) == 1) {
     Push(c, 0);
     Push(c, 0x8892);
@@ -7579,10 +7185,6 @@ void f_004DD6E0(Ctx& c) {
     Call(c, f_0051D45A, ret);
     c.esp = e - 8;
   };
-  auto depth = [&](uint32_t near_hi, uint32_t far_hi, uint32_t va) {
-    for (uint32_t v : {far_hi, 0u, near_hi, 0u}) Push(c, v);
-    CallPtr(c, kglDepthRange, va);
-  };
   auto box = [&](uint32_t field, uint32_t inner, uint32_t ret) {
     const uint32_t sh = U32(kTessShader);
     if (!U32(sh + field) || U32(sh + field) == U32(0x1535A38)) return;
@@ -7602,11 +7204,11 @@ void f_004DD6E0(Ctx& c) {
   c.esi = kTessIndexes;
   Call(c, f_004DB9F0, 0x4DD78A);
   if (CvarInt(0x15346CC))
-    depth(0, 0, 0x4DD7AD);
+    glDepthRange(0, 0);
   else
-    depth(0x3FF00000, 0x3FF00000, 0x4DD7AD);
+    glDepthRange(1, 1);
   if (U32(kStateBits) & 0x200000) {
-    Disable(c, 0xB60, 0x4DD7C4);
+    glDisable(0xB60);
     Put(kStateBits, U32(kStateBits) & 0xFFDFFFFF);
   }
   box(0x64, 0, 0x4DD7F1);
@@ -7621,7 +7223,7 @@ void f_004DD6E0(Ctx& c) {
   }
   box(0x7C, 1, 0x4DD85E);
   Call(c, f_004C89D0, 0x4DD866);
-  depth(0, 0x3FF00000, 0x4DD871);
+  glDepthRange(0, 1);
   Put(0x15496EC, U32(0x15496EC) & 0xFFFFFFBF);
   Put(0x1549B48, 1u);
   log(0x541D04, 0x4DD8A9);
@@ -7899,16 +7501,11 @@ void f_004ACF50(Ctx& c) {
     Call(c, f_004D5520, 0x4ACF99);
   }
   c.esp = s;
-  Push(c, 0x15360E8);
-  CallPtr(c, kglLoadMatrixf, 0x4ACFA2);
-  Push(c, 0x1701);
-  CallPtr(c, kglMatrixMode, 0x4ACFAD);
-  Push(c, 0x1536178);
-  CallPtr(c, kglLoadMatrixf, 0x4ACFB8);
-  Push(c, 0x1700);
-  CallPtr(c, kglMatrixMode, 0x4ACFC3);
-  for (int k = 0; k < 4; k++) Push(c, 0);
-  CallPtr(c, kglDepthRange, 0x4ACFD1);
+  glLoadMatrixf(Host<const float*>(0x15360E8));
+  glMatrixMode(0x1701);
+  glLoadMatrixf(Host<const float*>(0x1536178));
+  glMatrixMode(0x1700);
+  glDepthRange(0, 0);
   uint32_t cur = 0xFFFFFFFF;
   c.esi = cur;
   if (int32_t(count) > 0) {
@@ -7946,12 +7543,9 @@ void f_004ACF50(Ctx& c) {
             if (U32(0x153479C)) {
               Call(c, f_005040D0, 0x4AD24B);
             } else if (U32(0x15347B8) && mode == 3) {
-              for (uint32_t v : {kTessXyz, 0u, 0x1406u, U32(kXyzStride)}) Push(c, v);
-              CallPtr(c, kglVertexPointer, 0x4AD26D);
-              for (uint32_t v : {kTessNormals, 0xCu, 0x1406u}) Push(c, v);
-              CallPtr(c, kglNormalPointer, 0x4AD27F);
-              for (uint32_t v : {U32(0x16E8C40), 0u, 0x1406u, 2u}) Push(c, v);
-              CallPtr(c, kglTexCoordPointer, 0x4AD295);
+              glVertexPointer(int32_t(U32(kXyzStride)), 0x1406, 0, Host(kTessXyz));
+              glNormalPointer(0x1406, 0xC, Host(kTessNormals));
+              glTexCoordPointer(2, 0x1406, 0, Host(U32(0x16E8C40)));
             }
             Put(0x153465C, U32(mode_local));
           }
@@ -8000,8 +7594,7 @@ void f_004ACF50(Ctx& c) {
   c.ebx = ebx;
   c.ebp = ebp;
   Call(c, f_004F7D00, 0x4AD460);
-  for (uint32_t v : {0x3FF00000u, 0u, 0u, 0u}) Push(c, v);
-  CallPtr(c, kglDepthRange, 0x4AD46B);
+  glDepthRange(0, 1);
   done();
 }
 
@@ -8009,8 +7602,6 @@ void f_004ACF50(Ctx& c) {
 
 namespace {
 
-constexpr uint32_t kglPushMatrix = 0x1534DA0, kglPopMatrix = 0x15353A8, kglLightfv = 0x15351EC,
-                   kglLightf = 0x1535534, kglLightModelfv = 0x1534BE0;
 // The view's orientation (tr.viewParms.world) and the one the entities'
 // surfaces are drawn in (tr.or), 0x7C bytes each; tr.or's model matrix.
 constexpr uint32_t kViewOr = 0x15498A4, kOr = 0x1549A88, kOrMatrix = 0x1549AC4;
@@ -8022,37 +7613,21 @@ void CopyView() {
   for (uint32_t k = 0; k < 0x7C; k += 4) Put(kOr + k, U32(kViewOr + k));
 }
 
-void PushDouble(Ctx& c, St v) {
-  const uint64_t d = std::bit_cast<uint64_t>(v.v);
-  Push(c, uint32_t(d >> 32));
-  Push(c, uint32_t(d));
-}
-
-// glDepthRange(0, far; far's high dword) from the call at va.
-void DepthRange(Ctx& c, uint32_t far_hi, uint32_t far_lo, uint32_t va) {
-  for (uint32_t v : {far_hi, far_lo, 0u, 0u}) Push(c, v);
-  CallPtr(c, kglDepthRange, va);
-}
-
-// glMatrixMode(GL_PROJECTION), glLoadMatrixf(m), glMatrixMode(GL_MODELVIEW)
-// from the calls at va (and the next two, 0xB and 0x16 on).
-void LoadProjection(Ctx& c, uint32_t m, uint32_t va) {
-  Push(c, 0x1701);
-  CallPtr(c, kglMatrixMode, va);
-  Push(c, m);
-  CallPtr(c, kglLoadMatrixf, va + 0xB);
-  Push(c, 0x1700);
-  CallPtr(c, kglMatrixMode, va + 0x16);
+// glMatrixMode(GL_PROJECTION), glLoadMatrixf(m), glMatrixMode(GL_MODELVIEW).
+void LoadProjection(uint32_t m) {
+  glMatrixMode(0x1701);
+  glLoadMatrixf(Host<const float*>(m));
+  glMatrixMode(0x1700);
 }
 
 // GL_NORMALIZE or GL_RESCALE_NORMAL (cap; 0 none) on in place of the one
-// on (glDisable and glEnable from the calls at va_off and va_on).
-void Normalize(Ctx& c, uint32_t cap, uint32_t va_off, uint32_t va_on) {
+// on.
+void SetNormalize(uint32_t cap) {
   const uint32_t old = U32(kNormalize);
   if (cap == old) return;
-  if (old) Disable(c, old, va_off);
+  if (old) glDisable(old);
   Put(kNormalize, cap);
-  if (cap) Enable(c, cap, va_on);
+  if (cap) glEnable(cap);
 }
 
 // The surface of a draw surface (its address at it) through the surface
@@ -8177,13 +7752,11 @@ void f_004CF2D0(Ctx& c) {
     uint32_t count = 0;
     if (nx > 0 && ny > 0) {
       c.esp = s - 8;
-      for (uint32_t v : {buf, 0x1406u, 0x1902u, uint32_t(ny), uint32_t(nx), uint32_t(y0), uint32_t(x0)})
-        Push(c, v);
       c.ebx = uint32_t(ny);
       c.edi = uint32_t(nx);
       c.esi = uint32_t(y0);
       c.edx = uint32_t(x0);
-      CallPtr(c, kglReadPixels, 0x4CF3C0);
+      glReadPixels(x0, y0, nx, ny, 0x1902, 0x1406, Host<void*>(buf));
       const St depth = Ld(fl + 0x30);
       for (int32_t i = 0; i < nx * ny; i++)
         if (depth <= Ld(buf + 4 * i)) count++;
@@ -8295,7 +7868,7 @@ void f_004CF0C0(Ctx& c) {
 // +8 the portal 0x154992C) tested by 0x4CF2D0, freed when its intensity is
 // 0; the sun's glare and blinding (0x4DD480). With any of the view's or
 // either of those: clip plane 0 off in a portal, both matrices pushed and
-// an orthographic one of the view (depths +-100000), a quad over the
+// an orthographic one of the view (depths +-99999), a quad over the
 // view in the glare's grey and the blinding's alpha (GL_State 0x10062,
 // modulate, the image 0x1535AC4, through the batch) and each flare of the
 // view not faded out drawn (0x4CF470); the matrices popped, glPopMatrix
@@ -8360,21 +7933,15 @@ void f_004CF730(Ctx& c) {
     c.esp = e + 4;
     return;
   }
-  if (U32(0x154992C)) Disable(c, 0x3000, 0x4CF836);
-  CallPtr(c, kglPushMatrix, 0x4CF83C);
-  CallPtr(c, kglLoadIdentity, 0x4CF842);
-  Push(c, 0x1701);
-  CallPtr(c, kglMatrixMode, 0x4CF84D);
-  CallPtr(c, kglPushMatrix, 0x4CF853);
-  CallPtr(c, kglLoadIdentity, 0x4CF859);
+  if (U32(0x154992C)) glDisable(0x3000);
+  glPushMatrix();
+  glLoadIdentity();
+  glMatrixMode(0x1701);
+  glPushMatrix();
+  glLoadIdentity();
   const int32_t x = I32(0x1549950), y = I32(0x1549954);
   const int32_t x1 = int32_t(U32(0x1549958) + uint32_t(x)), y1 = int32_t(U32(0x154995C) + uint32_t(y));
-  for (uint32_t v : {0x40F869F0u, 0u, 0xC0F869F0u, 0u}) Push(c, v);
-  PushDouble(c, FromInt(y1));
-  PushDouble(c, FromInt(y));
-  PushDouble(c, FromInt(x1));
-  PushDouble(c, FromInt(x));
-  CallPtr(c, kglOrtho, 0x4CF8B3);
+  glOrtho(x, x1, y, y1, -99999, 99999);
   if (!(Ld(blind) == 0.0f) || !(Ld(glare) == 0.0f)) {
     Call(c, f_004ADC20, 0x4CF8E4);
     c.esi = U32(0x1535AC4);
@@ -8383,11 +7950,8 @@ void f_004CF730(Ctx& c) {
     Call(c, f_004CB710, 0x4CF8F9);
     const uint32_t env = kTexEnv + 4 * U32(kUnit);
     if (U32(env) != 0x2100) {
-      Push(c, 0x2100);
-      Push(c, 0x2200);
-      Push(c, 0x2300);
       Put(env, 0x2100u);
-      CallPtr(c, kglTexEnvi, 0x4CF920);
+      glTexEnvi(0x2300, 0x2200, 0x2100);
     }
     for (uint32_t v : {U32(blind), U32(glare), U32(glare), U32(glare)}) Push(c, v);
     Call(c, f_004ADFE0, 0x4CF937);
@@ -8404,16 +7968,12 @@ void f_004CF730(Ctx& c) {
     vertex(x, y1, 0x4CF98A);
     vertex(x1, y1, 0x4CF9C6);
     vertex(x1, y, 0x4CF9F2);
-    Push(c, U32(0x15495E8));
-    Push(c, 0);
-    Push(c, U32(0x15495C8));
-    CallPtr(c, kglDrawArrays, 0x4CFA04);
+    glDrawArrays(U32(0x15495C8), 0, int32_t(U32(0x15495E8)));
     Put(0x15495E8, 0u);
     Put(0x15495C8, 0u);
     Put(0x15495C4, 0u);
     Call(c, f_004C89D0, 0x4CFA21);
-    for (uint32_t v : {0x1630C40u, 0u, 0x1406u, 3u}) Push(c, v);
-    CallPtr(c, kglVertexPointer, 0x4CFA2E);
+    glVertexPointer(3, 0x1406, 0, Host(0x1630C40));
   }
   if (any)
     for (uint32_t fl = U32(kFlares); fl; fl = U32(fl))
@@ -8421,12 +7981,11 @@ void f_004CF730(Ctx& c) {
         c.edi = fl;
         Call(c, f_004CF470, 0x4CFA6D);
       }
-  CallPtr(c, kglPopMatrix, 0x4CFA73);
-  Push(c, 0x1700);
-  CallPtr(c, kglMatrixMode, 0x4CFA7E);
+  glPopMatrix();
+  glMatrixMode(0x1700);
   restore();
-  c.esp = e;
-  Dispatch(c, U32(kglPopMatrix), 0x4CFA8B);
+  glPopMatrix();
+  c.esp = e + 4;
 }
 
 // The view's clear for the refdef's flag 4: a grey of the 2D time's low
@@ -8434,11 +7993,8 @@ void f_004CF730(Ctx& c) {
 void f_004CBF90(Ctx& c) {
   const uint32_t e = c.esp;
   const uint32_t v = Fst(FromInt(int32_t(U32(0x15496E8) & 0xFF)) * Ld(0x55B5E0)).bits;
-  c.esp = e - 4;
-  for (uint32_t a : {0x3F800000u, v, v, v}) Push(c, a);
-  CallPtr(c, kglClearColor, 0x4CBFB9);
-  Push(c, 0x4000);
-  CallPtr(c, kglClear, 0x4CBFC4);
+  glClearColor(F(v), F(v), F(v), 1.0f);
+  glClear(0x4000);
   Put(0x1549B38, 1u);
   c.esp = e + 4;
 }
@@ -8447,11 +8003,9 @@ void f_004CBF90(Ctx& c) {
 // width, height at 0x1549950).
 void f_004CBFE0(Ctx& c) {
   const uint32_t e = c.esp;
-  LoadProjection(c, 0x1549970, 0x4CBFE5);
-  for (uint32_t ptr : {kglViewport, kglScissor}) {
-    for (uint32_t k = 12; k != 0xFFFFFFFCu; k -= 4) Push(c, U32(0x1549950 + k));
-    CallPtr(c, ptr, ptr == kglViewport ? 0x4CC01B : 0x4CC03C);
-  }
+  LoadProjection(0x1549970);
+  glViewport(I32(0x1549950), I32(0x1549954), I32(0x1549958), I32(0x154995C));
+  glScissor(I32(0x1549950), I32(0x1549954), I32(0x1549958), I32(0x154995C));
   c.esp = e + 4;
 }
 
@@ -8467,7 +8021,7 @@ void f_004CC050(Ctx& c) {
   c.esp = e - 8;
   c.edi = 0;
   if (CvarInt(0x15346A8) == 1 && !U32(0x1534628)) {
-    CallPtr(c, kglFinish, 0x4CC069);
+    glFinish();
     Put(0x1534628, 1u);
   }
   if (!CvarInt(0x15346A8)) Put(0x1534628, 1u);
@@ -8481,14 +8035,12 @@ void f_004CC050(Ctx& c) {
   const bool fog = I32(0x13F9CF8) > 0 && U32(0x1535950);
   uint32_t bits = 0;
   if (CvarInt(0x15343D8) == 2 || (CvarInt(0x15343EC) && (!portal || (flags & 8)))) bits = 0x400;
-  auto clear = [&](uint32_t colour, uint32_t va) {
-    for (uint32_t k = 12; k != 0xFFFFFFFCu; k -= 4) Push(c, U32(colour + k));
-    CallPtr(c, kglClearColor, va);
+  auto clear = [&](uint32_t colour) {
+    glClearColor(F(U32(colour)), F(U32(colour + 4)), F(U32(colour + 8)), F(U32(colour + 12)));
   };
   auto grey = [&] {
-    const uint32_t v = Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits;
-    for (uint32_t a : {0x3F800000u, v, v, v}) Push(c, a);
-    CallPtr(c, kglClearColor, 0x4CC1D7);
+    const float v = F(Fst(St(Ld(kIdentityLight)) * Ld(0x55B590)).bits);
+    glClearColor(v, v, v, 1.0f);
   };
   if (CvarInt(0x15344E0)) {
     bits = 0x100;
@@ -8497,39 +8049,38 @@ void f_004CC050(Ctx& c) {
     if (portal && (flags & 8)) {
       if (!CvarInt(0x153457C) && !(flags & 1)) {
         if (U32(0x1535890) && U32(0x1535898)) {
-          clear(0x1535870, 0x4CC2C2);
+          clear(0x1535870);
           bits |= 0x4000;
         }
       } else {
         bits |= 0x4000;
         if (U32(0x1535890))
-          clear(0x1535870, 0x4CC17B);
+          clear(0x1535870);
         else if (fog)
-          clear(0x1535930, 0x4CC1B0);
+          clear(0x1535930);
         else
           grey();
       }
     } else if (portal) {
       if (fog && ((flags & 0x20) ? U32(0x1535920) == 0x2601 : !CvarInt(0x15346A4))) {
         bits |= 0x4000;
-        clear(0x1535930, 0x4CC243);
+        clear(0x1535930);
       }
     } else if (!(flags & 1)) {
       if (CvarInt(0x153457C)) {
         bits |= 0x4000;
         if (U32(0x1535950))
-          clear(0x1535930, 0x4CC293);
+          clear(0x1535930);
         else
           grey();
       } else if (U32(0x1535950) && U32(0x1535958)) {
-        clear(0x1535930, 0x4CC2C2);
+        clear(0x1535930);
         bits |= 0x4000;
       }
     }
   }
   if (bits) {
-    Push(c, bits);
-    CallPtr(c, kglClear, 0x4CC2D3);
+    glClear(bits);
   }
   c.esi = esi;
   c.edi = edi;
@@ -8552,21 +8103,11 @@ void f_004CC300(Ctx& c) {
   const uint32_t amb = e - 0x20, dif = e - 0x10;
   c.esp = e - 0x24;
   c.edi = cap;
-  auto fv = [&](uint32_t pname, uint32_t p, uint32_t va) {
-    Push(c, p);
-    Push(c, pname);
-    Push(c, cap);
-    CallPtr(c, kglLightfv, va);
-  };
-  auto f = [&](uint32_t pname, uint32_t v, uint32_t va) {
-    Push(c, v);
-    Push(c, pname);
-    Push(c, cap);
-    CallPtr(c, kglLightf, va);
-  };
+  auto fv = [&](uint32_t pname, uint32_t p) { glLightfv(cap, pname, Host<const float*>(p)); };
+  auto f = [&](uint32_t pname, uint32_t v) { glLightf(cap, pname, F(v)); };
   if (Ld(e + 4) == 1.0f) {
-    fv(0x1200, light + 0x14, 0x4CC38F);
-    fv(0x1201, light + 0x24, 0x4CC39F);
+    fv(0x1200, light + 0x14);
+    fv(0x1201, light + 0x24);
   } else {
     const St scale = Ld(e + 4);
     for (uint32_t k = 0; k < 12; k += 4) {
@@ -8575,18 +8116,18 @@ void f_004CC300(Ctx& c) {
     }
     Put(amb + 0xC, 0x3F800000u);
     Put(dif + 0xC, 0x3F800000u);
-    fv(0x1200, amb, 0x4CC378);
-    fv(0x1201, dif, 0x4CC39F);
+    fv(0x1200, amb);
+    fv(0x1201, dif);
   }
-  fv(0x1202, light + 0x34, 0x4CC3AF);
-  fv(0x1203, light + 0x44, 0x4CC3BF);
-  fv(0x1204, light + 0x54, 0x4CC3CF);
-  f(0x1205, U32(light + 0x6C), 0x4CC3DF);
-  f(0x1206, U32(light + 0x70), 0x4CC3EF);
-  f(0x1207, U32(light + 0x60), 0x4CC3FF);
-  f(0x1208, U32(light + 0x64), 0x4CC40F);
-  f(0x1209, U32(light + 0x68), 0x4CC41F);
-  if (int32_t(cap - 0x4000) >= I32(0x1534660)) Enable(c, cap, 0x4CC42E);
+  fv(0x1202, light + 0x34);
+  fv(0x1203, light + 0x44);
+  fv(0x1204, light + 0x54);
+  f(0x1205, U32(light + 0x6C));
+  f(0x1206, U32(light + 0x70));
+  f(0x1207, U32(light + 0x60));
+  f(0x1208, U32(light + 0x64));
+  f(0x1209, U32(light + 0x68));
+  if (int32_t(cap - 0x4000) >= I32(0x1534660)) glEnable(cap);
   c.edi = edi;
   c.esp = e + 4;
 }
@@ -8626,9 +8167,7 @@ void f_004CC440(Ctx& c) {
     }
   }
   c.esp = s;
-  Push(c, amb);
-  Push(c, 0xB53);
-  CallPtr(c, kglLightModelfv, 0x4CC56A);
+  glLightModelfv(0xB53, Host<const float*>(amb));
   const uint32_t lit = U32(kEntity);
   const int32_t n = I32(lit + 0xCC);
   for (int32_t i = 0; i < n; i++) {
@@ -8644,8 +8183,7 @@ void f_004CC440(Ctx& c) {
   }
   uint32_t r = 0;
   if (n) {
-    Push(c, 0x15360E8);
-    CallPtr(c, kglLoadMatrixf, 0x4CC5EA);
+    glLoadMatrixf(Host<const float*>(0x15360E8));
     r = 1;
   }
   int32_t i = 0;
@@ -8657,7 +8195,7 @@ void f_004CC440(Ctx& c) {
     Call(c, f_004CC300, 0x4CC616);
     c.esp = s;
   }
-  for (; i < I32(0x1534660); i++) Disable(c, 0x4000 + uint32_t(i), 0x4CC638);
+  for (; i < I32(0x1534660); i++) glDisable(0x4000 + uint32_t(i));
   Put(0x1534660, U32(U32(kEntity) + 0xCC));
   c.eax = r;
   c.ebx = ebx;
@@ -8713,17 +8251,16 @@ void f_005086A0(Ctx& c) {
     return;
   }
   c.esp = s;
-  Enable(c, 0xB90, 0x5086C8);
-  for (uint32_t v : {0xFFu, 0u, 0x205u}) Push(c, v);
-  CallPtr(c, kglStencilFunc, 0x5086DA);
-  Disable(c, 0x3000, 0x5086E5);
+  glEnable(0xB90);
+  glStencilFunc(0x205, 0, 0xFF);
+  glDisable(0x3000);
   if (U32(kCullType) != 2) {
-    Disable(c, 0xB44, 0x5086F8);
+    glDisable(0xB44);
     Put(kCullType, 2u);
   }
   c.esi = U32(0x1535AC4);
   Call(c, f_004CB3B0, 0x50870F);
-  CallPtr(c, kglLoadIdentity, 0x50870F);
+  glLoadIdentity();
   Call(c, f_004ADC20, 0x50871A);
   for (uint32_t k = 0; k < 4; k++) Wr<uint8_t>(g_guest_base, 0x15495D8 + k, k == 3 ? 0xFF : 0x99);
   c.eax = 0x113;
@@ -8738,18 +8275,13 @@ void f_005086A0(Ctx& c) {
     Call(c, f_004ADEC0, rets[i]);
   }
   c.esp = s;
-  Push(c, U32(0x15495E8));
-  Push(c, 0);
-  Push(c, U32(0x15495C8));
-  CallPtr(c, kglDrawArrays, 0x5087A9);
-  Push(c, 0xB90);
+  glDrawArrays(U32(0x15495C8), 0, int32_t(U32(0x15495E8)));
   Put(0x15495E8, 0u);
   Put(0x15495C8, 0u);
-  CallPtr(c, kglDisable, 0x5087C8);
+  glDisable(0xB90);
   Put(0x15495C4, 0u);
   Call(c, f_004C89D0, 0x5087DD);
-  for (uint32_t v : {0x1630C40u, 0u, 0x1406u, 3u}) Push(c, v);
-  CallPtr(c, kglVertexPointer, 0x5087EB);
+  glVertexPointer(3, 0x1406, 0, Host(0x1630C40));
   c.esi = esi;
   c.esp = e + 4;
 }
@@ -8810,24 +8342,21 @@ void f_004CC670(Ctx& c) {
     Call(c, f_004AA0F0, ret);
   };
   // The entity's GL lights and normalising for a shader lit by them (the
-  // model matrix again from load_va when the lights loaded the view's);
+  // model matrix again, with reload, when the lights loaded the view's);
   // else normalising off.
-  auto lights = [&](uint32_t ret, uint32_t load_va, uint32_t va_off, uint32_t va_on, uint32_t va_none) {
+  auto lights = [&](uint32_t ret, bool reload) {
     if (!(U8(U32(kTessShader) + 0x54) & 0x18)) {
       if (U32(kNormalize)) {
-        Disable(c, U32(kNormalize), va_none);
+        glDisable(U32(kNormalize));
         Put(kNormalize, 0u);
       }
       return;
     }
     regs();
     Call(c, f_004CC440, ret);
-    if (load_va && c.eax) {
-      Push(c, kOrMatrix);
-      CallPtr(c, kglLoadMatrixf, load_va);
-    }
+    if (reload && c.eax) glLoadMatrixf(Host<const float*>(kOrMatrix));
     rsi = U32(U32(kEntity) + 0x2AC);
-    Normalize(c, rsi, va_off, va_on);
+    SetNormalize(rsi);
   };
   c.esp = s;
   regs();
@@ -8889,7 +8418,7 @@ void f_004CC670(Ctx& c) {
         orientation(0x4CC88E);
         if (U32(U32(kEntity) + 0x9C)) dlights(U32(0x1549800), 0x4CC8B1);
         depth = U32(U32(kEntity) + 4) & 0x18;
-        lights(0x4CC8D1, 0, 0x4CC8EB, 0x4CC8FC, 0x4CC93E);
+        lights(0x4CC8D1, false);
       } else {
         Put(0x15496F0, orig);
         Put(kEntity, kWorldEntity);
@@ -8897,33 +8426,31 @@ void f_004CC670(Ctx& c) {
         Put(0x17F0C78, Fst(St(F32{orig}) - Ld(U32(kTessShader) + 0x17C)));
         dlights(U32(0x15497FC), 0x4CC997);
         if (U32(kNormalize)) {
-          Disable(c, U32(kNormalize), 0x4CC9A5);
+          glDisable(U32(kNormalize));
           Put(kNormalize, 0u);
         }
       }
       rbx = depth;
-      Push(c, kOrMatrix);
-      CallPtr(c, kglLoadMatrixf, 0x4CC90B);
+      glLoadMatrixf(Host<const float*>(kOrMatrix));
       rsi = old_depth;
       if (old_depth != depth) {
         if (depth == 0) {
-          DepthRange(c, 0x3FF00000, 0, 0x4CC9F2);
+          glDepthRange(0, 1);
         } else if (depth == 8) {
-          LoadProjection(c, 0x15499B0, 0x4CC9C2);
-          DepthRange(c, 0x3FC99999, 0xA0000000, 0x4CC9F2);
+          LoadProjection(0x15499B0);
+          glDepthRange(0, 0.2f);
         } else {
-          DepthRange(c, 0x3FE00000, 0, 0x4CC9F2);
+          glDepthRange(0, 0.5);
         }
-        if (old_depth == 8) LoadProjection(c, 0x1549970, 0x4CCA02);
+        if (old_depth == 8) LoadProjection(0x1549970);
         old_depth = depth;
       }
       old_ent = U32(e + 4);
     } else {
-      lights(0x4CCA40, 0x4CCA49, 0x4CCA68, 0x4CCA79, 0x4CCA8B);
+      lights(0x4CCA40, true);
       if (ent != 0x7FE && (changed & 4)) {
         orientation(0x4CCAF2);
-        Push(c, kOrMatrix);
-        CallPtr(c, kglLoadMatrixf, 0x4CCAF7);
+        glLoadMatrixf(Host<const float*>(kOrMatrix));
       }
     }
     regs();
@@ -8946,9 +8473,8 @@ void f_004CC670(Ctx& c) {
   Put(kEntity, kWorldEntity);
   copy_view();
   dlights(U32(0x15497FC), 0x4CCBA8);
-  Push(c, 0x15498E0);
-  CallPtr(c, kglLoadMatrixf, 0x4CCBAD);
-  if (depth) DepthRange(c, 0x3FF00000, 0, 0x4CCBC1);
+  glLoadMatrixf(Host<const float*>(0x15498E0));
+  if (depth) glDepthRange(0, 1);
   regs();
   Call(c, f_005086A0, 0x4CCBCC);
   c.ebx = ebx;

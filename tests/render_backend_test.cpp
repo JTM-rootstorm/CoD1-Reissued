@@ -14,7 +14,10 @@
 // EFLAGS, the x87 status word and the stack below the return address
 // (which both runs start from as the last case left it: the optimised
 // iterators pass locals they leave unwritten on some paths), but for the
-// shadow volumes' frames, which the native code leaves as the original.
+// shadow volumes' frames, which the native code leaves as the original
+// (but for the slots of the original's GL calls, which the native code
+// makes on the host). GL calls are compared by their arguments, without
+// a return address or stack.
 //
 //   render_backend_test EXE
 //
@@ -31,10 +34,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <random>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "../src/render_gl.h"
 #include "runtime/guest_memory.h"
 #include "win32/pe_image.h"
 #include "x86/lifted.h"
@@ -92,7 +98,7 @@ constexpr Gl kGl[] = {
     {0x1534C84, "glFogi", 2},
     {0x1535598, "glFogf", 2},
     {0x15351A0, "glHint", 2},
-    {0x1535014, "qgl 0x1535014", 1},
+    {0x1535014, "glBindFragmentShaderATI", 1},
     {0x153542C, "glColorPointer", 4},
     {0x153503C, "glNormalPointer", 3},
     {0x15354F0, "glVertexPointer", 4},
@@ -171,6 +177,10 @@ struct CallRec {
   bool operator==(const CallRec&) const = default;
 };
 std::vector<CallRec> g_calls;
+// The stack slots the calls through the pointers to the host's GL entry
+// points push (their return addresses and arguments): the native code
+// calls those on the host and leaves the slots as they were.
+std::vector<uint32_t> g_gl_slots;
 
 enum Reg { kEax = 1, kEcx = 2, kEdx = 4, kEbx = 8, kEsi = 16, kEdi = 32, kEbp = 64 };
 constexpr int kAll = 127, kSaved = kEbx | kEsi | kEdi | kEbp;
@@ -194,9 +204,25 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
   c.esp += 4;
 }
 
+// The GL entry points the native code calls on the host (src/render_gl.h),
+// with neither a return address nor a stack: their calls through the
+// pointers (by the lifted code) are recorded without them too.
+bool OnHost(const Gl& gl) {
+  static constexpr std::string_view kQgl[] = {
+      "glBindFragmentShaderATI", "glDrawRangeElementsEXT", "glBindBufferARB",
+      "glArrayObjectATI", "glDrawElementArrayATI", "glCombinerParameterfvNV",
+      "glCombinerParameteriNV", "glCombinerInputNV", "glCombinerOutputNV",
+      "glCombinerStageParameterfvNV", "glFinalCombinerInputNV", "glBindProgramARB",
+      "glProgramLocalParameter4fvARB", "glProgramLocalParameter4fARB",
+      "glVertexArrayRangeNV"};
+  const std::string_view name = gl.name;
+  return name.starts_with("gl") && std::find(std::begin(kQgl), std::end(kQgl), name) == std::end(kQgl);
+}
+
 }  // namespace
 
 namespace recomp {
+void RecordGl(CallRec r);
 namespace gen {
 // The stubs: the CRT's rand and srand (the debug colours; its state is
 // the thread's).
@@ -831,7 +857,113 @@ void n_004CC300(Ctx& c);
 void n_004CC440(Ctx& c);
 void n_004AA0F0(Ctx& c);
 void n_005086A0(Ctx& c);
+
+// The host's GL entry points (src/render_gl.h), recorded as the calls
+// through their pointers are: their arguments as the stack would hold
+// them (a double low dword first), pointers as guest addresses.
+namespace {
+uint32_t W(float f) { return std::bit_cast<uint32_t>(f); }
+uint32_t Va(const void* p) {
+  return p ? uint32_t(static_cast<const uint8_t*>(p) - recomp::g_guest_base) : 0;
+}
+uint32_t GlIndex(std::string_view name) {
+  for (int i = 0; i < kNumGl; i++)
+    if (name == kGl[i].name) return uint32_t(i);
+  std::printf("no entry %.*s\n", int(name.size()), name.data());
+  std::abort();
+}
+void HostGl(uint32_t i, std::initializer_list<uint32_t> args) {
+  CallRec r{};
+  r.target = kGlTarget + 0x10 * i;
+  std::copy(args.begin(), args.end(), r.args);
+  RecordGl(r);
+}
+}  // namespace
+#define COD1_GL(name, params, ...)                       \
+  void name params {                                      \
+    static const uint32_t entry = GlIndex(#name);         \
+    HostGl(entry, {__VA_ARGS__});                         \
+  }
+#define D(d) uint32_t(std::bit_cast<uint64_t>(d)), uint32_t(std::bit_cast<uint64_t>(d) >> 32)
+COD1_GL(glEnable, (uint32_t cap), cap)
+COD1_GL(glDisable, (uint32_t cap), cap)
+COD1_GL(glHint, (uint32_t t, uint32_t m), t, m)
+COD1_GL(glFinish, ())
+COD1_GL(glFlush, ())
+COD1_GL(glDrawBuffer, (uint32_t m), m)
+COD1_GL(glBlendFunc, (uint32_t s, uint32_t d), s, d)
+COD1_GL(glAlphaFunc, (uint32_t f, float r), f, W(r))
+COD1_GL(glDepthFunc, (uint32_t f), f)
+COD1_GL(glDepthMask, (uint32_t f), f)
+COD1_GL(glDepthRange, (double n, double f), D(n), D(f))
+COD1_GL(glColorMask, (uint32_t r, uint32_t g, uint32_t b, uint32_t a), r, g, b, a)
+COD1_GL(glCullFace, (uint32_t m), m)
+COD1_GL(glPolygonMode, (uint32_t f, uint32_t m), f, m)
+COD1_GL(glPolygonOffset, (float f, float u), W(f), W(u))
+COD1_GL(glViewport, (int32_t x, int32_t y, int32_t w, int32_t h), uint32_t(x), uint32_t(y),
+        uint32_t(w), uint32_t(h))
+COD1_GL(glScissor, (int32_t x, int32_t y, int32_t w, int32_t h), uint32_t(x), uint32_t(y),
+        uint32_t(w), uint32_t(h))
+COD1_GL(glStencilFunc, (uint32_t f, int32_t r, uint32_t m), f, uint32_t(r), m)
+COD1_GL(glStencilOp, (uint32_t a, uint32_t b, uint32_t c), a, b, c)
+COD1_GL(glFogf, (uint32_t p, float v), p, W(v))
+COD1_GL(glFogi, (uint32_t p, int32_t v), p, uint32_t(v))
+COD1_GL(glFogfv, (uint32_t p, const float* v), p, Va(v))
+COD1_GL(glClearColor, (float r, float g, float b, float a), W(r), W(g), W(b), W(a))
+COD1_GL(glClear, (uint32_t m), m)
+COD1_GL(glLightf, (uint32_t l, uint32_t p, float v), l, p, W(v))
+COD1_GL(glLightfv, (uint32_t l, uint32_t p, const float* v), l, p, Va(v))
+COD1_GL(glLightModelfv, (uint32_t p, const float* v), p, Va(v))
+COD1_GL(glMatrixMode, (uint32_t m), m)
+COD1_GL(glLoadIdentity, ())
+COD1_GL(glLoadMatrixf, (const float* m), Va(m))
+COD1_GL(glPushMatrix, ())
+COD1_GL(glPopMatrix, ())
+COD1_GL(glOrtho, (double l, double r, double b, double t, double n, double f), D(l), D(r),
+        D(b), D(t), D(n), D(f))
+COD1_GL(glBindTexture, (uint32_t t, uint32_t n), t, n)
+COD1_GL(glTexEnvi, (uint32_t t, uint32_t p, int32_t v), t, p, uint32_t(v))
+COD1_GL(glTexEnvf, (uint32_t t, uint32_t p, float v), t, p, W(v))
+COD1_GL(glTexEnvfv, (uint32_t t, uint32_t p, const float* v), t, p, Va(v))
+COD1_GL(glTexSubImage2D,
+        (uint32_t t, int32_t l, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t f,
+         uint32_t ty, const void* p),
+        t, uint32_t(l), uint32_t(x), uint32_t(y), uint32_t(w), uint32_t(h), f, ty, Va(p))
+COD1_GL(glCopyTexSubImage2D,
+        (uint32_t t, int32_t l, int32_t xo, int32_t yo, int32_t x, int32_t y, int32_t w,
+         int32_t h),
+        t, uint32_t(l), uint32_t(xo), uint32_t(yo), uint32_t(x), uint32_t(y), uint32_t(w),
+        uint32_t(h))
+COD1_GL(glActiveTextureARB, (uint32_t t), t)
+COD1_GL(glClientActiveTextureARB, (uint32_t t), t)
+COD1_GL(glVertexPointer, (int32_t n, uint32_t t, int32_t s, const void* p), uint32_t(n), t,
+        uint32_t(s), Va(p))
+COD1_GL(glColorPointer, (int32_t n, uint32_t t, int32_t s, const void* p), uint32_t(n), t,
+        uint32_t(s), Va(p))
+COD1_GL(glTexCoordPointer, (int32_t n, uint32_t t, int32_t s, const void* p), uint32_t(n), t,
+        uint32_t(s), Va(p))
+COD1_GL(glNormalPointer, (uint32_t t, int32_t s, const void* p), t, uint32_t(s), Va(p))
+COD1_GL(glEnableClientState, (uint32_t a), a)
+COD1_GL(glDisableClientState, (uint32_t a), a)
+COD1_GL(glLockArraysEXT, (int32_t f, int32_t n), uint32_t(f), uint32_t(n))
+COD1_GL(glUnlockArraysEXT, ())
+COD1_GL(glDrawArrays, (uint32_t m, int32_t f, int32_t n), m, uint32_t(f), uint32_t(n))
+COD1_GL(glDrawElements, (uint32_t m, int32_t n, uint32_t t, const void* p), m, uint32_t(n), t,
+        Va(p))
+COD1_GL(glArrayElement, (int32_t i), uint32_t(i))
+COD1_GL(glBegin, (uint32_t m), m)
+COD1_GL(glEnd, ())
+COD1_GL(glColor3f, (float r, float g, float b), W(r), W(g), W(b))
+COD1_GL(glNormal3f, (float x, float y, float z), W(x), W(y), W(z))
+COD1_GL(glLineWidth, (float w), W(w))
+COD1_GL(glColor4ubv, (const uint8_t* v), Va(v))
+COD1_GL(glReadPixels,
+        (int32_t x, int32_t y, int32_t w, int32_t h, uint32_t f, uint32_t t, void* p),
+        uint32_t(x), uint32_t(y), uint32_t(w), uint32_t(h), f, t, Va(p))
+#undef D
+#undef COD1_GL
 }  // namespace gen
+
 
 bool CallEntry(Ctx& c, uint32_t target);
 
@@ -851,8 +983,12 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
   const Gl& gl = kGl[i];
   CallRec r{};
   r.target = target;
-  r.esp = c.esp;
-  r.ret = Rd(c.esp);
+  if (OnHost(gl)) {
+    for (int k = 0; k <= gl.args; k++) g_gl_slots.push_back(c.esp + 4 * uint32_t(k));
+  } else {
+    r.esp = c.esp;
+    r.ret = Rd(c.esp);
+  }
   // ri.Error's texture environment message has the environment after it.
   // RB_ShowImages' time has its milliseconds after it.
   const int n = (gl.ptr == 0x1549604 && Rd(c.esp + 8) == 0x54303C) ||
@@ -860,6 +996,22 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
                     ? 3
                     : gl.args;
   for (int k = 0; k < n; k++) r.args[k] = Rd(c.esp + 4 + 4 * uint32_t(k));
+  RecordGl(r);
+  const uint32_t junk = 0xC0DE0000u + uint32_t(g_calls.size());
+  c.eax = junk;
+  c.ecx = junk ^ 1;
+  c.edx = junk ^ 2;
+  if (gl.ptr == 0x5330F4) c.eax = recomp::gen::g_tiddata;
+  if (gl.ptr == 0x1549610) c.eax = recomp::gen::g_temp;
+  // A stage iterator now and then leaves no indexes.
+  if (gl.ptr == 0x1830CA0 && (Rd(0x17F0C88) & 1)) Wr(0x17F0C84, 0);
+  c.esp += 4 + (gl.cdecl ? 0 : 4 * uint32_t(gl.args));
+}
+
+// Records a call of a kGl entry (its arguments in r), made through its
+// pointer or on the host.
+void RecordGl(CallRec r) {
+  const Gl& gl = kGl[(r.target - kGlTarget) / 0x10];
   if (gl.ptr_arg >= 0)
     for (int k = 0; k < gl.floats; k++) r.data[k] = Rd(r.args[gl.ptr_arg] + 4 * uint32_t(k));
   // The texels glTexSubImage2D sends (width x height RGBA bytes, at most
@@ -896,15 +1048,6 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
     r.data[2] = Rd(0x1830C9C);
   }
   g_calls.push_back(r);
-  const uint32_t junk = 0xC0DE0000u + uint32_t(g_calls.size());
-  c.eax = junk;
-  c.ecx = junk ^ 1;
-  c.edx = junk ^ 2;
-  if (gl.ptr == 0x5330F4) c.eax = recomp::gen::g_tiddata;
-  if (gl.ptr == 0x1549610) c.eax = recomp::gen::g_temp;
-  // A stage iterator now and then leaves no indexes.
-  if (gl.ptr == 0x1830CA0 && (Rd(0x17F0C88) & 1)) Wr(0x17F0C84, 0);
-  c.esp += 4 + (gl.cdecl ? 0 : 4 * uint32_t(gl.args));
 }
 void Resume(Ctx&, GuestResume r) {
   std::printf("unexpected resume to %08X\n", r.target);
@@ -1173,6 +1316,7 @@ void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
 
   Ctx cl = c0;
   g_calls.clear();
+  g_gl_slots.clear();
   e.lifted(cl);
   const std::vector<uint8_t> after = Save(w);
   const std::vector<CallRec> lcalls = g_calls;
@@ -1220,10 +1364,17 @@ void Run(const Call& k, uint32_t arena_used, std::mt19937& g, Stats& s) {
     }
     ok = false;
   }
+  // The frame (the last window) but for the slots of the lifted code's GL
+  // calls.
+  std::sort(g_gl_slots.begin(), g_gl_slots.end());
+  auto gl_slot = [&](const Window& x, uint32_t i) {
+    return e.frame && &x == &w.back() &&
+           std::binary_search(g_gl_slots.begin(), g_gl_slots.end(), (x.va + i) & ~3u);
+  };
   size_t at = 0;
   for (const Window& x : w) {
     for (uint32_t i = 0; i < x.size; i++)
-      if (got[at + i] != after[at + i]) {
+      if (got[at + i] != after[at + i] && !gl_slot(x, i)) {
         if (s.failures < 20) {
           const uint32_t a = (x.va + i) & ~3u;
           const size_t o = at + (a - x.va);
@@ -2704,6 +2855,12 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       for (int i = 0; i < 8; i++) k.args.push_back(g() % 4 ? Float(float(int(g() % 2001) - 1000) / 7.0f) : RandFloat(g));
       k.args.push_back(col);
       if (Limits2D(g)) k.ebx = Rd(0x17F0C70);
+      // No optimised batch for the flush to draw first: its iterators read
+      // locals they leave unwritten, here what the original's GL calls
+      // (RB_SetGL2D's) left on the stack, which the native code makes on
+      // the host.
+      Wr(0x1830C94, 0);
+      Wr(0x1830C98, 0);
       break;
     }
     case 0x4CD540:
@@ -2719,6 +2876,12 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       if (Limits2D(g)) Wr(cmd + 4, Rd(0x17F0C70));
       if (kEntries[k.entry].va == 0x4CD540) Wr(cmd + 0x28, g());
       if (kEntries[k.entry].va == 0x4CD740 && g() % 8 == 0) Wr(cmd + 0x28, Float(1e30f));
+      // No optimised batch for the flush to draw first: its iterators read
+      // locals they leave unwritten, here what the original's GL calls
+      // (RB_SetGL2D's) left on the stack, which the native code makes on
+      // the host.
+      Wr(0x1830C94, 0);
+      Wr(0x1830C98, 0);
       k.edi = cmd;
       break;
     }
@@ -2892,6 +3055,12 @@ void Cases(Arena& a, std::mt19937& g, Stats& s) {
       break;
     case 0x4CE5C0:
       k.args = {a.Alloc(8)};
+      // No optimised batch for the flush to draw first: its iterators read
+      // locals they leave unwritten, here what the original's GL calls
+      // (RB_SetGL2D's) left on the stack, which the native code makes on
+      // the host.
+      Wr(0x1830C94, 0);
+      Wr(0x1830C98, 0);
       break;
     case 0x4CE650: {
       // The fade: its duration (now and then 0 or negative).

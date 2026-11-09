@@ -3,17 +3,18 @@
 ## Renderer back end (2026-10-25, branch render-backend)
 The back end is going native from the bottom up (src/render_backend.cpp),
 each layer checked against the lifted originals by ctest
-render_backend_oracle with every GL call recorded. The aim is a back end
-that is native code down to its GL calls, which can then go to gfx::Device
-directly instead of through the opengl32 HLE ("Sketch: the stage iterator
-on gfx::Device" below).
+render_backend_oracle with every GL call recorded. All of it is native
+(18 layers), and its GL calls go to SwARc's gl::Context on the host, not
+through the opengl32 HLE ("The GL on the host" below); drawing straight on
+gfx::Device is sketched in "Sketch: the stage iterator on gfx::Device".
 - The qgl pointers: QGL_Init (0x4BD930) loads each opengl32 export into a
   dll pointer and a qgl pointer (`qglX = dllX = GetProcAddress(...)`), the
   extension loader (0x4FE9xx-0x4FF0xx) the extensions through
   wglGetProcAddress (glActiveTextureARB 0x1534C14, glClientActiveTextureARB
   0x1534B78, glLockArraysEXT 0x1534DDC, glDrawRangeElementsEXT 0x1534DB0,
-  ...). The native code calls through them as the original does, so the
-  HLE sees the same calls.
+  ...). The native code reads them for the extensions in use, and calls
+  through them only the extensions the host's GL lacks ("The GL on the
+  host").
 - Layer 1, the GL state: GL_Bind 0x4CB3B0 ("GL_Bind: NULL image"; ESI
   image), the cull face 0x4CB5D0 (ESI), the texture environment 0x4CB640
   (EAX), the state bits 0x4CB710 (EAX: depth, mask, line mode, alpha test,
@@ -676,7 +677,7 @@ on gfx::Device" below).
   0x11CE828 and 0x11CE82C by the ms since the last call 0x11CE830 and
   scaled; 0 for a scale of 0 or less). With a flare of the view or either
   of those: clip plane 0 off in a portal, both matrices pushed and an
-  orthographic projection of the view (depths +-100000), a quad over the
+  orthographic projection of the view (depths +-99999), a quad over the
   view in the glare's grey and the blinding's alpha (0x4ADFE0, the batch's
   colour x 255 by _ftol2; GL_State 0x10062, modulate, the image
   0x1535AC4) and each flare of the view not faded out drawn (0x4CF470);
@@ -1045,6 +1046,43 @@ on gfx::Device" below).
   and briefing frames shared, 172 of 1798 in-level frames identical, 176
   for a second layer 18 run and 176 between the two layer 18 runs: the
   walk's timing.
+- The GL on the host (2026-11-08): the native back end calls GL on the
+  host (src/render_gl.h) instead of through the qgl pointers: in the game
+  src/render_gl.cpp, on the thread's current gl::Context (SwARc's opengl32
+  CurrentGl, the context the entry points draw with, so the lifted code's
+  calls through the pointers mix with these in order), with the
+  conversions the entry points make; in the oracle, recorders that log the
+  calls as the pointers' stubs do. Every call of an entry point the
+  opengl32 HLE handles (303 in the source now; 33 calls through the
+  pointers remain), and two it does not handle (glCopyTexSubImage2D for
+  RB_ShowImages and the screen copy command, glLineWidth for the debug
+  draws), which are fatal as the entry points are. Called through the
+  pointers still: the extensions the context does not advertise (NV
+  register combiners, ARB vertex programs, ATI fragment shaders (0x1535014
+  is glBindFragmentShaderATI: its error-check wrapper 0x4B6570 prints the
+  name) and array objects, vertex buffer objects, NV vertex array range,
+  draw range elements), whose pointers stay null here; and the refimport
+  functions. Not seen by the host calls: the renderer's GL error checks,
+  which swap the qgl pointers for wrappers that print glGetError after
+  each call (0x4B6570 and its siblings, swapped in from 0x4C0A0B on). The
+  call sites' addresses the GL calls needed are gone from the optimised
+  iterators' and static models' tables. The oracle compares a GL call by
+  its arguments only (no return address or ESP, the lifted side's too),
+  and the shadow volumes' frames but for the slots the lifted code's GL
+  calls push (the silhouette's last glVertexPointer, the shadow volume's
+  glColorMask(1, 1, 1, 1)). The 2D commands' cases now start without an
+  optimised batch: its iterators pass coordinate pointers for the units
+  past the one or two they fill from their frame unwritten, which held
+  what RB_SetGL2D's GL calls had pushed; the training walk reaches no such
+  stage (a probe in the optimised iterators and static models over the
+  walk: none). The flares' orthographic depths are +-99999 (0x40F869F0),
+  not 100000 as the notes had it. Oracle: 200000 cases, 5.78M calls, 0
+  mismatches; ctest 36 of 36 (SwARc b15dec5). Frames, against
+  the build before (two runs of it): all 13 loading and briefing frames
+  shared, 46 and 47 of 1640 in-level frames identical, 46 between the two
+  runs of the build before. Timing before this (main against layer 18,
+  three training walks each, 12-88 s): mean frame 1.95-2.03 ms against
+  1.94-2.11 ms, the same within the runs' spread.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),

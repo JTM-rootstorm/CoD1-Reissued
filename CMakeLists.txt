@@ -33,7 +33,7 @@ if(TARGET cod1_lifted)
                  src/screen2d.cpp
                  src/pmove_fixed.cpp src/pmove.cpp src/unzip.cpp
                  src/zlib.cpp src/jpeg_idct.cpp src/crt.cpp src/xanim.cpp
-                 src/render.cpp src/render_backend.cpp
+                 src/render.cpp src/render_backend.cpp src/render_gl.cpp
                  $<TARGET_OBJECTS:cod1_lifted>)
   target_link_libraries(cod1 PRIVATE recomp_win32 recomp_mss32 recomp_d3d7
                         recomp_opengl ZLIB::ZLIB)
