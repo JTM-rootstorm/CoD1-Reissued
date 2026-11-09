@@ -5,8 +5,9 @@ The back end is going native from the bottom up (src/render_backend.cpp),
 each layer checked against the lifted originals by ctest
 render_backend_oracle with every GL call recorded. All of it is native
 (18 layers), and its GL calls go to SwARc's gl::Context on the host, not
-through the opengl32 HLE ("The GL on the host" below); drawing straight on
-gfx::Device is sketched in "Sketch: the stage iterator on gfx::Device".
+through the opengl32 HLE ("The GL on the host" below); its vertex array
+draws go to gfx::Device itself ("Vertex array draws on gfx::Device"); the
+rest is sketched in "Sketch: the stage iterator on gfx::Device".
 - The qgl pointers: QGL_Init (0x4BD930) loads each opengl32 export into a
   dll pointer and a qgl pointer (`qglX = dllX = GetProcAddress(...)`), the
   extension loader (0x4FE9xx-0x4FF0xx) the extensions through
@@ -1083,6 +1084,20 @@ gfx::Device is sketched in "Sketch: the stage iterator on gfx::Device".
   runs of the build before. Timing before this (main against layer 18,
   three training walks each, 12-88 s): mean frame 1.95-2.03 ms against
   1.94-2.11 ms, the same within the runs' spread.
+- Vertex array draws on gfx::Device (2026-11-08): glDrawArrays and
+  glDrawElements (unsigned shorts) in src/render_gl.cpp draw with the
+  context's device itself (SwARc's FfState/DrawFf): the client arrays
+  as the device's streams and the context's state as a value
+  (gl::Context::ArrayDraw), the vertices the indices span as they are
+  (16-bit indices, no gather, renumbering or RGBA swizzle in the back
+  end). Draws whose arrays the device does not take as they are (a
+  line loop, positions of w other than 1, colours not unsigned bytes,
+  ...) go through the context. Over 75 s of the training walk under
+  gdb: 2.15M direct draws, 840 glDrawElements and 47 glDrawArrays
+  through the context (the lifted code's calls included). Frames,
+  against the build before: all 13 loading and briefing frames shared,
+  46 of 1640 in-level frames identical (46 between two runs of the
+  build before); ctest 37 of 37.
 
 ## Renderer (2026-10-19, branch render-native)
 The hottest lifted renderer code of CoDSP.exe is native (src/render.cpp),
@@ -1253,9 +1268,9 @@ native iterator replacing 0x4F7C30/0x4F6380/0x4F70F0 would skip:
   uploads tess.xyz (and normals where lit) once per flush as one stream,
   and per stage only svars.colors (a device format in RGBA order, no
   swizzle) and that stage's texture coordinates, with 16-bit indices
-  once per flush. This needs multi-stream vertex input in gfx::Device
-  (Draw takes one interleaved FVF buffer today); a first step can
-  interleave per stage into the arena directly (one copy, no gather).
+  once per flush. gfx::Device takes separate streams now (DrawFf, which
+  interleaves them into the arena in one copy); the vertex array draws
+  use it ("Vertex array draws on gfx::Device" above).
 - Per draw left: GpuDevice::Draw's uniform build and pipeline lookup,
   reduced to a key compare when the stage is the previous one.
 - Order: the draws and their state must stay in the original's order for

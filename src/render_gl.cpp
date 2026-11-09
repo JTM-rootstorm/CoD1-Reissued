@@ -3,9 +3,16 @@
 // make: integer parameters as floats, a GLboolean's low byte, vector
 // parameters of 4 components for colours and positions and 1 otherwise,
 // colour bytes over 255.
+//
+// glDrawArrays and glDrawElements draw with the device itself (DrawFf):
+// the client arrays as its streams and the state from the context
+// (gl::Context::ArrayDraw), the vertices the indices span as they are,
+// with no gathering or renumbering. Draws whose arrays the device does
+// not take as they are go through the context.
 
 #include "render_gl.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "runtime/log.h"
@@ -168,10 +175,27 @@ void glLockArraysEXT(int32_t, int32_t) {}
 void glUnlockArraysEXT() {}
 void glDrawArrays(uint32_t mode, int32_t first, int32_t count) {
   GL_OR_RETURN;
+  gfx::FfDraw d;
+  const gfx::FfState* state;
+  if (count > 0 && first >= 0 &&
+      g->ArrayDraw(mode, uint32_t(first), uint32_t(first + count - 1), &d, &state))
+    return g->Device()->DrawFf(*state, d);
   g->DrawArrays(mode, first, count);
 }
+// The back end's indices are unsigned shorts.
 void glDrawElements(uint32_t mode, int32_t count, uint32_t type, const void* indices) {
   GL_OR_RETURN;
+  if (count > 0 && type == gl::UNSIGNED_SHORT) {
+    const uint16_t* idx = static_cast<const uint16_t*>(indices);
+    auto [lo, hi] = std::minmax_element(idx, idx + count);
+    gfx::FfDraw d;
+    const gfx::FfState* state;
+    if (g->ArrayDraw(mode, *lo, *hi, &d, &state)) {
+      d.indices = idx;
+      d.index_count = uint32_t(count);
+      return g->Device()->DrawFf(*state, d);
+    }
+  }
   g->DrawElements(mode, count, type, indices);
 }
 void glArrayElement(int32_t i) { GL_OR_RETURN; g->ArrayElement(i); }

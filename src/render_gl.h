@@ -2,8 +2,9 @@
 // The GL entry points the native renderer back end (src/render_backend.cpp)
 // calls, on the host: src/render_gl.cpp draws with the thread's current
 // GL context (the one the opengl32 entry points draw with, so these mix
-// with the lifted code's calls in order); the back end's oracle links
-// recorders instead (tests/render_backend_test.cpp). Arguments are GL's
+// with the lifted code's calls in order), its vertex array draws with the
+// context's device itself; the back end's oracle links recorders instead
+// (tests/render_backend_test.cpp). Arguments are GL's
 // (GLboolean as a whole dword, as the original passes it); pointers are
 // host pointers, null for a guest null.
 //
