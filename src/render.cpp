@@ -8,7 +8,9 @@
 // clips, the planes through a portal, a cell's occluders, the walk through
 // the portals, the coronas and the world's surfaces); the view through a
 // portal (a portal surface's orientations and its view); the scene
-// (RE_RenderScene, a view's render and its surfaces, R_AddEntitySurfaces);
+// (RE_RenderScene, a view's render and its surfaces, R_AddEntitySurfaces;
+// the brush, model and composite model entities' surfaces, the polygons'
+// and the world's without the cell walk);
 // the back end's sky clipping (ClipSkyPolygon, AddSkyPolygon), texture
 // coordinates (ComputeTexCoords); and the draw surface sort (qsortFast),
 // the 4x4 matrix product and the memcpy 0x42B0A0 under both. Replacements of lifted
@@ -66,11 +68,22 @@ void f_00426AB0(Ctx& c);  // rotates a point about EAX (out, point, degrees)
 void f_0052E6D0(Ctx& c);  // the CRT's trigonometric function of ST0 called by the portal rotation
 void f_004CB270(Ctx& c);  // renders a view (view parms)
 void f_004C97D0(Ctx& c);  // the viewer's orientation (src/render_backend.cpp)
-void f_00500830(Ctx& c);  // an entity's surfaces, type 0 (EAX entity)
-void f_00506980(Ctx& c);  // an entity's surfaces, type 1 (entity)
-void f_004FA790(Ctx& c);  // an entity's surfaces, type 2 (EAX entity)
-void f_00500920(Ctx& c);  // the surfaces of the debug cvar 0x14E43FC's value 3
-void f_004DE980(Ctx& c);  // the scene's polygons' surfaces
+void f_004AA490(Ctx& c);  // the dlights on a brush model (model)
+void f_004DF2D0(Ctx& c);  // an entity's level-of-detail distance (ESI entity; ST0)
+void f_00480DD0(Ctx& c);  // a model's level of detail at a distance (ECX model, distance; EAX)
+void f_00427CB0(Ctx& c);  // a 3x3 matrix's inverse (EAX in, ECX out)
+void f_004ABEF0(Ctx& c);  // an entity's lighting, once (EAX entity, ECX refdef)
+void f_004ABDC0(Ctx& c);  // an entity's lighting, once, the other way (EDI entity, refdef)
+void f_004DA9F0(Ctx& c);  // a surface's cache entry (EAX the entity's cache, ECX surface; index, entity, inverse; EAX)
+void f_00440940(Ctx& c);  // va(format, ...)
+void f_004AD8F0(Ctx& c);  // draws debug text (EAX origin, EDI colour, text)
+void f_00477290(Ctx& c);  // a model's surface count (EDX model, EDI levels; EAX)
+void f_00477340(Ctx& c);  // a model's surfaces (model, list, levels; ESI out)
+void f_00476510(Ctx& c);  // (model, the surfaces' out)
+void f_00506310(Ctx& c);  // (entity, out)
+void f_005065E0(Ctx& c);  // (entity, out)
+void f_00506070(Ctx& c);  // adds a model's surface (model, index; EDI shader, EDX surface)
+void f_005068B0(Ctx& c);  // a debug draw of the cvar 0x15346D4 (EBX entity, EDI out)
 void f_004AC890(Ctx& c);  // a debug draw of the cvar 0x15344D0
 void f_0051D45A(Ctx& c);  // the CRT's fprintf
 // ComputeTexCoords' texture coordinate generators and modifiers.
@@ -102,6 +115,7 @@ using lift::Wr;
 
 uint32_t U32(uint32_t va) { return Rd<uint32_t>(g_guest_base, va); }
 uint8_t U8(uint32_t va) { return Rd<uint8_t>(g_guest_base, va); }
+uint16_t U16(uint32_t va) { return Rd<uint16_t>(g_guest_base, va); }
 void Put(uint32_t va, uint32_t v) { Wr<uint32_t>(g_guest_base, va, v); }
 F32 Ld(uint32_t va) { return {U32(va)}; }
 void Put(uint32_t va, F32 v) { Put(va, v.bits); }
@@ -1370,6 +1384,15 @@ void MovsD(uint32_t dst, uint32_t src, uint32_t n) {
   for (; n; n--, dst += 4, src += 4) Put(dst, U32(src));
 }
 
+// R_AddDrawSurf's store, also inlined: the key at index n, then the surface
+// at the count read again, and the count incremented.
+void AddDrawSurf(uint32_t n, uint32_t key, uint32_t surface) {
+  Put(U32(kDrawSurfs) + n * 8, key);
+  const uint32_t m = U32(kNumDrawSurfs);
+  Put(U32(kDrawSurfs) + m * 8 + 4, surface);
+  Put(kNumDrawSurfs, U32(kNumDrawSurfs) + 1);
+}
+
 }  // namespace
 
 // R_AddDrawSurf(surface, dlight bits, a, b; cdecl; EAX fog, EDX shader):
@@ -1384,10 +1407,7 @@ void f_004CAF00(Ctx& c) {
     key = key << 16 | Arg(c, e, 3);
     key = key << 1 | Arg(c, e, 4);
     key = (key << 1 | U32(0x1536028)) | Arg(c, e, 2);
-    Put(U32(kDrawSurfs) + n * 8, key);
-    const uint32_t m = U32(kNumDrawSurfs);
-    Put(U32(kDrawSurfs) + m * 8 + 4, Arg(c, e, 1));
-    Put(kNumDrawSurfs, U32(kNumDrawSurfs) + 1);
+    AddDrawSurf(n, key, Arg(c, e, 1));
   }
   c.esp = e + 4;
 }
@@ -2805,6 +2825,485 @@ void f_004CAB80(Ctx& c) {
 }
 
 // ---- the front end: the scene ----------------------------------------------
+
+// The scene's polygons (0x1536488 of 16 bytes at 0x153648C: +4 the shader
+// handle), each as the current entity (its index & 0x3FF at 0x1536024, << 7
+// at 0x1536028): a draw surface of its shader (out of range: a warning and
+// the default 0x1535AE8) with the fog 0x1549548 and dlight bits 2, the
+// count read again after each.
+void f_004DE980(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi;
+  c.esp = e - 12;
+  uint32_t poly = U32(0x153648C);
+  for (int32_t i = 0; i < I32(0x1536488); ++i, poly += 16) {
+    const uint32_t num = uint32_t(i) & 0x3FF;
+    Put(0x1536024, num);
+    Put(0x1536028, num << 7);
+    const int32_t h = I32(poly + 4);
+    uint32_t shader;
+    if (h < 0 || h >= I32(0x153C528)) {
+      c.esi = poly;
+      c.edi = uint32_t(i);
+      Push(c, uint32_t(h));
+      Push(c, 0x53C2C0);
+      Push(c, 2);
+      CallPtr(c, U32(kPrintfPtr), 0x4DE9D1, 0x4DE9CB);
+      c.esp = e - 12;
+      shader = U32(0x1535AE8);
+    } else {
+      shader = U32(0x153C52C + 4 * uint32_t(h));
+    }
+    if (const uint32_t n = U32(kNumDrawSurfs); int32_t(n) < 0x10000)
+      AddDrawSurf(n, ((U32(0x1549548) << 12 | U32(shader + 0x48)) << 18 | U32(0x1536028)) | 2, poly);
+  }
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// A brush model entity's surfaces (type 0; EAX the entity): none for the
+// entity's +0x2B4 at 2 or without the cvar 0x1534420; else its orientation
+// into 0x153629C (0x4C9580), the dlights on its model (the model handle +8
+// in 0x15364F8, its brush model +0x4C) and each of its surface references
+// (12 bytes at +0x18, count +0x1C read again each time) added with the
+// current entity's dlight bits (0x1535D68's +0x9C).
+void f_00500830(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, ent = c.eax;
+  if (U32(ent + 0x2B4) != 2 && CvarInt(0x1534420)) {
+    c.esp = e - 12;
+    c.eax = 0x153629C;
+    c.ebx = 0x1536030;
+    c.edi = ent;
+    Call(c, f_004C9580, 0x500859);
+    const uint32_t bmodel = U32(U32(0x15364F8 + 4 * U32(ent + 8)) + 0x4C);
+    c.esi = bmodel;
+    Push(c, bmodel);
+    Call(c, f_004AA490, 0x50086C);
+    c.esp = e - 12;
+    for (int32_t i = 0; i < I32(bmodel + 0x1C); ++i) {
+      c.ebx = 12 * uint32_t(i);
+      c.edi = uint32_t(i);
+      Push(c, U32(bmodel + 0x18) + 12 * uint32_t(i));
+      c.eax = U32(U32(0x1535D68) + 0x9C);
+      Call(c, f_004D6970, 0x500897);
+      c.esp = e - 12;
+    }
+  }
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The world's surfaces and entities without the cell walk (for the debug
+// cvar 0x14E43FC at 3 or -3): with the cvar 0x1534490 set and the refdef's
+// flag 1 (0x1536364) clear, the entity number 0x7FE (0x1536024, << 7 at
+// 0x1536028) and no dlights (0x1536474); each world surface reference (12
+// bytes: view count, shader, surface; world +0xA0, count +0x9C) not yet
+// marked with the view count (0x1535A28), marked and added, but not a
+// surface of type 0x18 and up whose bounds (+0xC) are culled (0x4C8D50 2)
+// without r_nocull (0x15344F4); its fog +4 for those types, else 0x1549548.
+// Then each cell's (0x40 bytes, world +0x124 read once, count +0x120) entity list
+// (+0x38: entity, next): each entity not yet marked (+0xB4), marked and
+// added (0x4DEC10).
+void f_00500920(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  if (CvarInt(0x1534490) && !(U8(0x1536364) & 1)) {
+    c.esp = e - 16;
+    Put(0x1536024, 0x7FE);
+    Put(0x1536028, 0x3FF00);
+    Put(0x1536474, 0u);
+    for (int32_t i = 0; i < I32(U32(0x1535A34) + 0x9C); ++i) {
+      const uint32_t ref = U32(U32(0x1535A34) + 0xA0) + 12 * uint32_t(i);
+      const uint32_t vc = U32(kViewCount);
+      if (U32(ref) == vc) continue;
+      c.ebx = 12 * uint32_t(i);
+      c.ebp = uint32_t(i);
+      c.esi = ref;
+      const uint32_t surf = U32(ref + 8);
+      c.edi = surf;
+      Put(ref, vc);
+      if (!CvarInt(kNoCull) && I32(surf) >= 0x18) {
+        c.eax = surf + 0xC;
+        Call(c, f_004C8D50, 0x5009A3);
+        if (c.eax == 2) continue;
+      }
+      c.eax = I32(surf) >= 0x18 ? U32(surf + 4) : U32(0x1549548);
+      c.edx = U32(ref + 4);
+      for (uint32_t v : {0u, 0u, 0u, surf}) Push(c, v);
+      Call(c, f_004CAF00, 0x5009CD);
+      c.esp = e - 16;
+    }
+    const uint32_t cells = U32(U32(0x1535A34) + 0x124);
+    for (int32_t i = 0; i < I32(U32(0x1535A34) + 0x120); ++i) {
+      c.ebx = cells + 0x38 + 0x40 * uint32_t(i);
+      c.edi = uint32_t(i);
+      for (uint32_t node = U32(c.ebx); node; node = U32(node + 4)) {
+        const uint32_t ent = U32(node);
+        if (U32(ent + 0xB4) == U32(kViewCount)) continue;
+        Put(ent + 0xB4, U32(kViewCount));
+        c.esi = node;
+        Push(c, U32(node));
+        Push(c, U32(node));
+        Call(c, f_004DEC10, 0x500A2F);
+        c.esp = e - 16;
+      }
+    }
+  }
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The level-of-detail distance (0x4DF2D0's ST0) as the original stores it.
+uint32_t PopF32(Ctx& c) {
+  const uint32_t v = x87::StoreF32(c.fpu);
+  x87::Pop(c.fpu);
+  return v;
+}
+
+// A model entity's surfaces (type 2; EAX the entity, its model +0x98): the
+// level of detail (0x480DD0 of the model's +8 at 0x4DF2D0's distance; none
+// below 0) picks a list of surfaces (the model's +0xC + 4 x level: a count,
+// then 0x30 bytes each: +4 fog, +8 shader, +0xC a second shader, +0x10 a
+// 16-bit triangle count), whose first index is the sum of the counts of the
+// levels before. Per surface, its slot in the entity's cache (+0x2B0, at
+// +0x248 + 4 x index): an empty slot with a second shader gets an entry
+// (0x4DA9F0, from the inverse of the entity's axes +0x1C and its lighting
+// first, once) unless the entity's +0xA0 is set. A cached entry moves to
+// the front of the cache's list (0x1C8-byte entries at 0x11BEC28, head
+// 0x11CD050, stamped with 0x1535A24) and is drawn with the second shader
+// and fog 0x1549554, but a shader of flags 0x18 (+0x54) first lights the
+// entity and, with +0xA0 set, draws the surface itself; no entry: the
+// surface, and with those flags the entity lit at the end. Then with the
+// cvar 0x153446C (the triangles / 3) or 0x15343B0 (the surfaces) a debug
+// text at the origin (+0x44), but not for flag 8 (+4).
+void f_004FA790(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t ent = c.eax, s = e - 0x4C, model = U32(ent + 0x98);
+  auto done = [&] {
+    c.ebx = ebx;
+    c.ebp = ebp;
+    c.esi = esi;
+    c.edi = edi;
+    c.esp = e + 4;
+  };
+  c.esp = s;
+  c.esi = ent;
+  c.edi = model;
+  Call(c, f_004DF2D0, 0x4FA7A4);
+  Push(c, PopF32(c));
+  c.ecx = U32(model + 8);
+  Call(c, f_00480DD0, 0x4FA7B0);
+  c.esp = s;
+  const int32_t level = int32_t(c.eax);
+  if (level < 0) return done();
+  uint32_t first = 0;
+  for (int32_t k = 0; k < level; ++k) first += U32(U32(model + 0xC + 4 * uint32_t(k)));
+  const uint32_t list = U32(model + 0xC + 4 * uint32_t(level));
+  bool lit = false, light_after = false;
+  uint32_t tris = 0;
+  for (int32_t i = 0; i < I32(list); ++i) {
+    const uint32_t surf = list + 4 + 0x30 * uint32_t(i), slot = (first + uint32_t(i)) * 4 + 0x248;
+    c.ebx = list;
+    c.ebp = slot;
+    c.esi = ent;
+    c.edi = surf + 0xC;
+    if (!U32(U32(ent + 0x2B0) + slot) && U32(surf + 0xC)) {
+      if (!lit) {
+        c.eax = ent + 0x1C;
+        c.ecx = s + 0x28;
+        Call(c, f_00427CB0, 0x4FA835);
+        c.eax = ent;
+        c.ecx = 0x1536318;
+        Call(c, f_004ABEF0, 0x4FA841);
+        lit = true;
+      }
+      if (!U8(ent + 0xA0)) {
+        Push(c, s + 0x28);
+        Push(c, ent);
+        Push(c, uint32_t(i) + first);
+        c.eax = U32(ent + 0x2B0);
+        c.ecx = surf;
+        Call(c, f_004DA9F0, 0x4FA872);
+        c.esp = s;
+        Put(U32(ent + 0x2B0) + slot, c.eax);
+      }
+    }
+    if (const uint32_t p = U32(U32(ent + 0x2B0) + slot)) {
+      const uint32_t entry = uint32_t(int32_t(p - 0x11BEC28) / 0x1C8) * 0x1C8 + 0x11BEC28;
+      const uint32_t stamp = U32(0x1535A24), prev = U32(entry + 4);
+      Put(entry + 8, stamp);
+      Put(prev, U32(entry));
+      const uint32_t next = U32(entry), back = U32(entry + 4);
+      Put(next + 4, back);
+      Put(entry, 0x11CD050);
+      Put(entry + 4, U32(0x11CD054));
+      Put(0x11CD054, entry);
+      Put(U32(entry + 4), entry);
+      bool done_surf = false;
+      if (U8(U32(surf + 8) + 0x54) & 0x18) {
+        c.eax = ent;
+        c.ecx = 0x1536318;
+        Call(c, f_004ABEF0, 0x4FA8FC);
+        if (U8(ent + 0xA0)) {
+          done_surf = true;
+          if (const uint32_t n = U32(kNumDrawSurfs); int32_t(n) < 0x10000)
+            AddDrawSurf(n, (U32(surf + 4) << 12 | U32(U32(surf + 8) + 0x48)) << 18 | U32(0x1536028), surf);
+        }
+      }
+      if (!done_surf) {
+        const uint32_t n = U32(kNumDrawSurfs), cached = U32(U32(ent + 0x2B0) + slot);
+        if (int32_t(n) < 0x10000)
+          AddDrawSurf(n, (U32(U32(surf + 0xC) + 0x48) | U32(0x1549554) << 12) << 18 | U32(0x1536028), cached);
+      }
+    } else {
+      if (const uint32_t n = U32(kNumDrawSurfs); int32_t(n) < 0x10000)
+        AddDrawSurf(n, (U32(U32(surf + 8) + 0x48) | U32(surf + 4) << 12) << 18 | U32(0x1536028), surf);
+      if (U8(U32(surf + 8) + 0x54) & 0x18) light_after = true;
+    }
+    tris += U16(surf + 0x10);
+  }
+  bool text = false;
+  uint32_t shown = 0;
+  if (CvarInt(0x153446C) && !(U8(ent + 4) & 8)) {
+    text = true;
+    shown = uint32_t(int32_t(tris) / 3);
+  } else if (CvarInt(0x15343B0) && !(U8(ent + 4) & 8)) {
+    text = true;
+    shown = U32(list);
+  }
+  if (text) {
+    Push(c, shown);
+    Push(c, 0x5560E0);
+    Call(c, f_00440940, 0x4FAA73);
+    c.esp = s;
+    Push(c, c.eax);
+    c.eax = ent + 0x44;
+    c.edi = 0x537890;
+    Call(c, f_004AD8F0, 0x4FAA84);
+    c.esp = s;
+  }
+  if (light_after) {
+    c.eax = ent;
+    c.ecx = 0x1536318;
+    Call(c, f_004ABEF0, 0x4FAA9B);
+  }
+  done();
+}
+
+// A model's submodel handle (the 16-bit handle at the model's +0x38 + 2 x
+// index): a negative one through the refimport's 0x1549688 (its negation,
+// as a dword whose high half is the high half of the original's EAX then:
+// eax_high), called from va with return address ret; 0 for none.
+int16_t SubModel(Ctx& c, uint32_t model, int32_t a, uint32_t eax_high, uint32_t ret, uint32_t va) {
+  uint16_t w = U16(model + 0x38 + 2 * uint32_t(a));
+  if (int16_t(w) < 0) {
+    const uint32_t esp = c.esp;
+    Push(c, 0 - ((eax_high & 0xFFFF0000u) | w));
+    CallPtr(c, U32(0x1549688), ret, va);
+    c.esp = esp;
+    w = uint16_t(c.eax);
+  }
+  return int16_t(w);
+}
+
+// A composite model entity's surfaces (type 1; stack the entity, its
+// model +0x90: +0x16 the count of submodels, +0x18 the submodels): none
+// for the entity's +0x2B4 at 2 or without the cvar 0x1534424. Each
+// submodel's level of detail (0x480DD0 at 0x4DF2D0's distance) in a
+// stack array; the surfaces (0x477290's count, none beyond 0x2000 with
+// 0x1536498's, a warning with the cvar 0x14E43E8) listed by 0x477340 in a
+// second (pairs of 16-bit submodel index and surface), with the callback
+// of +0x94 (0x476510 then the refimport's 0x154968C). A submodel of the
+// default model (+4 0xA8F6BC) draws instead 0x506310 and 0x5065E0 with the
+// cvar 0x14E43E8. Each pair's shader (the submodel handle's model in
+// 0x15364F8, its +0x50 by level, a 16-bit handle by surface; out of
+// range: a warning and the default 0x1535AE8) of flags 0x18 lights the
+// entity at the end (0x4ABDC0), unless it is not drawn here (flag 2 (+4)
+// outside a portal's view) and the cvar 0x15343D8 is not above 1; drawn,
+// its surface (the submodel's +4 by level + 1, 20 bytes each, then +4,
+// +8 by surface) goes to 0x506070 and its 16-bit counts +4 and +2 are
+// summed. Then the debug text of the cvar 0x153446C (the sum of +2 at 2,
+// else of +4) or 0x15343B0 (the distinct shaders among the drawn
+// submodels' and the pairs), but not for flags 0x18; and the debug draw
+// 0x5068B0 with the cvar 0x15346D4's string set.
+void f_00506980(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t ent = Arg(c, e, 1), bp = e - 4, local = bp - 0x40;
+  auto done = [&] {
+    c.ebx = ebx;
+    c.ebp = ebp;
+    c.esi = esi;
+    c.edi = edi;
+    c.esp = e + 4;
+  };
+  c.ebp = bp;
+  const bool hidden = (U8(ent + 4) & 2) && !U32(0x1536134);
+  const uint32_t model = U32(ent + 0x90);
+  if (!CvarInt(0x1534424) || U32(ent + 0x2B4) == 2) return done();
+  const uint32_t n = U8(model + 0x16);
+  c.esp = e - 0x50 - ((n * 4 + 7) & ~7u);
+  const uint32_t levels = c.esp;
+  c.esi = ent;
+  Call(c, f_004DF2D0, 0x5069ED);
+  const uint32_t dist = PopF32(c);
+  for (uint32_t i = 0; i < n; ++i) {
+    c.esi = i;
+    c.ebx = model + 0x18 + 4 * i;
+    Push(c, dist);
+    c.ecx = U32(model + 0x18 + 4 * i);
+    Call(c, f_00480DD0, 0x506A0B);
+    c.esp = levels;
+    Put(levels + 4 * i, c.eax);
+  }
+  c.ebx = model;
+  c.edi = levels;
+  c.edx = model;
+  Call(c, f_00477290, 0x506A29);
+  const uint32_t count = c.eax;
+  if (int32_t(U32(0x1536498) + count) > 0x2000) {
+    if (CvarInt(0x14E43E8)) {
+      Push(c, 0x5391EC);
+      Push(c, 0);
+      CallPtr(c, U32(kPrintfPtr), 0x506A5A, 0x506A54);
+    }
+    return done();
+  }
+  c.esp = levels - ((count * 4 + 7) & ~7u);
+  const uint32_t pairs = c.esp;
+  Push(c, levels);
+  Push(c, pairs);
+  Push(c, model);
+  c.ebx = pairs;
+  c.esi = local;
+  c.edi = model;
+  Call(c, f_00477340, 0x506A8C);
+  c.esp = pairs;
+  c.esi = ent;
+  if (U32(ent + 0x94)) {
+    Push(c, local);
+    Push(c, model);
+    Call(c, f_00476510, 0x506AA6);
+    c.esp = pairs;
+    Push(c, local);
+    Push(c, model);
+    Push(c, U32(ent + 0x94));
+    CallPtr(c, U32(0x154968C), 0x506ABB, 0x506AB5);
+    c.esp = pairs;
+  }
+  for (int32_t k = int32_t(U8(model + 0x16)) - 1; k >= 0; --k) {
+    if (U32(U32(model + 0x18 + 4 * uint32_t(k)) + 4) != 0xA8F6BC) continue;
+    if (CvarInt(0x14E43E8)) {
+      Push(c, local);
+      Push(c, ent);
+      Call(c, f_00506310, 0x506B86);
+      Push(c, local);
+      Push(c, ent);
+      Call(c, f_005065E0, 0x506B90);
+    }
+    return done();
+  }
+  auto pair = [&](int32_t i, uint32_t half) { return int16_t(U16(pairs + 4 * uint32_t(i) + half)); };
+  bool light = false;
+  int32_t sum4 = 0, sum2 = 0;
+  for (int32_t i = 0; i < int32_t(count); ++i) {
+    c.ebx = pairs;
+    c.esi = uint32_t(i);
+    const int32_t a = pair(i, 0);
+    c.edi = uint32_t(a);
+    const int16_t w = SubModel(c, model, a, count, 0x506B1C, 0x506B16);
+    if (!w) continue;
+    const uint32_t level = U32(levels + 4 * uint32_t(a));
+    const uint32_t h = U16(U32(U32(U32(0x15364F8 + 4 * uint32_t(int32_t(w))) + 0x50) + 4 * level) + 2 * uint32_t(int32_t(pair(i, 2))));
+    uint32_t shader;
+    if (int32_t(h) >= I32(0x153C528)) {
+      Push(c, h);
+      Push(c, 0x53C2C0);
+      Push(c, 2);
+      CallPtr(c, U32(kPrintfPtr), 0x506B60, 0x506B5A);
+      c.esp = pairs;
+      shader = U32(0x1535AE8);
+    } else {
+      shader = U32(0x153C52C + 4 * h);
+    }
+    if (U8(shader + 0x54) & 0x18) light = true;
+    if (hidden) continue;
+    const int32_t a2 = pair(i, 0), b = pair(i, 2);
+    const uint32_t level2 = U32(levels + 4 * uint32_t(a2));
+    const uint32_t lods = U32(U32(model + 0x18 + 4 * uint32_t(a2)) + 4);
+    const uint32_t surfs = U32(U32(U32(lods + (level2 + 1) * 20) + 4) + 8);
+    const uint32_t surf = U32(surfs + 4 * uint32_t(b));
+    Push(c, uint32_t(a2));
+    Push(c, model);
+    c.eax = surfs;
+    c.edx = surf;
+    c.esi = surf;
+    c.edi = shader;
+    Call(c, f_00506070, 0x506BF0);
+    c.esp = pairs;
+    sum4 += int16_t(U16(surf + 4));
+    sum2 += int16_t(U16(surf + 2));
+  }
+  const int32_t tris = CvarInt(0x153446C);
+  if (tris && !(U8(ent + 4) & 0x18)) {
+    Push(c, uint32_t(tris == 2 ? sum2 : sum4));
+    Push(c, 0x5560E0);
+    Call(c, f_00440940, 0x506C4C);
+    c.esp = pairs;
+    Push(c, c.eax);
+    c.eax = ent + 0x44;
+    c.edi = 0x5378D0;
+    Call(c, f_004AD8F0, 0x506D7F);
+    c.esp = pairs;
+  } else if (CvarInt(0x15343B0) && !(U8(ent + 4) & 0x18)) {
+    // Distinct: each pair after the first whose submodel exists and whose
+    // shader handle no earlier pair with a submodel has.
+    int32_t distinct = 1;
+    for (int32_t j = 1; j < int32_t(count); ++j) {
+      const int32_t aj = pair(j, 0);
+      const int16_t wj = SubModel(c, model, aj, uint32_t(aj), 0x506CB3, 0x506CAD);
+      if (!wj) continue;
+      const uint32_t mj = U32(0x15364F8 + 4 * uint32_t(int32_t(wj))), tj = U32(mj + 0x50);
+      int32_t i = 0;
+      for (; i < j; ++i) {
+        const int32_t ai = pair(i, 0);
+        const int16_t wi = SubModel(c, model, ai, i ? uint32_t(j) : mj, 0x506CF0, 0x506CEA);
+        if (!wi) continue;
+        const uint32_t si = U32(U32(U32(0x15364F8 + 4 * uint32_t(int32_t(wi))) + 0x50) + 4 * U32(levels + 4 * uint32_t(ai)));
+        const uint32_t sj = U32(tj + 4 * U32(levels + 4 * uint32_t(aj)));
+        if (U16(sj + 2 * uint32_t(int32_t(pair(j, 2)))) == U16(si + 2 * uint32_t(int32_t(pair(i, 2))))) break;
+      }
+      if (i == j) ++distinct;
+    }
+    Push(c, count);
+    Push(c, uint32_t(distinct));
+    Push(c, 0x5391E4);
+    Call(c, f_00440940, 0x506D6B);
+    c.esp = pairs;
+    Push(c, c.eax);
+    c.eax = ent + 0x44;
+    c.edi = 0x5378D0;
+    Call(c, f_004AD8F0, 0x506D7F);
+    c.esp = pairs;
+  }
+  if (U8(U32(U32(0x15346D4) + 4))) {
+    c.ebx = ent;
+    c.edi = local;
+    Call(c, f_005068B0, 0x506D9A);
+    c.esp = pairs;
+  }
+  if (hidden && CvarInt(0x15343D8) <= 1) return done();
+  if (light) {
+    c.edi = ent;
+    Push(c, 0x1536318);
+    Call(c, f_004ABDC0, 0x506DC1);
+  }
+  done();
+}
 
 // R_AddEntitySurfaces (its "Bad reType" error): with r_drawentities
 // (0x15343D4) set, each of the scene's entities (0x153646C of 0x2B8 bytes

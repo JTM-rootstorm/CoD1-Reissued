@@ -82,7 +82,9 @@ replace 00519140
 # the planes through it, a cell's occluders, the walk through the portals,
 # the world's coronas and the world's surfaces; the view through a portal:
 # a portal surface's orientations and its view; the scene: RE_RenderScene,
-# a view's render and its surfaces, R_AddEntitySurfaces. Back end:
+# a view's render and its surfaces, R_AddEntitySurfaces; the entities'
+# and polygons' surfaces: brush, model and composite model entities, the
+# polygons, and the world's without the cell walk. Back end:
 # ClipSkyPolygon, AddSkyPolygon and ComputeTexCoords. Under both:
 # qsortFast of the draw surfaces, the 4x4 matrix product and the memcpy
 # 0x42B0A0.
@@ -140,6 +142,11 @@ replace 004CB0C0
 replace 004CB210
 replace 004CB270
 replace 004DEEC0
+replace 00500830
+replace 004FA790
+replace 00506980
+replace 004DE980
+replace 00500920
 
 # The renderer back end (src/render_backend.cpp): GL_Bind, the cull face,
 # the texture environment, the state bits and the client arrays, fog on

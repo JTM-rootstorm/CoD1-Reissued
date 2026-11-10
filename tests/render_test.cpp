@@ -94,6 +94,10 @@ constexpr uint32_t kAllocPtr = 0x1549610, kAlloc = 0x7FFE0020;
 constexpr uint32_t kFreePtr = 0x154961C, kFree = 0x7FFE0030;
 // ri.Milliseconds (0x1549608): a time that grows with the calls.
 constexpr uint32_t kMillisecondsPtr = 0x1549608, kMilliseconds = 0x7FFE0040;
+// The refimport's 0x1549688 (a submodel's handle from the negation of
+// its own) and 0x154968C (a composite model's callback).
+constexpr uint32_t kSubModelPtr = 0x1549688, kSubModel = 0x7FFE0050;
+constexpr uint32_t kModelCallbackPtr = 0x154968C, kModelCallback = 0x7FFE0060;
 constexpr uint32_t kHeap = 0x6FE00000, kHeapSize = 0x100000;
 uint32_t g_heap_top = kHeap;
 
@@ -105,7 +109,12 @@ struct CallRec {
   bool operator==(const CallRec&) const = default;
 };
 std::vector<CallRec> g_calls;
-bool g_scene_surfs = false;
+// The composite models' surface pairs (0x477340's list): count, and how
+// many submodels the model has (0x477290's EDX +0x16).
+uint32_t g_pairs = 0;
+// The models' cache (0x1C8-byte entries, the test's first eight, and the
+// head of their list).
+constexpr uint32_t kModelCache = 0x11BEC28, kModelCacheHead = 0x11CD050;
 
 // What each stub compares: the registers its callee reads (and for the
 // texture coordinate callees the callee-saved ones, which ComputeTexCoords
@@ -120,12 +129,23 @@ constexpr StubInfo kStubs[] = {
     {0x4AD760, kEbx | kEsi | kEdi, 0},          // debug line
     {0x4DEC10, 0, 2},                           // adds an entity
     {0x4CA8D0, 0, 2},                           // a portal surface off the screen
-    {0x500830, kEax, 0},                        // an entity's surfaces by type
-    {0x506980, 0, 1},
-    {0x4FA790, kEax, 0},
-    {0x500920, 0, 0},                           // a debug cvar's surfaces
-    {0x4DE980, 0, 0},                           // the polygons' surfaces
     {0x4AC890, 0, 0},                           // a debug draw
+    {0x4AA490, 0, 1},                           // the dlights on a brush model
+    {0x4DF2D0, kEsi, 0},                        // an entity's level-of-detail distance
+    {0x480DD0, kEcx, 1},                        // a model's level of detail
+    {0x427CB0, kEax | kEcx, 0},                 // a 3x3 inverse
+    {0x4ABEF0, kEax | kEcx, 0},                 // an entity's lighting
+    {0x4ABDC0, kEdi, 1},
+    {0x4DA9F0, kEax | kEcx, 3},                 // a surface's cache entry
+    {0x440940, 0, -1},                          // va (its format's arguments)
+    {0x4AD8F0, kEax | kEdi, 1},                 // debug text
+    {0x477290, kEdx | kEdi, 0},                 // a composite model's surfaces
+    {0x477340, kEsi, 3},
+    {0x476510, 0, 2},
+    {0x506310, 0, 2},
+    {0x5065E0, 0, 2},
+    {0x506070, kEdx | kEdi, 2},
+    {0x5068B0, kEbx | kEdi, 0},
     {0x51D45A, 0, 3},                           // fprintf to the log
     {0x427E80, kEax | kEcx, 0},                 // a matrix's inverse
     {0x50A2B0, kSaved | kEax, 0},               // tcGens
@@ -148,6 +168,19 @@ constexpr StubInfo kStubs[] = {
     {0x50AE10, kSaved | kEax | kEcx | kEdx, 0},
 };
 
+// The arguments a format takes (a double for each %f).
+int Conversions(uint32_t p) {
+  int n = 0;
+  for (;; p++) {
+    const char ch = char(g_mem.read<uint8_t>(p));
+    if (!ch) return n;
+    if (ch != '%') continue;
+    while (std::strchr("0123456789.-", char(g_mem.read<uint8_t>(p + 1)))) p++;
+    const char conv = char(g_mem.read<uint8_t>(++p));
+    if (conv != '%') n += conv == 'f' ? 2 : 1;
+  }
+}
+
 void Stub(Ctx& c, uint32_t va, int regs, int args) {
   CallRec r{};
   r.va = va;
@@ -156,6 +189,7 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
   const uint32_t all[7] = {c.eax, c.ecx, c.edx, c.ebx, c.esi, c.edi, c.ebp};
   for (int i = 0; i < 7; i++)
     if (regs & (1 << i)) r.regs[i] = all[i];
+  if (args < 0) args = 1 + Conversions(Rd(c.esp + 4));
   for (int i = 0; i < args; i++) r.args[i] = Rd(c.esp + 4 + 4 * i);
   // What the debug draws and an added entity are handed (on the caller's
   // stack, which the cases do not compare): its bytes' hash.
@@ -169,22 +203,38 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
   if (va == 0x4AD630 && c.ebx <= 0x1000) r.args[2] = hash(r.args[0], 0xC * c.ebx);
   if (va == 0x4AD760) r.args[2] = hash(c.ebx, 0xC) ^ hash(c.edi, 0xC) * 3;
   g_calls.push_back(r);
-  // An entity's surfaces now and then change the current entity's number
-  // (as 0x500920 sets it), which R_AddEntitySurfaces reloads.
-  if ((va == 0x500830 || va == 0x506980 || va == 0x4FA790) && g_calls.size() % 5 == 0)
-    Wr(0x1536024, Rd(0x1536024) + 1);
-  // The polygons' surfaces, in a scene with room for them (g_scene_surfs),
-  // add up to two draw surfaces for the sort.
-  if (va == 0x4DE980 && g_scene_surfs)
-    for (uint32_t k = g_calls.size() % 3; k; k--) {
-      const uint32_t n = Rd(0x1536490);
-      Wr(Rd(0x1536494) + 8 * n, uint32_t((g_calls.size() * 5 + k) % 0x1000) << 18 | (k << 7));
-      Wr(Rd(0x1536494) + 8 * n + 4, 0x5646C8);
-      Wr(0x1536490, n + 1);
+  const uint32_t k = uint32_t(g_calls.size());
+  // What an entity's callees do: now and then change the current entity's
+  // number, which R_AddEntitySurfaces reloads; dlight bits for a brush
+  // model's surfaces; a distance on the x87 stack and levels of detail
+  // -1 to 2; the lighting setting +0xA0 now and then; a cache entry (any
+  // byte of one of the first eight) or none.
+  if ((va == 0x4AA490 || va == 0x4DF2D0) && k % 5 == 0) Wr(0x1536024, Rd(0x1536024) + 1);
+  if (va == 0x4AA490 && k % 3) Wr(Rd(0x1535D68) + 0x9C, k % 3 == 1 ? k * 0x9E3779B9u : 0);
+  if (va == 0x4DF2D0) recomp::x87::LoadF32(c.fpu, 0x3F800000u + k * 0x1234567u % 0x08000000u);
+  if (va == 0x4ABEF0) g_mem.write<uint8_t>(c.eax + 0xA0, k % 3 == 0);
+  // A composite model's surfaces: none without submodels, now and then
+  // more than fit; the list's pairs (submodel, surface 0-3).
+  if (va == 0x477290) {
+    const uint32_t n = g_mem.read<uint8_t>(c.edx + 0x16);
+    g_pairs = !n ? 0 : k % 16 == 0 ? 0x2001 : k % 7;
+    // As many as 0x10000 with room for them.
+    if (n && k % 4 == 1 && int32_t(Rd(0x1536498)) < -0x20000) g_pairs = 0x10003;
+  }
+  if (va == 0x477340) {
+    const uint32_t n = g_mem.read<uint8_t>(r.args[0] + 0x16);
+    for (uint32_t i = 0; i < g_pairs && n; i++) {
+      g_mem.write<uint16_t>(r.args[1] + 4 * i, uint16_t((k + i * 3) % n));
+      g_mem.write<uint16_t>(r.args[1] + 4 * i + 2, uint16_t((k * 5 + i) % 4));
     }
-  const uint32_t junk = 0xC0DE0000u + uint32_t(g_calls.size());
+  }
+  const uint32_t junk = 0xC0DE0000u + k;
   // A portal surface now and then off the screen (EAX 1).
-  c.eax = va == 0x4CA8D0 ? g_calls.size() % 4 == 0 : junk;
+  c.eax = va == 0x4CA8D0   ? k % 4 == 0
+          : va == 0x480DD0 ? k % 4 - 1
+          : va == 0x477290 ? g_pairs
+          : va == 0x4DA9F0 ? (k % 3 ? kModelCache + k % 8 * 0x1C8 + k * 37 % 0x1C8 : 0)
+                           : junk;
   c.ecx = junk ^ 1;
   c.edx = junk ^ 2;
   c.esp += 4;
@@ -254,6 +304,11 @@ void f_004CB0C0_lifted(Ctx& c);
 void f_004CB210_lifted(Ctx& c);
 void f_004CB270_lifted(Ctx& c);
 void f_004DEEC0_lifted(Ctx& c);
+void f_00500830_lifted(Ctx& c);
+void f_004FA790_lifted(Ctx& c);
+void f_00506980_lifted(Ctx& c);
+void f_004DE980_lifted(Ctx& c);
+void f_00500920_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_native.cpp renames
 // its entries).
 void f_004D68E0(Ctx& c) { f_004D68E0_lifted(c); }
@@ -310,6 +365,11 @@ void f_004CB0C0(Ctx& c) { f_004CB0C0_lifted(c); }
 void f_004CB210(Ctx& c) { f_004CB210_lifted(c); }
 void f_004CB270(Ctx& c) { f_004CB270_lifted(c); }
 void f_004DEEC0(Ctx& c) { f_004DEEC0_lifted(c); }
+void f_00500830(Ctx& c) { f_00500830_lifted(c); }
+void f_004FA790(Ctx& c) { f_004FA790_lifted(c); }
+void f_00506980(Ctx& c) { f_00506980_lifted(c); }
+void f_004DE980(Ctx& c) { f_004DE980_lifted(c); }
+void f_00500920(Ctx& c) { f_00500920_lifted(c); }
 // unzCloseCurrentFile and tolower, native in the game (src/unzip.cpp,
 // src/crt.cpp): here only lifted code the stubs stand for reaches them.
 void f_0049EAA0_lifted(Ctx& c);
@@ -396,6 +456,11 @@ void n_004CB0C0(Ctx& c);
 void n_004CB210(Ctx& c);
 void n_004CB270(Ctx& c);
 void n_004DEEC0(Ctx& c);
+void n_00500830(Ctx& c);
+void n_004FA790(Ctx& c);
+void n_00506980(Ctx& c);
+void n_004DE980(Ctx& c);
+void n_00500920(Ctx& c);
 // The stubs.
 #define COD1_STUB(va) \
   void f_##va(Ctx& c) { StubFor(c, 0x##va); }
@@ -404,12 +469,23 @@ COD1_STUB(004AD630)
 COD1_STUB(004AD760)
 COD1_STUB(004DEC10)
 COD1_STUB(004CA8D0)
-COD1_STUB(00500830)
-COD1_STUB(00506980)
-COD1_STUB(004FA790)
-COD1_STUB(00500920)
-COD1_STUB(004DE980)
 COD1_STUB(004AC890)
+COD1_STUB(004AA490)
+COD1_STUB(004DF2D0)
+COD1_STUB(00480DD0)
+COD1_STUB(00427CB0)
+COD1_STUB(004ABEF0)
+COD1_STUB(004ABDC0)
+COD1_STUB(004DA9F0)
+COD1_STUB(00440940)
+COD1_STUB(004AD8F0)
+COD1_STUB(00477290)
+COD1_STUB(00477340)
+COD1_STUB(00476510)
+COD1_STUB(00506310)
+COD1_STUB(005065E0)
+COD1_STUB(00506070)
+COD1_STUB(005068B0)
 COD1_STUB(0051D45A)
 COD1_STUB(00427E80)
 COD1_STUB(0050A2B0)
@@ -460,16 +536,17 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
       Stub(c, kErrorPtr, kSaved | kEcx | kEdx, 4);
       return;
     }
-    int n = 2;
-    for (uint32_t p = Rd(c.esp + 8);; p++) {
-      const char ch = char(g_mem.read<uint8_t>(p));
-      if (!ch) break;
-      if (ch != '%') continue;
-      while (std::strchr("0123456789.-", char(g_mem.read<uint8_t>(p + 1)))) p++;
-      const char conv = char(g_mem.read<uint8_t>(++p));
-      if (conv != '%') n += conv == 'f' ? 2 : 1;
-    }
-    Stub(c, target == kError ? kErrorPtr : kPrintfPtr, 0, n);
+    Stub(c, target == kError ? kErrorPtr : kPrintfPtr, 0, 2 + Conversions(Rd(c.esp + 8)));
+    return;
+  }
+  if (target == kSubModel) {
+    // A model handle 0-3 in AX.
+    Stub(c, kSubModelPtr, 0, 1);
+    c.eax = (c.eax & 0xFFFF0000u) | uint32_t(g_calls.size() % 4);
+    return;
+  }
+  if (target == kModelCallback) {
+    Stub(c, kModelCallbackPtr, 0, 3);
     return;
   }
   // BoxOnPlaneSide's jump through its table of cases.
@@ -562,6 +639,9 @@ const Entry kEntries[] = {
     COD1_ENTRY(004CA240, "portal orientations"), COD1_ENTRY(004CAB80, "portal view"),
     COD1_ENTRY(004CB0C0, "R_AddEntitySurfaces"), COD1_ENTRY(004CB210, "view's surfaces"),
     COD1_ENTRY(004CB270, "render view"),       COD1_ENTRY(004DEEC0, "RE_RenderScene"),
+    COD1_ENTRY(00500830, "brush model entity"), COD1_ENTRY(004FA790, "model entity"),
+    COD1_ENTRY(00506980, "composite model entity"), COD1_ENTRY(004DE980, "polygons"),
+    COD1_ENTRY(00500920, "world without the walk"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -631,6 +711,12 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   auto fill = [&] {
     for (uint32_t va = esp - scrub; va < esp; va += 4) Wr(va, pattern);
   };
+  // The models' cache, for whatever reaches the entities' surfaces.
+  if (k.fn == 0x4CB0C0 || k.fn == 0x4CB210 || k.fn == 0x4CB270 || k.fn == 0x4DEEC0 ||
+      k.fn == 0x4CAB80 || k.fn == 0x4CAFC0 || k.fn == 0x4FA790) {
+    w.push_back({kModelCache, 8 * 0x1C8});
+    w.push_back({kModelCacheHead, 8});
+  }
   Wr(esp, 0xDEAD0000);
   for (size_t i = 0; i < k.args.size(); i++) Wr(esp + 4 + 4 * uint32_t(i), k.args[i]);
   w.push_back({esp, 4 + 4 * uint32_t(k.args.size())});
@@ -1442,10 +1528,25 @@ void SceneCvars(Arena& a, std::mt19937& g, uint32_t special, bool world) {
 // The back end's data (the draw surface list section).
 void BackEndData(std::mt19937& g, std::vector<Window>& win);
 
-// A view rendered from a portal's: no world, the scene's cvars and back
-// end, and windows for what the render writes.
+void EntityModels(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dlights, bool handles);
+
+// The scene's polygons (0x1536488 of 16 bytes at 0x153648C, the shader
+// handle +4); with many, now and then more than 0x400.
+void ScenePolygons(Arena& a, std::mt19937& g, bool many = false) {
+  const uint32_t n = many && g() % 8 == 0 ? 0x3F0 + g() % 0x20 : g() % 4 ? g() % 5 : 0;
+  const uint32_t polys = a.Alloc(16 * n + 4);
+  for (uint32_t i = 0; i < 16 * n; i += 4) Wr(polys + i, g() % 2 ? g() % 4 : g());
+  Wr(0x1536488, n);
+  Wr(0x153648C, polys);
+}
+
+// A view rendered from a portal's: no world, the scene's polygons, cvars,
+// draw surfaces and back end, and windows for what the render writes.
 void PortalScene(Arena& a, std::mt19937& g, uint32_t special, std::vector<Window>& win) {
   Wr(0x1535A34, 0);
+  ScenePolygons(a, g);
+  Wr(kNumDrawSurfs, g() % 4);
+  Wr(kNumDrawSurfs + 4, a.Alloc(0x100 * 8));
   SceneCvars(a, g, special, false);
   BackEndData(g, win);
   win.push_back({0x1534000, 0x3000});
@@ -1483,6 +1584,7 @@ void PortalGlobals(Arena& a, std::mt19937& g, uint32_t special, uint32_t n) {
     Wr(e + 0x60, g() % 2 ? 0 : g() | 1);
     WrF(e + 0x80, g() % 3 == 0 ? 0.0f : Value(g, -360, 360, special));
   }
+  EntityModels(a, g, ents, n, true, true);
 }
 
 // A portal surface: none, a polygon (type 2, its points 0x20 apart at +0xC),
@@ -2573,6 +2675,7 @@ std::vector<Window> WorldWalkScene(Arena& a, std::mt19937& g, const World& base)
   for (uint32_t i = 0; i < nw; i++) std::memcpy(g_mem.ptr<uint8_t>(wm + 0x24 * i), g_mem.ptr<uint8_t>(NewModel(a, g, w)), 0x24);
   Wr(world + 0x144, nw);
   Wr(world + 0x148, wm);
+  EntityModels(a, g, models, nm, false, false);
   return {a.All(), {0x11BEA00, 0x224}, {0x1535900, 0xB80}, {kNumDrawSurfs, 8}, {0x564550, 4}, {kHeap, 0x10000}};
 }
 
@@ -2595,6 +2698,156 @@ void SceneShaders(Arena& a, std::mt19937& g) {
   Wr(0x1535AE8, sh + 0x60 * (g() % 8));
 }
 
+// ---- the entities' surfaces -----------------------------------------------------
+
+// What the entities' surfaces read, for n entities at ents (any types):
+// the models 0-7 (0x15364F8; those of a walk keep their first 0x50 bytes
+// and bounds): a brush model (+0x4C: bounds, surface references +0x18,
+// count +0x1C) and shader handles by level (+0x50: levels -1 to 2, four
+// 16-bit handles each, now and then out of range). Per entity: a model
+// handle (+8) below 8; a composite model (+0x90, 0x40 bytes: submodels +0x18,
+// count +0x16, 16-bit model handles +0x38, now and then none or negative;
+// a walk's first submodel kept): each submodel's +4 the default model now
+// and then, else by level + 1 (20 bytes each) a list of four surfaces
+// (+4, +8); a model (+0x98: by level 0-2 at +0xC a count and 0x30-byte
+// surfaces: fog +4, shader +8, now and then a second shader +0xC, a 16-bit
+// count +0x10); a cache (+0x2B0, slots from +0x248: none or a byte of one
+// of the cache's first eight entries); the callback +0x94 and +0xA0 now
+// and then. The cache's entries and head linked among themselves; the
+// cvars of the entity types; when asked, dlights (count 0x1536474,
+// 0x153647C) and the shaders of the handles (as SceneShaders'); 0x1536498
+// mostly in range.
+void EntityModels(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dlights, bool handles) {
+  const uint32_t sh = a.Alloc(4 * 0x60);
+  for (uint32_t i = 0; i < 4 * 0x60; i += 4) Wr(sh + i, g());
+  auto shader = [&] { return sh + 0x60 * (g() % 4); };
+  auto arena = [&](uint32_t va) { return va >= kArena && va < a.top; };
+  auto bounds = [&](uint32_t va) {
+    for (uint32_t k = 0; k < 0xC; k += 4) {
+      const float lo = Uniform(g, -256, 256);
+      WrF(va + k, lo);
+      WrF(va + 0xC + k, lo + Uniform(g, 0, 128));
+    }
+  };
+  for (uint32_t i = 0; i < 8; i++) {
+    const uint32_t old = Rd(kXModels + 4 * i), m = a.Alloc(0x60), b = a.Alloc(0x20);
+    if (arena(old)) std::memcpy(g_mem.ptr<uint8_t>(m), g_mem.ptr<uint8_t>(old), 0x50);
+    if (arena(old) && arena(Rd(old + 0x4C)))
+      std::memcpy(g_mem.ptr<uint8_t>(b), g_mem.ptr<uint8_t>(Rd(old + 0x4C)), 0x18);
+    else
+      bounds(b);
+    const uint32_t nr = g() % 4, refs = a.Alloc(12 * nr + 4);
+    for (uint32_t r = 0; r < nr; r++) {
+      const uint32_t ref = refs + 12 * r, surf = a.Alloc(0x24);
+      Wr(ref, g() % 4 ? g() % 16 : Rd(kViewCount));
+      Wr(ref + 4, shader());
+      Wr(ref + 8, surf);
+      Wr(surf, uint32_t(Pick(g, {0, 0x17, 0x18, 0x19, -5})));
+      Wr(surf + 4, g() % 4);
+      bounds(surf + 0xC);
+    }
+    Wr(b + 0x18, refs);
+    Wr(b + 0x1C, g() % 16 ? nr : uint32_t(Pick(g, {-1, INT32_MIN})));
+    const uint32_t levels = a.Alloc(20) + 4;
+    for (int32_t l = -1; l <= 2; l++) {
+      const uint32_t h = a.Alloc(8);
+      for (uint32_t k = 0; k < 8; k += 2)
+        g_mem.write<uint16_t>(h + k, uint16_t(g() % 8 ? g() % 4 : Pick(g, {4, 5, 0xFFFF})));
+      Wr(levels + 4 * uint32_t(l), h);
+    }
+    Wr(m + 0x4C, b);
+    Wr(m + 0x50, levels);
+    Wr(kXModels + 4 * i, m);
+  }
+  for (uint32_t i = 0; i < n; i++) {
+    const uint32_t e = ents + 0x2B8 * i;
+    if (Rd(e + 8) >= 8) Wr(e + 8, g() % 8);
+    Wr(e + 0x94, g() % 4 ? 0 : g() | 1);
+    g_mem.write<uint8_t>(e + 0xA0, g() % 4 == 0);
+    // The composite model.
+    const uint32_t old = Rd(e + 0x90), p = a.Alloc(0x40), ns = g() % 8 ? 1 + g() % 4 : 0;
+    const bool walk = arena(old) && arena(Rd(old + 0x18)) && arena(Rd(Rd(old + 0x18) + 4));
+    if (walk) std::memcpy(g_mem.ptr<uint8_t>(p), g_mem.ptr<uint8_t>(old), 0x1C);
+    g_mem.write<uint8_t>(p + 0x16, uint8_t(ns));
+    for (uint32_t j = 0; j < ns; j++) {
+      const bool kept = j == 0 && walk;
+      const uint32_t sub = kept ? Rd(p + 0x18) : a.Alloc(8), x = kept ? Rd(sub + 4) : a.Alloc(0x64);
+      Wr(sub + 4, !kept && g() % 16 == 0 ? 0xA8F6BC : x);
+      for (uint32_t l = 0; l < 4; l++) {
+        const uint32_t p20 = a.Alloc(8), p4 = a.Alloc(0xC), list = a.Alloc(16);
+        for (uint32_t k = 0; k < 4; k++) {
+          const uint32_t surf = a.Alloc(8);
+          for (uint32_t q = 0; q < 8; q += 4) Wr(surf + q, g());
+          Wr(list + 4 * k, surf);
+        }
+        Wr(p4 + 8, list);
+        Wr(p20 + 4, p4);
+        Wr(x + 20 * l, p20);
+      }
+      Wr(p + 0x18 + 4 * j, sub);
+      g_mem.write<uint16_t>(p + 0x38 + 2 * j, uint16_t(g() % 8 ? 1 + g() % 7 : Pick(g, {0, -1, -5})));
+    }
+    Wr(e + 0x90, p);
+    // The model and its cache.
+    const uint32_t m = a.Alloc(0x1C);
+    Wr(m + 8, g());
+    for (uint32_t l = 0; l < 4; l++) {
+      const uint32_t k = g() % 4, list = a.Alloc(4 + 0x30 * k);
+      Wr(list, k);
+      for (uint32_t j = 0; j < k; j++) {
+        const uint32_t s = list + 4 + 0x30 * j;
+        for (uint32_t q = 0; q < 0x30; q += 4) Wr(s + q, g());
+        Wr(s + 4, g() % 4);
+        Wr(s + 8, shader());
+        Wr(s + 0xC, g() % 3 ? shader() : 0);
+      }
+      Wr(m + 0xC + 4 * l, list);
+    }
+    Wr(e + 0x98, m);
+    const uint32_t cache = a.Alloc(0x248 + 4 * 16);
+    for (uint32_t q = 0; q < 16; q++)
+      Wr(cache + 0x248 + 4 * q, g() % 2 ? 0 : kModelCache + g() % 8 * 0x1C8 + g() % 0x1C8);
+    Wr(e + 0x2B0, cache);
+  }
+  auto link = [&] { return g() % 9 == 8 ? kModelCacheHead : kModelCache + g() % 8 * 0x1C8; };
+  for (uint32_t k = 0; k < 8; k++) {
+    Wr(kModelCache + k * 0x1C8, link());
+    Wr(kModelCache + k * 0x1C8 + 4, link());
+    Wr(kModelCache + k * 0x1C8 + 8, g());
+  }
+  Wr(kModelCacheHead, link());
+  Wr(kModelCacheHead + 4, link());
+  auto cvar = [&](uint32_t va, uint32_t v) {
+    const uint32_t c = a.Alloc(0x24);
+    Wr(va, c);
+    Wr(c + 0x20, v);
+  };
+  cvar(0x1534420, g() % 8 ? uint32_t(Pick(g, {1, 1, -1})) : 0);
+  cvar(0x1534424, g() % 8 != 0);
+  cvar(0x14E43E8, g() % 2);
+  cvar(0x153446C, g() % 8 ? 0 : uint32_t(Pick(g, {1, 2, -1})));
+  cvar(0x15343B0, g() % 8 ? 0 : uint32_t(Pick(g, {1, -1})));
+  cvar(0x15343D8, g() % 3);
+  const uint32_t str = a.Alloc(4);
+  g_mem.write<uint8_t>(str, g() % 8 ? 0 : 'x');
+  cvar(0x15346D4, 0);
+  Wr(Rd(0x15346D4) + 4, str);
+  if (dlights) {
+    const uint32_t dl = a.Alloc(0x74 + 4 * 0x88);
+    for (uint32_t k = 0; k < 0x74 + 4 * 0x88; k += 4) WrF(dl + k, Uniform(g, -256, 256));
+    Wr(0x1536474, g() % 5);
+    Wr(kRefdef, dl);
+  }
+  if (handles) {
+    Wr(0x153C528, g() % 8 ? 4 : uint32_t(Pick(g, {0, -1})));
+    for (uint32_t i = 0; i < 4; i++) Wr(0x153C52C + 4 * i, shader());
+    Wr(0x1535AE8, shader());
+  }
+  // Mostly in range, now and then just below the limit of 0x2000 or far
+  // below 0.
+  Wr(0x1536498, g() % 4 ? g() % 0x2001 : uint32_t(Pick(g, {0x1FFA, 0x1FFD, int32_t(g() | 0x80000000u)})));
+}
+
 // A viewport (now and then empty) and fovs (with a world finite and in
 // 1..179, so that the frustum the walk culls by is).
 void Viewport(std::mt19937& g, uint32_t xywh, uint32_t fovs, bool world) {
@@ -2611,7 +2864,8 @@ void Viewport(std::mt19937& g, uint32_t xywh, uint32_t fovs, bool world) {
 }
 
 // Entities of every type (0x2B8 bytes: type, flags +4, shader handle
-// +0x68) for R_AddEntitySurfaces, now and then inside a portal's view.
+// +0x68, models) for R_AddEntitySurfaces, now and then inside a portal's
+// view; or one entity of type 0, 1 or 2 for its surfaces alone.
 void EntityCase(Arena& a, std::mt19937& g, Stats& s) {
   a.Reset();
   for (uint32_t va = 0x1536000; va < 0x1536500; va += 4) Wr(va, g());
@@ -2628,29 +2882,53 @@ void EntityCase(Arena& a, std::mt19937& g, Stats& s) {
     Wr(e, uint32_t(Pick(g, {0, 1, 2, 3, 4, 5, 10, 11, 11, 12, 15, 16, -1})));
     Wr(e + 4, g() % 4 ? g() & 7 : g());
     Wr(e + 0x68, g() % 4 ? g() % 4 : uint32_t(Pick(g, {-1, 4, 5, INT32_MAX})));
+    Wr(e + 0x2B4, g() % 8 ? 0 : uint32_t(Pick(g, {1, 2})));
   }
   Wr(kNumEntities, n);
   Wr(kEntities, ents);
-  const uint32_t surfs = a.Alloc(0x100);
-  Wr(kNumDrawSurfs, g() % 4);
-  Wr(kNumDrawSurfs + 4, surfs);
+  EntityModels(a, g, ents, m, true, false);
+  const uint32_t surfs = a.Alloc(0x100 * 8);
+  Wr(kNumDrawSurfs, g() % 8 ? g() % 4 : uint32_t(Pick(g, {0xFFFF, 0x10000, -1})));
+  Wr(kNumDrawSurfs + 4, surfs + 0x400 - Rd(kNumDrawSurfs) * 8);
   Wr(0x1549548, g());
-  Run({0x4CB0C0, uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), {}}, {{0x1536000, 0x500}, {0x1535D60, 8}, a.All()}, g, s, "random");
+  Wr(0x1549554, g());
+  Wr(0x1535A24, g());
+  const std::vector<Window> win = {{0x1536000, 0x500}, {0x1535D60, 8}, a.All()};
+  const uint32_t r = g() % 4;
+  if (r == 0 || !m) {
+    Run({0x4CB0C0, uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), {}}, win, g, s, "random");
+    return;
+  }
+  // One entity, as R_AddEntitySurfaces hands it over.
+  const uint32_t e = ents + 0x2B8 * (g() % m);
+  Wr(e, r - 1);
+  Wr(0x1535D68, e);
+  Wr(e + 0x9C, 0);
+  const uint32_t fn = r == 1 ? 0x500830 : r == 2 ? 0x506980 : 0x4FA790;
+  Run({fn, r == 2 ? uint32_t(g()) : e, uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), r == 2 ? std::vector<uint32_t>{e} : std::vector<uint32_t>{}}, win, g, s, "random");
 }
 
 // A scene over a world walk's (or without a world): the view's surfaces
 // (0x4CB210), the view rendered from parms (the view's, with a viewport,
 // fovs, now and then a portal's) or RE_RenderScene from a refdef with the
 // view's origin and axes (the walk's static models and dlights moved into
-// the back end's data, as the scene's after its first ones). Polygons add
-// draw surfaces for the sort (g_scene_surfs).
+// the back end's data, as the scene's after its first ones); or the
+// polygons' surfaces or the world's without the walk alone.
 void SceneCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
   std::vector<Window> win = WorldWalkScene(a, g, base);
   const bool world = g() % 4 != 0;
   if (!world) Wr(kWorld, 0);
   // A world without cells now and then.
   if (world && g() % 8 == 0) Wr(Rd(kWorld) + 0x124, 0);
-  Wr(0x1536498, g());
+  // The world's surface references (+0xA0, count +0x9C) for 0x500920.
+  if (world) {
+    const uint32_t k = g() % 5, refs = a.Alloc(12 * k + 4);
+    for (uint32_t i = 0; i < k; i++)
+      std::memcpy(g_mem.ptr<uint8_t>(refs + 12 * i), g_mem.ptr<uint8_t>(NewRef(a, g, base)), 12);
+    Wr(Rd(kWorld) + 0x9C, k);
+    Wr(Rd(kWorld) + 0xA0, refs);
+  }
+  ScenePolygons(a, g, true);
   SceneCvars(a, g, 0, world);
   SceneShaders(a, g);
   Wr(0x1536134, g() % 8 == 0);
@@ -2659,8 +2937,7 @@ void SceneCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
   Wr(kNumDrawSurfs + 4, a.Alloc(0x1000 * 8));
   win.push_back({0x1534000, 0x3000});
   win.push_back({0xA8F800, 0x40});
-  g_scene_surfs = true;
-  switch (g() % 3) {
+  switch (g() % 5) {
     case 0:
       win.push_back(a.All());
       Run({0x4CB210, uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), {}}, win, g, s, "random");
@@ -2675,8 +2952,16 @@ void SceneCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
       Run({0x4CB270, uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), {parms}}, win, g, s, "random");
       break;
     }
+    case 2:
+    case 3:
+      // Now and then a draw surface count near the limit or negative.
+      if (g() % 4 == 0) DrawSurfs(a, g);
+      win.push_back(a.All());
+      Run({g() % 2 ? 0x4DE980u : 0x500920u, uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), {}}, win, g, s, "random");
+      break;
     default: {
       const uint32_t b = Rd(kBackEndData), n = Rd(kNumStaticModels), first = g() % 4;
+      for (uint32_t k = 0; k < 8; k++) Wr(b + 0x1FD700 + 16 * k + 4, g() % 2 ? g() % 4 : g());
       const uint32_t ents = b + 0x81700 + first * 0x2B8;
       std::memcpy(g_mem.ptr<uint8_t>(ents), g_mem.ptr<uint8_t>(Rd(kStaticModels)), n * 0x2B8);
       win.push_back({ents, n * 0x2B8 + 4});
@@ -2718,7 +3003,6 @@ void SceneCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
       break;
     }
   }
-  g_scene_surfs = false;
 }
 
 // ---- captures ------------------------------------------------------------------
@@ -2804,6 +3088,8 @@ int main(int argc, char** argv) {
   Wr(kAllocPtr, kAlloc);
   Wr(kFreePtr, kFree);
   Wr(kMillisecondsPtr, kMilliseconds);
+  Wr(kSubModelPtr, kSubModel);
+  Wr(kModelCallbackPtr, kModelCallback);
   // The reference: the x87 model's exact arithmetic throughout.
   recomp::x87::run::g_doubles = false;
 

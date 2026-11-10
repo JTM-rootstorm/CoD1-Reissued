@@ -163,6 +163,10 @@ speed.
   With layer 6: 13 of 13 shared, 45 of 1640 in-level identical (47
   between two runs of main); mean 1.796-1.878 ms (main) and 1.747-1.855
   ms (a noisier run for both); errors 3.
+  With layer 7: 13 of 13 shared, 46 of 1640 in-level identical (46
+  between two runs of main); mean 2.385-2.875 ms (main) and 2.275-2.869
+  ms, with another game's run loading the machine (load 9) throughout;
+  errors 3.
 - Layer 4, the cell walk (2026-11-09): a polygon's clip 0x4D7F30 (ECX
   plane; stack points, &count, out: distances z + x + y less the plane's,
   behind below -0.001, in front above 0.001; none in front: count 0, EAX
@@ -340,6 +344,72 @@ speed.
   round); the first run missed a world without cells, negative debug
   cvars, the view's last dword, the registered flag above its low byte,
   0x1536498 left stale and the fovs' signed zeros.
+- Layer 7, the entities' and polygons' surfaces (2026-11-09): the
+  polygons 0x4DE980 (0x1536488 of 16 bytes at 0x153648C, each the current
+  entity as its index & 0x3FF; R_AddDrawSurf inlined with dlight bits 2,
+  the handle +4 checked as 0x4CB0C0 does); a brush model entity 0x500830
+  (type 0; none for +0x2B4 at 2 or without the cvar 0x1534420: its
+  orientation by 0x4C9580, 0x4AA490's dlights on the brush model (the
+  models' 0x15364F8 by +8, +0x4C: bounds, then the surface references
+  +0x18, count +0x1C read again each time), each reference through
+  0x4D6970 with the current entity's +0x9C bits); the world without the
+  cell walk 0x500920 (for 0x14E43FC at 3: with the cvar 0x1534490 and the
+  refdef's flag 1 clear, entity 0x7FE, no dlights, the world's references
+  (+0xA0, count +0x9C) not yet marked, culled by 0x4C8D50 for types 0x18
+  and up (its r_nocull test repeats the cull's own), then the cells'
+  entity lists (+0x38, the cell array read once) through 0x4DEC10); a
+  model entity 0x4FA790 (type 2; +0x98 the model: 0x480DD0's level at
+  0x4DF2D0's distance picks the list at +0xC + 4 x level, its surfaces
+  0x30 bytes (fog +4, shader +8, a second shader +0xC, 16-bit triangles
+  +0x10) indexed from the sum of the lower levels' counts; a slot per
+  surface in the entity's cache (+0x2B0, +0x248 + 4 x index): an empty
+  one with a second shader gets 0x4DA9F0's entry (after the inverse of
+  the axes (0x427CB0) and the lighting 0x4ABEF0, once) unless +0xA0 is
+  set; a cached entry (0x1C8 bytes at 0x11BEC28, the pointer's entry by
+  signed division) is stamped with 0x1535A24, moved to the front of the
+  list at 0x11CD050 and drawn with the second shader and the fog
+  0x1549554, but a shader with flags 0x18 lights the entity first and,
+  with +0xA0 then set, draws the surface itself; no entry: the surface,
+  the entity lit at the end for those flags; the debug text 0x4AD8F0 of
+  the triangles / 3 (cvar 0x153446C) or the surfaces (0x15343B0), not for
+  flag 8); a composite model entity 0x506980 (type 1; +0x90 the model:
+  submodels +0x18, count +0x16, 16-bit model handles +0x38, a negative
+  one resolved through the refimport's 0x1549688 from its negation, a
+  dword whose high half is whatever the original's EAX held then; two
+  _alloca arrays (8-aligned: levels, then 0x477290's count of surface
+  pairs, none beyond 0x2000 with 0x1536498, a warning with 0x14E43E8)
+  filled by 0x477340, the callback +0x94 (0x476510 and the refimport's
+  0x154968C); a submodel of the default model 0xA8F6BC draws 0x506310 and
+  0x5065E0 instead (with 0x14E43E8) and nothing else; each pair's shader
+  from the handle's model +0x50 by level, its surface from the submodel
+  +4 by level + 1 (20 bytes each), +4, +8 by surface, to 0x506070 unless
+  hidden (flag 2 outside a portal's view), the 16-bit counts +4 and +2
+  summed for the debug text of 0x153446C (+2 at 2), or 0x15343B0's count
+  of distinct shaders; 0x5068B0 with the cvar 0x15346D4's string; a
+  shader with flags 0x18 lights the entity by 0x4ABDC0 at the end, unless
+  hidden and the cvar 0x15343D8 is not above 1). Still lifted under them:
+  the callees named here and 0x4AC890.
+- Layer 7 oracle and mutations: their callees are stubs (0x4DF2D0 pushes a
+  distance on the x87 stack, 0x480DD0 levels -1 to 2, 0x477290 and
+  0x477340 the pairs of the model handed over, 0x4DA9F0 an entry or
+  none, 0x4ABEF0 sets +0xA0 now and then, the refimport's 0x1549688
+  answers handles 0-3, va's arguments by its format); the old stubs'
+  change of the current entity moved to 0x4AA490 and 0x4DF2D0. One
+  fixture (EntityModels) gives the walk's, the portals' and
+  R_AddEntitySurfaces' entities models of all three types (a walk's
+  static models keep their bounds chains), the cache's first eight
+  entries linked among themselves, the entity cvars and dlights; scenes
+  get polygons (now and then over 0x400) and world references. New
+  entries reached alone: each entity type's (about 4k each), the polygons and the
+  world without the walk; R_AddEntitySurfaces and the scene now reach
+  them. 737k random cases, 8M calls out, 0 mismatched; ctest 37 of 37. 74
+  mutants: all caught but three equivalent (a triangle sum divided
+  unsigned, never negative from 16-bit counts; 0x500920's r_nocull test,
+  which the cull repeats; the cell array read again per cell, which no
+  callee changes); the first run missed the polygon index's mask (until
+  over 0x200 polygons), a negative draw surface count, a negative brush
+  model cvar, a surface count landing exactly on 0x2000 and the handle's
+  high half (a count above 0x10000 with 0x1536498 far below 0).
 
 ## Renderer back end (2026-10-25, branch render-backend)
 The back end is going native from the bottom up (src/render_backend.cpp),

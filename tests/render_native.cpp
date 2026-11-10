@@ -54,4 +54,9 @@
 #define f_004CB210 n_004CB210
 #define f_004CB270 n_004CB270
 #define f_004DEEC0 n_004DEEC0
+#define f_00500830 n_00500830
+#define f_004FA790 n_004FA790
+#define f_00506980 n_00506980
+#define f_004DE980 n_004DE980
+#define f_00500920 n_00500920
 #include "../src/render.cpp"
