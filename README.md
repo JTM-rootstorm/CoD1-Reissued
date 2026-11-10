@@ -44,16 +44,47 @@ Siege):
   linked with a runtime that reimplements the Windows and Miles Sound
   System APIs the game uses, OpenGL 1.x included.
 - That recompiled code is scaffolding. The aim is native source: lifted
-  functions are replaced by hand-written C++ one subsystem at a time
-  (widescreen, UI scaling and frame pacing first), each checked against
-  the exact lifted version, until nothing lifted is left.
+  functions are replaced by hand-written C++ one subsystem at a time,
+  each checked bit for bit against the exact lifted version, until
+  nothing lifted is left (see "Native so far" below).
 - Graphics go through SwARc's backend-neutral fixed-function device
   on SDL_GPU: Vulkan on Linux, Metal on macOS. Host OpenGL is never
   used.
 
 This repository holds what is specific to Call of Duty: the Steam DRM
-unpacker, the game configuration, lifter manifests, (later) the native
-replacements, and the docs.
+unpacker, the game configuration, lifter manifests, the native
+replacements (`src/`) with the tests that check them (`tests/`), and the
+docs.
+
+## Native so far
+
+Hand-written C++ that replaces the lifted original, each piece named with
+`replace` in `manifest/*.manifest`:
+
+- **Widescreen and frame rate**: native resolution, Hor+ field of view,
+  2D placement on wide screens, exact `com_maxfps` pacing, `pmove_fixed`
+  without rounding, and fixes to RoQ cinematic playback.
+- **Renderer back end**: all of it, from the GL state up through the
+  stages, the dlight and shadow passes, the vertex deforms, colour and
+  texture coordinate generators, the surface types, the sky and the
+  command loop. Its GL calls go straight to SwARc's GL state and its
+  vertex array draws to `gfx::Device`, not through the reimplemented
+  `opengl32`.
+- **Renderer front end** (in progress, bottom up): the culling, the view
+  and its projection, the draw surface list and sort, the world's cells
+  and static models, the cell walk through portals, portal and mirror
+  views, the scene submission and the entities' and polygons' surfaces.
+- **Collision**: the box, capsule and terrain traces and point contents.
+- **Player movement**: one implementation for the copies in `gamex86.dll`
+  and `cgamex86.dll`.
+- **Animation**: XAnim evaluation (bone poses and matrices) and the CPU
+  skinning of model surfaces.
+- **Files**: pk3 reads and the savegames' compression on the host's zlib,
+  the pk3 directory scan, the JPEG inverse DCT, and the CRT functions
+  under them.
+
+[FINDINGS.md](FINDINGS.md) has the details of each and what is still
+lifted.
 
 ## What you need
 
@@ -195,10 +226,19 @@ Configure with `-DCOD1_GAME_EXE="$REPO/unpacked/CoDSP.exe"` and
 `-DCOD1_GAME_DIR="$GAME"`, then `ctest --test-dir out/build/release`.
 Besides SwARc's own tests, this runs every x87, integer and SSE
 instruction form found in the EXE both lifted and natively on your CPU,
-from random states, and requires bit-identical results; and each native
-replacement against the original it replaces, lifted (the pk3 reads and
-savegame compression over the install's pk3 files, the JPEG inverse DCT
-over their images, which needs the libjpeg development package).
+from random states, and requires bit-identical results.
+
+Each native replacement has an oracle test (`*_oracle`): the original
+functions are lifted from your EXE at build time, and both versions run
+from the same memory. The functions they call are stubbed and their calls
+recorded, so the arguments, registers and return addresses must match as
+well as the memory each leaves. The cases are random, with special values
+such as NaNs, signed zeros, denormals and values at the limits. Some
+tests also replay calls captured from real runs (`COD1_*_CAPTURES`). The
+pk3 reads and savegame compression run over the install's pk3 files, and
+the JPEG inverse DCT over their images, which needs the libjpeg
+development package. The renderer back end's oracle also records every GL
+call each version makes.
 
 ## Legal
 
