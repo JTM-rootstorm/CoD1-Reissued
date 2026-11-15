@@ -663,6 +663,13 @@ speed.
   spot (until the ties, NaN table entries and spot axes, and the
   overflowing attenuations); logs mut15_round1-4.log and mut15_final.log
   in the session's scratchpad.
+- The oracle's time (2026-11-15): three quarters of a run went to the
+  harness, not the code under test: each case's compared windows saved
+  three times into newly grown vectors and compared a byte at a time.
+  With the buffers kept between cases and a memcmp before the byte loop
+  the same run (786k cases, the same output to the byte) takes 28 s, not
+  66 s. RENDER_ORACLE_FAIL_FAST=1 ends a run at its first mismatch, for
+  mutants: a caught one then costs its compile, a survivor the 28 s.
 
 ## Renderer back end (2026-10-25, branch render-backend)
 The back end is going native from the bottom up (src/render_backend.cpp),

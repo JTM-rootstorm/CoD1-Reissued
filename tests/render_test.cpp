@@ -784,10 +784,15 @@ struct Stats {
   int cases = 0, failures = 0, calls = 0, by_entry[kNumEntries] = {};
 };
 
-std::vector<uint8_t> Save(const std::vector<Window>& w) {
-  std::vector<uint8_t> out;
-  for (const Window& x : w) out.insert(out.end(), g_mem.ptr<uint8_t>(x.va), g_mem.ptr<uint8_t>(x.va) + x.size);
-  return out;
+void Save(const std::vector<Window>& w, std::vector<uint8_t>& out) {
+  size_t size = 0;
+  for (const Window& x : w) size += x.size;
+  out.resize(size);
+  size_t at = 0;
+  for (const Window& x : w) {
+    std::memcpy(out.data() + at, g_mem.ptr<uint8_t>(x.va), x.size);
+    at += x.size;
+  }
 }
 void Load(const std::vector<Window>& w, const std::vector<uint8_t>& in) {
   size_t at = 0;
@@ -823,7 +828,8 @@ uint32_t ScrubDepth(uint32_t fn) {
 
 // Runs one call through the lifted original and the native code from the
 // same memory and compares; the original's result stays (the next case's
-// starting state).
+// starting state). With RENDER_ORACLE_FAIL_FAST set the first mismatch ends
+// the run (a mutant's).
 void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const char* what) {
   const Entry& e = kEntries[EntryIndex(k.fn)];
   const uint32_t esp = kStack + kStackSize - 0x1000;
@@ -844,7 +850,9 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   Wr(esp, 0xDEAD0000);
   for (size_t i = 0; i < k.args.size(); i++) Wr(esp + 4 + 4 * uint32_t(i), k.args[i]);
   w.push_back({esp, 4 + 4 * uint32_t(k.args.size())});
-  const std::vector<uint8_t> before = Save(w);
+  static std::vector<uint8_t> before, after, got;
+  static std::vector<CallRec> lcalls;
+  Save(w, before);
   Ctx c0{};
   c0.eax = k.eax;
   c0.ecx = k.ecx;
@@ -864,15 +872,15 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   g_heap_top = kHeap;
   fill();
   e.lifted(cl);
-  const std::vector<uint8_t> after = Save(w);
-  const std::vector<CallRec> lcalls = g_calls;
+  Save(w, after);
+  lcalls.swap(g_calls);
   Load(w, before);
   Ctx cn = c0;
   g_calls.clear();
   g_heap_top = kHeap;
   fill();
   e.native(cn);
-  const std::vector<uint8_t> got = Save(w);
+  Save(w, got);
 
   s.cases++;
   s.by_entry[EntryIndex(k.fn)]++;
@@ -917,6 +925,10 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   }
   size_t at = 0;
   for (const Window& x : w) {
+    if (!std::memcmp(got.data() + at, after.data() + at, x.size)) {
+      at += x.size;
+      continue;
+    }
     for (uint32_t i = 0; i < x.size; i++)
       if (got[at + i] != after[at + i]) {
         if (s.failures < 20) {
@@ -933,6 +945,10 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
     at += x.size;
   }
   if (!ok) s.failures++;
+  if (!ok && std::getenv("RENDER_ORACLE_FAIL_FAST")) {
+    std::printf("stopped at the first mismatch (case %d): %d mismatched\n", s.cases, s.failures);
+    std::exit(1);
+  }
   Load(w, after);
 }
 
