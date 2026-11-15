@@ -15,7 +15,8 @@
 // must leave the same bytes in the case's memory (the structures, the
 // globals, the stack arguments), the same calls, and the same ESP, EBX,
 // ESI, EDI, EBP and x87 stack (top, empty registers, control word), and
-// the entries that return a value the same EAX (ST0 for 0x4D6880). Not
+// the entries that return a value the same EAX (ST0 for 0x4D6880 and
+// 0x4DF2D0). Not
 // compared: EAX otherwise, ECX, EDX, EFLAGS, the x87 status word and the
 // stack below the return address (refilled with one pattern before each
 // side for the entries that keep locals there for their callees).
@@ -98,6 +99,11 @@ constexpr uint32_t kMillisecondsPtr = 0x1549608, kMilliseconds = 0x7FFE0040;
 // its own) and 0x154968C (a composite model's callback).
 constexpr uint32_t kSubModelPtr = 0x1549688, kSubModel = 0x7FFE0050;
 constexpr uint32_t kModelCallbackPtr = 0x154968C, kModelCallback = 0x7FFE0060;
+// The GL entry points a surface's cache entry calls (stdcall):
+// glBindBufferARB, glBufferSubDataARB and the vertex buffer's 0x15350DC.
+constexpr uint32_t kGlBindPtr = 0x1534DE4, kGlBind = 0x7FFE0070;
+constexpr uint32_t kGlSubDataPtr = 0x1534B14, kGlSubData = 0x7FFE0080;
+constexpr uint32_t kGlUpdatePtr = 0x15350DC, kGlUpdate = 0x7FFE0090;
 constexpr uint32_t kHeap = 0x6FE00000, kHeapSize = 0x100000;
 uint32_t g_heap_top = kHeap;
 
@@ -115,6 +121,8 @@ uint32_t g_pairs = 0;
 // The models' cache (0x1C8-byte entries, the test's first eight, and the
 // head of their list).
 constexpr uint32_t kModelCache = 0x11BEC28, kModelCacheHead = 0x11CD050;
+// Bounds for the bones' bounds 0x4771B0 hands out (eight of 24 bytes).
+uint32_t g_bone_bounds = 0;
 
 // What each stub compares: the registers its callee reads (and for the
 // texture coordinate callees the callee-saved ones, which ComputeTexCoords
@@ -127,25 +135,23 @@ constexpr StubInfo kStubs[] = {
     {0x4AD7E0, kEax | kEcx | kEdx, 0},          // debug box
     {0x4AD630, kEax | kEbx, 1},                 // debug polygon
     {0x4AD760, kEbx | kEsi | kEdi, 0},          // debug line
-    {0x4DEC10, 0, 2},                           // adds an entity
     {0x4CA8D0, 0, 2},                           // a portal surface off the screen
     {0x4AC890, 0, 0},                           // a debug draw
     {0x4AA490, 0, 1},                           // the dlights on a brush model
-    {0x4DF2D0, kEsi, 0},                        // an entity's level-of-detail distance
-    {0x480DD0, kEcx, 1},                        // a model's level of detail
     {0x427CB0, kEax | kEcx, 0},                 // a 3x3 inverse
     {0x4ABEF0, kEax | kEcx, 0},                 // an entity's lighting
     {0x4ABDC0, kEdi, 1},
-    {0x4DA9F0, kEax | kEcx, 3},                 // a surface's cache entry
     {0x440940, 0, -1},                          // va (its format's arguments)
     {0x4AD8F0, kEax | kEdi, 1},                 // debug text
     {0x477290, kEdx | kEdi, 0},                 // a composite model's surfaces
     {0x477340, kEsi, 3},
     {0x476510, 0, 2},
-    {0x506310, 0, 2},
-    {0x5065E0, 0, 2},
-    {0x506070, kEdx | kEdi, 2},
     {0x5068B0, kEbx | kEdi, 0},
+    {0x447CA0, kEax | kEcx, 1},                 // a warning icon
+    {0x4DA330, kEbx, 1},                        // a cache entry of a size class
+    {0x4DA420, kEbx, 3},                        // a vertex's lighting
+    {0x4771B0, kEdx, 1},                        // the bones' bounds
+    {0x40F4E0, kEsi | kEdi, 4},                 // a debug line
     {0x51D45A, 0, 3},                           // fprintf to the log
     {0x427E80, kEax | kEcx, 0},                 // a matrix's inverse
     {0x50A2B0, kSaved | kEax, 0},               // tcGens
@@ -199,29 +205,43 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
     for (uint32_t i = 0; i < size; i++) h = (h ^ g_mem.read<uint8_t>(va + i)) * 16777619u;
     return h;
   };
-  if (va == 0x4DEC10) r.args[2] = hash(r.args[0], 0x9C);
+  if (va == 0x4DA420) r.args[3] = hash(r.args[0], 0xC) ^ hash(r.args[1], 0xC) * 3;
+  if (va == 0x40F4E0) r.args[4] = hash(r.args[0], 0xC) ^ hash(c.edi, 0xC) * 3 ^ hash(c.esi, 0x10) * 5;
   if (va == 0x4AD630 && c.ebx <= 0x1000) r.args[2] = hash(r.args[0], 0xC * c.ebx);
   if (va == 0x4AD760) r.args[2] = hash(c.ebx, 0xC) ^ hash(c.edi, 0xC) * 3;
   g_calls.push_back(r);
   const uint32_t k = uint32_t(g_calls.size());
   // What an entity's callees do: now and then change the current entity's
   // number, which R_AddEntitySurfaces reloads; dlight bits for a brush
-  // model's surfaces; a distance on the x87 stack and levels of detail
-  // -1 to 2; the lighting setting +0xA0 now and then; a cache entry (any
-  // byte of one of the first eight) or none.
-  if ((va == 0x4AA490 || va == 0x4DF2D0) && k % 5 == 0) Wr(0x1536024, Rd(0x1536024) + 1);
+  // model's surfaces; the lighting setting +0xA0 now and then; a cache
+  // entry of a size class (one of the first eight, its vertices at +8) or
+  // none; a vertex's colour; the bones' bounds.
+  if (va == 0x4AA490 && k % 5 == 0) Wr(0x1536024, Rd(0x1536024) + 1);
   if (va == 0x4AA490 && k % 3) Wr(Rd(0x1535D68) + 0x9C, k % 3 == 1 ? k * 0x9E3779B9u : 0);
-  if (va == 0x4DF2D0) recomp::x87::LoadF32(c.fpu, 0x3F800000u + k * 0x1234567u % 0x08000000u);
   if (va == 0x4ABEF0) g_mem.write<uint8_t>(c.eax + 0xA0, k % 3 == 0);
+  if (va == 0x427CB0)
+    for (uint32_t i = 0; i < 9; i++) WrF(c.ecx + 4 * i, float(int((k * 13 + i * 7) % 9) - 4) * 0.375f);
+  const uint32_t entry = k % 4 ? kModelCache + k % 8 * 0x1C8 + (k % 5 ? 0 : k * 37 % 0x1B0) : 0;
+  if (va == 0x4DA330 && entry) Wr(entry + 8, k % 64);
+  if (va == 0x4DA420) Wr(r.args[2], k * 0x01020304u);
+  if (va == 0x4771B0)
+    for (uint32_t i = 0; i < g_mem.read<uint8_t>(r.args[0] + 0x17); i++) Wr(c.edx + 4 * i, g_bone_bounds + 24 * ((k + i) % 8));
   // A composite model's surfaces: none without submodels, now and then
-  // more than fit; the list's pairs (submodel, surface 0-3).
+  // more than fit; the list's pairs (submodel, surface 0-3). Those that
+  // fit when 0x1536498 is below 0, only while the draw surfaces stop
+  // within 0x20 (they hold no more) and without the debug text of
+  // distinct shaders (0x15343B0), whose count is quadratic in the pairs.
   if (va == 0x477290) {
     const uint32_t n = g_mem.read<uint8_t>(c.edx + 0x16);
-    g_pairs = !n ? 0 : k % 16 == 0 ? 0x2001 : k % 7;
+    const bool room = int32_t(Rd(0x1536498)) >= 0 ||
+                      (int32_t(Rd(0x1536490)) >= 0xFFF0 && !Rd(Rd(0x15343B0) + 0x20));
+    g_pairs = !n ? 0 : k % 16 == 0 && room ? 0x2001 : k % 7;
     // As many as 0x10000 with room for them.
-    if (n && k % 4 == 1 && int32_t(Rd(0x1536498)) < -0x20000) g_pairs = 0x10003;
+    if (n && k % 4 == 1 && int32_t(Rd(0x1536498)) < -0x20000 && room) g_pairs = 0x10003;
   }
   if (va == 0x477340) {
+    // And the bones' bits (16 bytes at ESI).
+    for (uint32_t i = 0; i < 16; i += 4) Wr(c.esi + i, (k + i) * 0x9E3779B9u);
     const uint32_t n = g_mem.read<uint8_t>(r.args[0] + 0x16);
     for (uint32_t i = 0; i < g_pairs && n; i++) {
       g_mem.write<uint16_t>(r.args[1] + 4 * i, uint16_t((k + i * 3) % n));
@@ -231,9 +251,8 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
   const uint32_t junk = 0xC0DE0000u + k;
   // A portal surface now and then off the screen (EAX 1).
   c.eax = va == 0x4CA8D0   ? k % 4 == 0
-          : va == 0x480DD0 ? k % 4 - 1
           : va == 0x477290 ? g_pairs
-          : va == 0x4DA9F0 ? (k % 3 ? kModelCache + k % 8 * 0x1C8 + k * 37 % 0x1C8 : 0)
+          : va == 0x4DA330 ? entry
                            : junk;
   c.ecx = junk ^ 1;
   c.edx = junk ^ 2;
@@ -309,6 +328,13 @@ void f_004FA790_lifted(Ctx& c);
 void f_00506980_lifted(Ctx& c);
 void f_004DE980_lifted(Ctx& c);
 void f_00500920_lifted(Ctx& c);
+void f_004DEC10_lifted(Ctx& c);
+void f_004DF2D0_lifted(Ctx& c);
+void f_00480DD0_lifted(Ctx& c);
+void f_004DA9F0_lifted(Ctx& c);
+void f_00506070_lifted(Ctx& c);
+void f_00506310_lifted(Ctx& c);
+void f_005065E0_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_native.cpp renames
 // its entries).
 void f_004D68E0(Ctx& c) { f_004D68E0_lifted(c); }
@@ -370,6 +396,13 @@ void f_004FA790(Ctx& c) { f_004FA790_lifted(c); }
 void f_00506980(Ctx& c) { f_00506980_lifted(c); }
 void f_004DE980(Ctx& c) { f_004DE980_lifted(c); }
 void f_00500920(Ctx& c) { f_00500920_lifted(c); }
+void f_004DEC10(Ctx& c) { f_004DEC10_lifted(c); }
+void f_004DF2D0(Ctx& c) { f_004DF2D0_lifted(c); }
+void f_00480DD0(Ctx& c) { f_00480DD0_lifted(c); }
+void f_004DA9F0(Ctx& c) { f_004DA9F0_lifted(c); }
+void f_00506070(Ctx& c) { f_00506070_lifted(c); }
+void f_00506310(Ctx& c) { f_00506310_lifted(c); }
+void f_005065E0(Ctx& c) { f_005065E0_lifted(c); }
 // unzCloseCurrentFile and tolower, native in the game (src/unzip.cpp,
 // src/crt.cpp): here only lifted code the stubs stand for reaches them.
 void f_0049EAA0_lifted(Ctx& c);
@@ -461,31 +494,36 @@ void n_004FA790(Ctx& c);
 void n_00506980(Ctx& c);
 void n_004DE980(Ctx& c);
 void n_00500920(Ctx& c);
+void n_004DEC10(Ctx& c);
+void n_004DF2D0(Ctx& c);
+void n_00480DD0(Ctx& c);
+void n_004DA9F0(Ctx& c);
+void n_00506070(Ctx& c);
+void n_00506310(Ctx& c);
+void n_005065E0(Ctx& c);
 // The stubs.
 #define COD1_STUB(va) \
   void f_##va(Ctx& c) { StubFor(c, 0x##va); }
 COD1_STUB(004AD7E0)
 COD1_STUB(004AD630)
 COD1_STUB(004AD760)
-COD1_STUB(004DEC10)
 COD1_STUB(004CA8D0)
 COD1_STUB(004AC890)
 COD1_STUB(004AA490)
-COD1_STUB(004DF2D0)
-COD1_STUB(00480DD0)
 COD1_STUB(00427CB0)
 COD1_STUB(004ABEF0)
 COD1_STUB(004ABDC0)
-COD1_STUB(004DA9F0)
 COD1_STUB(00440940)
 COD1_STUB(004AD8F0)
 COD1_STUB(00477290)
 COD1_STUB(00477340)
 COD1_STUB(00476510)
-COD1_STUB(00506310)
-COD1_STUB(005065E0)
-COD1_STUB(00506070)
 COD1_STUB(005068B0)
+COD1_STUB(00447CA0)
+COD1_STUB(004DA330)
+COD1_STUB(004DA420)
+COD1_STUB(004771B0)
+COD1_STUB(0040F4E0)
 COD1_STUB(0051D45A)
 COD1_STUB(00427E80)
 COD1_STUB(0050A2B0)
@@ -547,6 +585,12 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
   }
   if (target == kModelCallback) {
     Stub(c, kModelCallbackPtr, 0, 3);
+    return;
+  }
+  if (target == kGlBind || target == kGlSubData || target == kGlUpdate) {
+    const int n = target == kGlBind ? 2 : target == kGlSubData ? 4 : 5;
+    Stub(c, target == kGlBind ? kGlBindPtr : target == kGlSubData ? kGlSubDataPtr : kGlUpdatePtr, 0, n);
+    c.esp += 4 * uint32_t(n);
     return;
   }
   // BoxOnPlaneSide's jump through its table of cases.
@@ -642,6 +686,10 @@ const Entry kEntries[] = {
     COD1_ENTRY(00500830, "brush model entity"), COD1_ENTRY(004FA790, "model entity"),
     COD1_ENTRY(00506980, "composite model entity"), COD1_ENTRY(004DE980, "polygons"),
     COD1_ENTRY(00500920, "world without the walk"),
+    COD1_ENTRY(004DEC10, "RE_AddRefEntityToScene"), COD1_ENTRY(004DF2D0, "level-of-detail distance"),
+    COD1_ENTRY(00480DD0, "level of detail"),   COD1_ENTRY(004DA9F0, "surface cache entry"),
+    COD1_ENTRY(00506070, "composite surface"), COD1_ENTRY(00506310, "bone boxes"),
+    COD1_ENTRY(005065E0, "bone axes"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -711,11 +759,13 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   auto fill = [&] {
     for (uint32_t va = esp - scrub; va < esp; va += 4) Wr(va, pattern);
   };
-  // The models' cache, for whatever reaches the entities' surfaces.
+  // The models' cache and its counters, for whatever reaches the
+  // entities' surfaces, and the heap of the cache entries' vertices.
   if (k.fn == 0x4CB0C0 || k.fn == 0x4CB210 || k.fn == 0x4CB270 || k.fn == 0x4DEEC0 ||
-      k.fn == 0x4CAB80 || k.fn == 0x4CAFC0 || k.fn == 0x4FA790) {
+      k.fn == 0x4CAB80 || k.fn == 0x4CAFC0 || k.fn == 0x4FA790 || k.fn == 0x4DA9F0) {
     w.push_back({kModelCache, 8 * 0x1C8});
-    w.push_back({kModelCacheHead, 8});
+    w.push_back({kModelCacheHead, 0x10});
+    w.push_back({kHeap, 0x10000});
   }
   Wr(esp, 0xDEAD0000);
   for (size_t i = 0; i < k.args.size(); i++) Wr(esp + 4 + 4 * uint32_t(i), k.args[i]);
@@ -755,9 +805,10 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   s.calls += int(lcalls.size());
   const bool eax = k.fn == 0x4D68E0 || k.fn == 0x4C8D50 || k.fn == 0x4C9070 || k.fn == 0x4D7DF0 ||
                    k.fn == 0x4D7E70 || k.fn == 0x4D7ED0 || k.fn == 0x4D7F30 || k.fn == 0x4D6BC0 ||
-                   k.fn == 0x4D80F0 || k.fn == 0x4CA240 || k.fn == 0x4CAB80;
+                   k.fn == 0x4D80F0 || k.fn == 0x4CA240 || k.fn == 0x4CAB80 || k.fn == 0x480DD0 ||
+                   k.fn == 0x4DA9F0;
   // A result on the x87 stack: its register.
-  const bool st0 = k.fn == 0x4D6880;
+  const bool st0 = k.fn == 0x4D6880 || k.fn == 0x4DF2D0;
   bool ok = cn.esp == cl.esp && cn.ebp == cl.ebp && cn.ebx == cl.ebx && cn.esi == cl.esi &&
             cn.edi == cl.edi && cn.fpu.top == cl.fpu.top && cn.fpu.empty == cl.fpu.empty &&
             cn.fpu.cw == cl.fpu.cw && (!eax || cn.eax == cl.eax) &&
@@ -1063,6 +1114,8 @@ void Graze(std::mt19937& g, const World& w, uint32_t b) {
   }
 }
 
+void EntitySlots(Arena& a, std::mt19937& g, std::vector<Window>& win, bool place, uint32_t slots = 0);
+
 void CullCases(Arena& a, std::mt19937& g, World& w, Stats& s) {
   const bool graze = g() % 4 == 0;
   auto planeBits = [&] { return uint32_t(Pick(g, {-1, 0, 1, 2, 3, 4, 6})); };
@@ -1097,6 +1150,7 @@ void CullCases(Arena& a, std::mt19937& g, World& w, Stats& s) {
     case 3: {
       const uint32_t e = NewEntity(a, g, w);
       if (graze) Graze(g, w, e + 0x9C);
+      EntitySlots(a, g, win, true);
       win[0] = a.All();
       Run({0x4D94C0, uint32_t(w.numPlanes), 0, w.planes, 0, 0, 0, {e, DlightBits(g)}}, win, g, s,
           "random");
@@ -1116,6 +1170,7 @@ void CullCases(Arena& a, std::mt19937& g, World& w, Stats& s) {
         link = l;
       }
       Wr(cell + 0x38, link);
+      EntitySlots(a, g, win, true);
       win[0] = a.All();
       Run({0x4D9650, 0, 0, 0, uint32_t(w.numPlanes), 0, DlightBits(g), {cell, w.planes}}, win, g,
           s, "random");
@@ -1549,6 +1604,7 @@ void PortalScene(Arena& a, std::mt19937& g, uint32_t special, std::vector<Window
   Wr(kNumDrawSurfs + 4, a.Alloc(0x100 * 8));
   SceneCvars(a, g, special, false);
   BackEndData(g, win);
+  EntitySlots(a, g, win, false);
   win.push_back({0x1534000, 0x3000});
   win.push_back({0xA8F800, 0x40});
 }
@@ -1574,7 +1630,9 @@ void PortalGlobals(Arena& a, std::mt19937& g, uint32_t special, uint32_t n) {
   Wr(kEntities, ents);
   for (uint32_t i = 0; i < n; i++) {
     const uint32_t e = ents + 0x2B8 * i;
-    Wr(e, uint32_t(Pick(g, {0, 1, 2, 3, 0xB, 0xB})));
+    // Model entities (types 1 and 2) only for finite views: their level of
+    // detail takes the CRT's square root of the distance from the view.
+    Wr(e, uint32_t(special ? Pick(g, {0, 3, 0xB, 0xB}) : Pick(g, {0, 1, 2, 3, 0xB, 0xB})));
     for (uint32_t k = 0; k < 0x24; k += 4) WrF(e + 0x1C + k, Value(g, -1, 1, 0));
     WrF(e + 0x40, g() % 2 ? 0.0f : 1.0f);
     for (uint32_t k = 0; k < 12; k += 4) WrF(e + 0x44 + k, Value(g, -4096, 4096, special));
@@ -1670,7 +1728,7 @@ void PortalCase(Arena& a, std::mt19937& g, Stats& s, uint32_t special) {
     // origin give a world distance that nearly cancels.
     ent = g() % n;
     const uint32_t e = ents + 0x2B8 * ent;
-    Wr(e, g() % 3);
+    Wr(e, special ? 0 : g() % 3);
     Cancel3(g, cn, cp);
     for (uint32_t k = 0; k < 3; k++) {
       WrF(e + 0x1C + 4 * k, cn[k]);
@@ -1746,6 +1804,32 @@ void BackEndData(std::mt19937& g, std::vector<Window>& win) {
   Wr(kBackEndData, counter - 0x28D700);
   win.push_back({counter, 4});
   win.push_back({cmd, 0x3F8});
+}
+
+// RE_AddRefEntityToScene's state: the renderer mostly registered
+// (0x1535A20), the warning icon's cvar 0x14E43EC, the back end's entity
+// count 0x154D70C (small, about the limits 0x731 and 0x7FE, now and then
+// negative) and the view count of the last warning (0x11CE848); with
+// place the back end's data put so that the next 32 entities land in a
+// buffer of the arena (slots, or a new one), else (after BackEndData) a
+// window over them.
+void EntitySlots(Arena& a, std::mt19937& g, std::vector<Window>& win, bool place, uint32_t slots) {
+  Wr(0x1535A20, g() % 16 ? (g() % 4 ? 1 : 0x100) : 0);
+  const uint32_t cv = a.Alloc(0x24);
+  Wr(0x14E43EC, cv);
+  Wr(cv + 0x20, g() % 2 ? 0 : uint32_t(Pick(g, {1, -1})));
+  Wr(0x154D70C, g() % 4 ? g() % 8 : uint32_t(Pick(g, {0x72F, 0x730, 0x731, 0x7FC, 0x7FD, 0x7FE, 0x7FF, -1, INT32_MIN})));
+  Wr(0x11CE848, g() % 2 ? Rd(0x1535A28) : g());
+  const uint32_t n = Rd(0x154D70C);
+  if (place) {
+    if (!slots) slots = a.Alloc(0x2B8 * 32);
+    Wr(0x1549698, slots - 0x81700 - 0x2B8 * n);
+  } else {
+    win.push_back({Rd(0x1549698) + 0x81700 + 0x2B8 * n, 0x2B8 * 32});
+  }
+  win.push_back({0x154D70C, 4});
+  win.push_back({0x11CE848, 4});
+  win.push_back({0x153646C, 4});
 }
 
 void SurfListCase(Arena& a, std::mt19937& g, Stats& s, uint32_t special) {
@@ -1991,7 +2075,7 @@ void StaticModel(Arena& a, std::mt19937& g, const World& w, uint32_t m) {
   for (uint32_t i = 0; i < 3; i++)
     WrF(m + 0x44 + 4 * i, kind == 0 ? std::round(Uniform(g, -w.size, w.size))
                           : kind == 3 || g() % 4 == 0 ? 0.0f : Value(g, -w.size, w.size, w.special));
-  const uint32_t p1 = a.Alloc(0x1C), p2 = a.Alloc(8), model = a.Alloc(0x64);
+  const uint32_t p1 = a.Alloc(0x1C), p2 = a.Alloc(8), model = a.Alloc(0x68);
   Wr(m + 0x90, p1);
   Wr(p1 + 0x18, p2);
   Wr(p2 + 4, model);
@@ -2578,6 +2662,7 @@ void WalkCases(Arena& a, std::mt19937& g, const World& w, Stats& s) {
       const uint32_t numCells = 1 + g() % 3, cells = a.Alloc(numCells * 0x40);
       WalkCells(a, g, w, cells, numCells, 0, 0);
       CullLists(a, g, 0x40, 0x100);
+      EntitySlots(a, g, win, true);
       win[0] = a.All();
       win.push_back({kHeap, 0x10000});
       Run({0x4D96E0, 0, 0, 0, 0, 0, 0,
@@ -2594,6 +2679,7 @@ void WalkCases(Arena& a, std::mt19937& g, const World& w, Stats& s) {
       Wr(kWorld, world);
       for (uint32_t k = 0; k < 3; k++) WrF(0x1536330 + 4 * k, Value(g, -w.size, w.size, 0));
       Coronas(a, g, f, world);
+      EntitySlots(a, g, win, true);
       win[0] = a.All();
       Run({0x4D9A10, 0, 0, 0, 0, 0, 0, {w.planes, uint32_t(w.numPlanes)}}, win, g, s, "random");
       break;
@@ -2647,7 +2733,8 @@ std::vector<Window> WorldWalkScene(Arena& a, std::mt19937& g, const World& base)
     Wr(x + 0x4C, b);
     Wr(kXModels + 4 * i, x);
   }
-  const uint32_t nm = g() % 5, models = a.Alloc(0x2B8 * (nm + 1));
+  // Room for the entities the walk adds after them (zeros, else).
+  const uint32_t nm = g() % 5, models = a.Alloc(0x2B8 * (nm + 33));
   for (uint32_t i = 0; i < nm; i++) StaticModel(a, g, w, models + 0x2B8 * i);
   Wr(kNumStaticModels, nm);
   Wr(kStaticModels, models);
@@ -2676,7 +2763,10 @@ std::vector<Window> WorldWalkScene(Arena& a, std::mt19937& g, const World& base)
   Wr(world + 0x144, nw);
   Wr(world + 0x148, wm);
   EntityModels(a, g, models, nm, false, false);
-  return {a.All(), {0x11BEA00, 0x224}, {0x1535900, 0xB80}, {kNumDrawSurfs, 8}, {0x564550, 4}, {kHeap, 0x10000}};
+  std::vector<Window> win = {{0x11BEA00, 0x224}, {0x1535900, 0xB80}, {kNumDrawSurfs, 8}, {0x564550, 4}, {kHeap, 0x10000}};
+  EntitySlots(a, g, win, true, models + 0x2B8 * nm);
+  win.push_back(a.All());
+  return win;
 }
 
 void WorldWalkCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
@@ -2700,27 +2790,89 @@ void SceneShaders(Arena& a, std::mt19937& g) {
 
 // ---- the entities' surfaces -----------------------------------------------------
 
+// A model's surface s's vertices for its cache entry (0x4DA9F0): counts
+// (+0x12) mostly small, now and then about 32 and 0x200; texture
+// coordinates (+0x14), unit normals (+0x18) and positions (+0x1C).
+void ModelSurface(Arena& a, std::mt19937& g, uint32_t s) {
+  const uint32_t n = g() % 8 ? g() % 9 : uint32_t(Pick(g, {0x1F, 0x20, 0x21, 0x40, 0x41, 0x1FF, 0x200, 0x201}));
+  g_mem.write<uint16_t>(s + 0x12, uint16_t(n));
+  const uint32_t st = a.Alloc(8 * n + 4), nv = a.Alloc(12 * n + 4), xyz = a.Alloc(12 * n + 4);
+  for (uint32_t i = 0; i < 8 * n; i += 4) Wr(st + i, g());
+  for (uint32_t i = 0; i < n; i++) {
+    float v[3];
+    Normal(g, v);
+    WrVec(nv + 12 * i, v);
+  }
+  for (uint32_t i = 0; i < 12 * n; i += 4) WrF(xyz + i, g() % 64 ? Uniform(g, -64, 64) : Value(g, -64, 64, 1024));
+  Wr(s + 0x14, st);
+  Wr(s + 0x18, nv);
+  Wr(s + 0x1C, xyz);
+}
+
 // What the entities' surfaces read, for n entities at ents (any types):
 // the models 0-7 (0x15364F8; those of a walk keep their first 0x50 bytes
 // and bounds): a brush model (+0x4C: bounds, surface references +0x18,
 // count +0x1C) and shader handles by level (+0x50: levels -1 to 2, four
 // 16-bit handles each, now and then out of range). Per entity: a model
-// handle (+8) below 8; a composite model (+0x90, 0x40 bytes: submodels +0x18,
-// count +0x16, 16-bit model handles +0x38, now and then none or negative;
-// a walk's first submodel kept): each submodel's +4 the default model now
-// and then, else by level + 1 (20 bytes each) a list of four surfaces
-// (+4, +8); a model (+0x98: by level 0-2 at +0xC a count and 0x30-byte
-// surfaces: fog +4, shader +8, now and then a second shader +0xC, a 16-bit
-// count +0x10); a cache (+0x2B0, slots from +0x248: none or a byte of one
-// of the cache's first eight entries); the callback +0x94 and +0xA0 now
-// and then. The cache's entries and head linked among themselves; the
-// cvars of the entity types; when asked, dlights (count 0x1536474,
-// 0x153647C) and the shaders of the handles (as SceneShaders'); 0x1536498
-// mostly in range.
+// handle (+8) below 8; a finite origin (+0x44) and a level-of-detail scale
+// (+0x40); a composite model (+0x90, 0x60 bytes: submodels +0x18, count
+// +0x16, 16-bit model handles +0x38, now and then none or negative; a
+// walk's first submodel kept; bones +0x17, their matrices +4 from the
+// +0x50th): each submodel's +4 the default model now and then, else an
+// XModel with levels of detail (as below) and by level + 1 (20 bytes each)
+// a list of four surfaces (+4, +8: 0x34 bytes, +6 now and then 0xFFFF,
+// fogs +0x28, +0x2C, +0x30 now and then); a model (+0x98: +8 a model whose
+// XModel (+4) has up to three levels of detail (distances from +4, 0x14
+// apart, now and then 0, equal or NaN; 16-bit count +0x64, now and then
+// negative); by level 0-2 at +0xC a count and 0x30-byte surfaces: fog +4,
+// shader +8, now and then a second shader +0xC, 16-bit triangle and
+// vertex counts +0x10 and +0x12 (now and then about the limits of 32 and
+// 0x200), texture coordinates +0x14, normals +0x18, positions +0x1C); a
+// cache (+0x2B0, slots from +0x248: none or a byte of one of the cache's
+// first eight entries); the callback +0x94 and +0xA0 now and then. The
+// shaders' stages (+0x154: rgbGen +0x664, alphaGen +0x67C, colour +0x680)
+// and +0x58 now and then 5.0; the cache's entries and head linked among
+// themselves; the cvars of the entity types and the cache's (0x1534680),
+// its vertex buffer and mode (0x1549558); a finite view origin and the
+// level-of-detail globals (0x1536170, 0x1536174, 0xA8F800-0xA8F848); the
+// bones' bounds; when asked, dlights (count 0x1536474, 0x153647C) and the
+// shaders of the handles (as SceneShaders'); 0x1536498 mostly in range,
+// the entity surfaces (0x153649C) from it in a buffer.
 void EntityModels(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dlights, bool handles) {
-  const uint32_t sh = a.Alloc(4 * 0x60);
-  for (uint32_t i = 0; i < 4 * 0x60; i += 4) Wr(sh + i, g());
-  auto shader = [&] { return sh + 0x60 * (g() % 4); };
+  const uint32_t sh = a.Alloc(4 * 0x160), stages = a.Alloc(4 * 0x690);
+  for (uint32_t i = 0; i < 4 * 0x160; i += 4) Wr(sh + i, g());
+  for (uint32_t i = 0; i < 4 * 0x690; i += 4) Wr(stages + i, g());
+  for (uint32_t i = 0; i < 4; i++) {
+    Wr(sh + 0x160 * i + 0x154, stages + 0x690 * (g() % 4));
+    if (g() % 4 == 0) WrF(sh + 0x160 * i + 0x58, 5.0f);
+    if (g() % 2) Wr(sh + 0x160 * i + 0x50, (g() & 0xC00803FFu) | (g() % 2 ? 0x400 : 0));
+    Wr(stages + 0x690 * i + 0x664, uint32_t(Pick(g, {1, 2, 10, 10, 11, 12, 3, 0, 13})));
+    Wr(stages + 0x690 * i + 0x67C, uint32_t(Pick(g, {0, 0, 9, 9, 1})));
+  }
+  auto shader = [&] { return sh + 0x160 * (g() % 4); };
+  auto finite = [&](uint32_t va, float lo, float hi) {
+    const float f = g_mem.read<float>(va);
+    if (!std::isfinite(f) || std::fabs(f) > 0x1p40f) WrF(va, Uniform(g, lo, hi));
+  };
+  // Levels of detail: up to three distances, increasing, now and then 0,
+  // the one before or a NaN.
+  auto lods = [&](uint32_t x, bool count) {
+    float d = Uniform(g, -64, 512);
+    for (uint32_t l = 0; l < 3; l++) {
+      d += Uniform(g, 0, 1024);
+      const uint32_t r = g() % 16;
+      WrF(x + 4 + 0x14 * l, r == 0 ? 0.0f : r == 1 && l ? g_mem.read<float>(x + 4 + 0x14 * (l - 1)) : r == 2 ? NAN : d);
+    }
+    if (count) g_mem.write<uint16_t>(x + 0x64, uint16_t(g() % 8 ? g() % 4 : Pick(g, {-1, -0x8000})));
+  };
+  WrF(0xA8F800, g() % 4 ? 0.0f : g() % 2 ? Uniform(g, 0, 2048) : NAN);
+  g_mem.write<uint8_t>(0xA8F804, g() % 4 == 0);
+  lods(0xA8F804, false);
+  finite(0x1536030, -4096, 4096);
+  finite(0x1536034, -4096, 4096);
+  finite(0x1536038, -4096, 4096);
+  WrF(0x1536170, g() % 2 ? 0.0f : Uniform(g, -256, 256));
+  WrF(0x1536174, g() % 2 ? 1.0f : Uniform(g, 0, 4));
   auto arena = [&](uint32_t va) { return va >= kArena && va < a.top; };
   auto bounds = [&](uint32_t va) {
     for (uint32_t k = 0; k < 0xC; k += 4) {
@@ -2764,20 +2916,34 @@ void EntityModels(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dli
     if (Rd(e + 8) >= 8) Wr(e + 8, g() % 8);
     Wr(e + 0x94, g() % 4 ? 0 : g() | 1);
     g_mem.write<uint8_t>(e + 0xA0, g() % 4 == 0);
-    // The composite model.
-    const uint32_t old = Rd(e + 0x90), p = a.Alloc(0x40), ns = g() % 8 ? 1 + g() % 4 : 0;
+    for (uint32_t k = 0; k < 3; k++) finite(e + 0x44 + 4 * k, -4096, 4096);
+    if (g() % 2) WrF(e + 0x40, g() % 4 ? Uniform(g, 0.25f, 4) : g() % 3 ? float(Pick(g, {0, 1})) : NAN);
+    // The composite model and its bones.
+    const uint32_t old = Rd(e + 0x90), p = a.Alloc(0x60), ns = g() % 8 ? 1 + g() % 4 : 0;
     const bool walk = arena(old) && arena(Rd(old + 0x18)) && arena(Rd(Rd(old + 0x18) + 4));
     if (walk) std::memcpy(g_mem.ptr<uint8_t>(p), g_mem.ptr<uint8_t>(old), 0x1C);
     g_mem.write<uint8_t>(p + 0x16, uint8_t(ns));
+    const uint32_t nb = g() % 4 ? g() % 13 : g() % 40, base = g() % 3, mats = a.Alloc(0x40 * (base + nb) + 0x70);
+    for (uint32_t k = 0; k < 0x40 * (base + nb) + 0x70; k += 4) WrF(mats + k, g() % 64 ? Uniform(g, -2, 2) : Value(g, -2, 2, 1024));
+    g_mem.write<uint8_t>(p + 0x17, uint8_t(nb));
+    g_mem.write<uint8_t>(p + 0x50, uint8_t(base));
+    Wr(p + 4, mats);
     for (uint32_t j = 0; j < ns; j++) {
       const bool kept = j == 0 && walk;
-      const uint32_t sub = kept ? Rd(p + 0x18) : a.Alloc(8), x = kept ? Rd(sub + 4) : a.Alloc(0x64);
+      const uint32_t sub = kept ? Rd(p + 0x18) : a.Alloc(8), x = kept ? Rd(sub + 4) : a.Alloc(0x68);
       Wr(sub + 4, !kept && g() % 16 == 0 ? 0xA8F6BC : x);
+      lods(x, true);
       for (uint32_t l = 0; l < 4; l++) {
         const uint32_t p20 = a.Alloc(8), p4 = a.Alloc(0xC), list = a.Alloc(16);
         for (uint32_t k = 0; k < 4; k++) {
-          const uint32_t surf = a.Alloc(8);
-          for (uint32_t q = 0; q < 8; q += 4) Wr(surf + q, g());
+          const uint32_t surf = a.Alloc(0x34);
+          for (uint32_t q = 0; q < 0x34; q += 4) Wr(surf + q, g());
+          if (g() % 4 == 0) g_mem.write<uint16_t>(surf + 6, 0xFFFF);
+          for (uint32_t q = 0x28; q < 0x34; q += 4) {
+            const uint32_t fog = a.Alloc(4);
+            Wr(fog, g() % 4 ? g() % 8 : g());
+            Wr(surf + q, g() % 3 ? 0 : fog);
+          }
           Wr(list + 4 * k, surf);
         }
         Wr(p4 + 8, list);
@@ -2789,8 +2955,10 @@ void EntityModels(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dli
     }
     Wr(e + 0x90, p);
     // The model and its cache.
-    const uint32_t m = a.Alloc(0x1C);
-    Wr(m + 8, g());
+    const uint32_t m = a.Alloc(0x1C), lm = a.Alloc(8), x = a.Alloc(0x68);
+    Wr(m + 8, lm);
+    Wr(lm + 4, x);
+    lods(x, true);
     for (uint32_t l = 0; l < 4; l++) {
       const uint32_t k = g() % 4, list = a.Alloc(4 + 0x30 * k);
       Wr(list, k);
@@ -2800,11 +2968,13 @@ void EntityModels(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dli
         Wr(s + 4, g() % 4);
         Wr(s + 8, shader());
         Wr(s + 0xC, g() % 3 ? shader() : 0);
+        ModelSurface(a, g, s);
       }
       Wr(m + 0xC + 4 * l, list);
     }
     Wr(e + 0x98, m);
     const uint32_t cache = a.Alloc(0x248 + 4 * 16);
+    for (uint32_t q = 0x1C; q < 0x50; q += 4) WrF(cache + q, q < 0x40 ? Uniform(g, -2, 2) : Uniform(g, -4096, 4096));
     for (uint32_t q = 0; q < 16; q++)
       Wr(cache + 0x248 + 4 * q, g() % 2 ? 0 : kModelCache + g() % 8 * 0x1C8 + g() % 0x1C8);
     Wr(e + 0x2B0, cache);
@@ -2827,7 +2997,7 @@ void EntityModels(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dli
   cvar(0x14E43E8, g() % 2);
   cvar(0x153446C, g() % 8 ? 0 : uint32_t(Pick(g, {1, 2, -1})));
   cvar(0x15343B0, g() % 8 ? 0 : uint32_t(Pick(g, {1, -1})));
-  cvar(0x15343D8, g() % 3);
+  cvar(0x15343D8, g() % 4 ? g() % 3 : uint32_t(Pick(g, {3, -1, -2})));
   const uint32_t str = a.Alloc(4);
   g_mem.write<uint8_t>(str, g() % 8 ? 0 : 'x');
   cvar(0x15346D4, 0);
@@ -2843,9 +3013,20 @@ void EntityModels(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dli
     for (uint32_t i = 0; i < 4; i++) Wr(0x153C52C + 4 * i, shader());
     Wr(0x1535AE8, shader());
   }
+  cvar(0x1534680, g() % 8 != 0);
+  Wr(0x1549558, uint32_t(Pick(g, {12, 13, 14, 15, 12, 15, 11, 16})));
+  Wr(0x154955C, a.Alloc(24 * (64 + 0x201)));
+  Wr(0x1549560, g());
+  Wr(0x1536294, g());
+  Wr(0x1530280, g() % 2 ? 0 : g());
+  Wr(0x1535AEC, shader());
+  g_bone_bounds = a.Alloc(8 * 24);
+  for (uint32_t k = 0; k < 8 * 24; k += 4) WrF(g_bone_bounds + k, g() % 64 ? Uniform(g, -16, 16) : Value(g, -16, 16, 1024));
   // Mostly in range, now and then just below the limit of 0x2000 or far
   // below 0.
   Wr(0x1536498, g() % 4 ? g() % 0x2001 : uint32_t(Pick(g, {0x1FFA, 0x1FFD, int32_t(g() | 0x80000000u)})));
+  const uint32_t count = Rd(0x1536498), es = a.Alloc(16 * (int32_t(count) < 0 ? 0x30010 : 0x400));
+  Wr(0x153649C, es - 16 * count);
 }
 
 // A viewport (now and then empty) and fovs (with a world finite and in
@@ -2863,9 +3044,116 @@ void Viewport(std::mt19937& g, uint32_t xywh, uint32_t fovs, bool world) {
   }
 }
 
+// An entity's (e, from EntityModels) model surfaces' entries alone, r 4 to
+// 10: its level-of-detail distance; the level of detail of its model's or
+// a submodel's XModel at a distance (now and then one of the levels' or
+// the table's exactly, 0, -0 or a NaN); a surface's cache entry (a
+// surface of its model, a finite inverse); a composite model's surface
+// (one of its submodels', the shader of one of the model's); the debug
+// boxes and axes of its bones (random bits); RE_AddRefEntityToScene of it.
+void ModelSurfaceCase(Arena& a, std::mt19937& g, Stats& s, uint32_t e, uint32_t r, std::vector<Window> win) {
+  const uint32_t p = Rd(e + 0x90), ns = g_mem.read<uint8_t>(p + 0x16), m = Rd(e + 0x98);
+  // A surface of the model's (or a new one).
+  uint32_t surf = 0;
+  for (uint32_t t = 0; t < 8 && !surf; t++) {
+    const uint32_t list = Rd(m + 0xC + 4 * (g() % 4));
+    if (Rd(list)) surf = list + 4 + 0x30 * (g() % Rd(list));
+  }
+  if (!surf) {
+    surf = a.Alloc(0x30);
+    for (uint32_t q = 0; q < 0x30; q += 4) Wr(surf + q, g());
+    ModelSurface(a, g, surf);
+    Wr(surf + 8, Rd(0x1535AEC));
+    Wr(surf + 0xC, Rd(0x1535AEC));
+  }
+  if (!Rd(surf + 0xC)) Wr(surf + 0xC, Rd(surf + 8));
+  const uint32_t sub = ns ? Rd(p + 0x18 + 4 * (g() % ns)) : 0;
+  const uint32_t rnd[6] = {uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g())};
+  switch (r) {
+    case 4:
+      win.push_back(a.All());
+      Run({0x4DF2D0, rnd[0], rnd[1], rnd[2], rnd[3], e, rnd[5], {}}, win, g, s, "random");
+      break;
+    case 5: {
+      const uint32_t model = sub && g() % 2 ? sub : Rd(m + 8);
+      const uint32_t x = Rd(model + 4), l = g() % 3;
+      const uint32_t lod = g_mem.read<uint8_t>(0xA8F804) ? 0xA8F808 + 0x14 * l : x + 4 + 0x14 * l;
+      const uint32_t k = g() % 8;
+      const uint32_t dist = k < 3 ? Rd(lod) : k == 3 ? uint32_t(Pick(g, {0, int32_t(0x80000000), 0x7FC00000, -0x400000}))
+                                                     : std::bit_cast<uint32_t>(Uniform(g, -128, 4096));
+      win.push_back(a.All());
+      Run({0x480DD0, rnd[0], model, rnd[2], rnd[3], rnd[4], rnd[5], {dist}}, win, g, s, "random");
+      break;
+    }
+    case 6: {
+      const uint32_t inv = a.Alloc(36), ent = g() % 4 ? Rd(e + 0x2B0) : e;
+      for (uint32_t k = 0; k < 36; k += 4) WrF(inv + k, g() % 8 ? Uniform(g, -2, 2) : float(Pick(g, {0, 1, -1})));
+      // Sums that nearly cancel (where their order shows): the first
+      // vertex's position against the entity's first axis column, the
+      // first two normals against the inverse's first and last rows.
+      if (g_mem.read<uint16_t>(surf + 0x12) >= 2 && g() % 2) {
+        float cn[3], cp[3];
+        Cancel3(g, cn, cp);
+        for (uint32_t k = 0; k < 3; k++) WrF(ent + 0x1C + 0xC * k, cn[k]);
+        WrVec(Rd(surf + 0x1C), cp);
+        for (uint32_t row : {0u, 0x18u}) {
+          Cancel3(g, cn, cp);
+          WrVec(inv + row, cn);
+          WrVec(Rd(surf + 0x18) + (row ? 12 : 0), cp);
+        }
+      }
+      win.push_back(a.All());
+      Run({0x4DA9F0, ent, surf, rnd[2], rnd[3], rnd[4], rnd[5], {uint32_t(g() % 64), e, inv}}, win, g, s,
+          "random");
+      break;
+    }
+    case 7: {
+      const uint32_t x = sub ? Rd(sub + 4) : 0;
+      if (!x || x == 0xA8F6BC) return;
+      const uint32_t list = Rd(Rd(Rd(x + 20 * (g() % 4)) + 4) + 8), sh = g() % 2 ? Rd(surf + 8) : Rd(surf + 0xC);
+      win.push_back(a.All());
+      Run({0x506070, rnd[0], rnd[1], Rd(list + 4 * (g() % 4)), rnd[3], rnd[4], sh, {p, uint32_t(g() % 4)}}, win, g, s, "random");
+      break;
+    }
+    case 8:
+    case 9: {
+      // Sums that nearly cancel: the world's first coordinate (the bones'
+      // matrices 0 with a translation against the entity's first axis
+      // column), or the bones' first (all bounds' corners one point
+      // against each matrix's first column).
+      const uint32_t mats = Rd(p + 4), nb = g_mem.read<uint8_t>(p + 0x17), base = g_mem.read<uint8_t>(p + 0x50);
+      float cn[3], cp[3];
+      Cancel3(g, cn, cp);
+      if (const uint32_t mode = g() % 3; mode == 1) {
+        for (uint32_t k = 0; k < 3; k++) WrF(e + 0x1C + 0xC * k, cn[k]);
+        for (uint32_t i = 0; i < nb; i++) {
+          const uint32_t m = mats + 0x40 * (base + i) + 0x40;
+          for (uint32_t k = 0; k < 0x30; k += 4) WrF(m - 0x10 + k, 0);
+          WrVec(m + 0x20, cp);
+        }
+      } else if (mode == 2) {
+        for (uint32_t k = 0; k < 8 * 24; k += 12) WrVec(g_bone_bounds + k, cp);
+        for (uint32_t i = 0; i < nb; i++)
+          for (uint32_t k = 0; k < 3; k++) WrF(mats + 0x40 * (base + i) + 0x30 + 0x10 * k, cn[k]);
+      }
+      const uint32_t bits = a.Alloc(16);
+      for (uint32_t k = 0; k < 16; k += 4) Wr(bits + k, g() % 4 ? g() : 0xFFFFFFFF);
+      win.push_back(a.All());
+      Run({r == 8 ? 0x506310u : 0x5065E0u, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {e, bits}}, win, g, s, "random");
+      break;
+    }
+    default:
+      EntitySlots(a, g, win, true);
+      win.push_back(a.All());
+      Run({0x4DEC10, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {e, uint32_t(g())}}, win, g, s, "random");
+      break;
+  }
+}
+
 // Entities of every type (0x2B8 bytes: type, flags +4, shader handle
 // +0x68, models) for R_AddEntitySurfaces, now and then inside a portal's
-// view; or one entity of type 0, 1 or 2 for its surfaces alone.
+// view; or one entity of type 0, 1 or 2 for its surfaces alone, or its
+// model surfaces' entries.
 void EntityCase(Arena& a, std::mt19937& g, Stats& s) {
   a.Reset();
   for (uint32_t va = 0x1536000; va < 0x1536500; va += 4) Wr(va, g());
@@ -2889,18 +3177,22 @@ void EntityCase(Arena& a, std::mt19937& g, Stats& s) {
   EntityModels(a, g, ents, m, true, false);
   const uint32_t surfs = a.Alloc(0x100 * 8);
   Wr(kNumDrawSurfs, g() % 8 ? g() % 4 : uint32_t(Pick(g, {0xFFFF, 0x10000, -1})));
+  // With 0x1536498 below 0, now and then room for few draw surfaces (the
+  // composite models' pairs fit then, as many as 0x10003).
+  if (int32_t(Rd(0x1536498)) < 0 && g() % 2) Wr(kNumDrawSurfs, 0xFFF0 + g() % 0x20);
   Wr(kNumDrawSurfs + 4, surfs + 0x400 - Rd(kNumDrawSurfs) * 8);
   Wr(0x1549548, g());
   Wr(0x1549554, g());
   Wr(0x1535A24, g());
-  const std::vector<Window> win = {{0x1536000, 0x500}, {0x1535D60, 8}, a.All()};
-  const uint32_t r = g() % 4;
+  std::vector<Window> win = {{0x1536000, 0x500}, {0x1535D60, 8}, a.All()};
+  const uint32_t r = g() % 11;
   if (r == 0 || !m) {
     Run({0x4CB0C0, uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), {}}, win, g, s, "random");
     return;
   }
-  // One entity, as R_AddEntitySurfaces hands it over.
   const uint32_t e = ents + 0x2B8 * (g() % m);
+  if (r >= 4) return ModelSurfaceCase(a, g, s, e, r, win);
+  // One entity, as R_AddEntitySurfaces hands it over.
   Wr(e, r - 1);
   Wr(0x1535D68, e);
   Wr(e + 0x9C, 0);
@@ -2933,6 +3225,7 @@ void SceneCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
   SceneShaders(a, g);
   Wr(0x1536134, g() % 8 == 0);
   BackEndData(g, win);
+  EntitySlots(a, g, win, false);
   Wr(kNumDrawSurfs, g() % 4);
   Wr(kNumDrawSurfs + 4, a.Alloc(0x1000 * 8));
   win.push_back({0x1534000, 0x3000});
@@ -2964,7 +3257,7 @@ void SceneCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
       for (uint32_t k = 0; k < 8; k++) Wr(b + 0x1FD700 + 16 * k + 4, g() % 2 ? g() % 4 : g());
       const uint32_t ents = b + 0x81700 + first * 0x2B8;
       std::memcpy(g_mem.ptr<uint8_t>(ents), g_mem.ptr<uint8_t>(Rd(kStaticModels)), n * 0x2B8);
-      win.push_back({ents, n * 0x2B8 + 4});
+      win.push_back({ents, (n + 32) * 0x2B8});
       Wr(0x154D72C, first);
       Wr(0x154D70C, first + n);
       const uint32_t dfirst = g() % 4, dl = b + 0x80000 + dfirst * 0x88;
@@ -3090,6 +3383,9 @@ int main(int argc, char** argv) {
   Wr(kMillisecondsPtr, kMilliseconds);
   Wr(kSubModelPtr, kSubModel);
   Wr(kModelCallbackPtr, kModelCallback);
+  Wr(kGlBindPtr, kGlBind);
+  Wr(kGlSubDataPtr, kGlSubData);
+  Wr(kGlUpdatePtr, kGlUpdate);
   // The reference: the x87 model's exact arithmetic throughout.
   recomp::x87::run::g_doubles = false;
 
@@ -3116,7 +3412,7 @@ int main(int argc, char** argv) {
   for (int i = 0; i < 30000; i++) SurfListCase(a, g, s, i < 15000 ? 0 : 48);
   for (int i = 0; i < 40000; i++) WorldViewCase(a, g, s, i < 20000 ? 0 : i < 30000 ? 4 : 48);
   for (int i = 0; i < 40000; i++) PortalCase(a, g, s, i < 20000 ? 0 : 48);
-  for (int i = 0; i < 20000; i++) EntityCase(a, g, s);
+  for (int i = 0; i < 40000; i++) EntityCase(a, g, s);
   const int random = s.cases;
   for (int i = 2; i < argc; i++)
     if (!RunCaptures(argv[i], g, s)) return 1;

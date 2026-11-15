@@ -10,7 +10,9 @@
 // portal (a portal surface's orientations and its view); the scene
 // (RE_RenderScene, a view's render and its surfaces, R_AddEntitySurfaces;
 // the brush, model and composite model entities' surfaces, the polygons'
-// and the world's without the cell walk);
+// and the world's without the cell walk; RE_AddRefEntityToScene, the
+// model surfaces' levels of detail, cache entries and entity surfaces and
+// the composite models' debug bone draws);
 // the back end's sky clipping (ClipSkyPolygon, AddSkyPolygon), texture
 // coordinates (ComputeTexCoords); and the draw surface sort (qsortFast),
 // the 4x4 matrix product and the memcpy 0x42B0A0 under both. Replacements of lifted
@@ -48,7 +50,7 @@
 namespace recomp::gen {
 
 void f_004AD7E0(Ctx& c);  // draws a debug box (ECX mins, EDX maxs, EAX colour)
-void f_004DEC10(Ctx& c);  // adds a culled-in entity (ent, ent)
+void f_004DEC10(Ctx& c);  // RE_AddRefEntityToScene (refentity, its +0x2B0), below
 void f_004CAF00(Ctx& c);  // R_AddDrawSurf(surface, dlight, 0, 0; EAX, EDX shader)
 void f_0042B0A0_lifted(Ctx& c);  // the memcpy, for overlapping copies
 void f_004CAB80(Ctx& c);  // a portal or mirror surface's view (EBX draw surface, entity; EAX: drawn)
@@ -69,23 +71,23 @@ void f_0052E6D0(Ctx& c);  // the CRT's trigonometric function of ST0 called by t
 void f_004CB270(Ctx& c);  // renders a view (view parms)
 void f_004C97D0(Ctx& c);  // the viewer's orientation (src/render_backend.cpp)
 void f_004AA490(Ctx& c);  // the dlights on a brush model (model)
-void f_004DF2D0(Ctx& c);  // an entity's level-of-detail distance (ESI entity; ST0)
-void f_00480DD0(Ctx& c);  // a model's level of detail at a distance (ECX model, distance; EAX)
 void f_00427CB0(Ctx& c);  // a 3x3 matrix's inverse (EAX in, ECX out)
 void f_004ABEF0(Ctx& c);  // an entity's lighting, once (EAX entity, ECX refdef)
 void f_004ABDC0(Ctx& c);  // an entity's lighting, once, the other way (EDI entity, refdef)
-void f_004DA9F0(Ctx& c);  // a surface's cache entry (EAX the entity's cache, ECX surface; index, entity, inverse; EAX)
 void f_00440940(Ctx& c);  // va(format, ...)
 void f_004AD8F0(Ctx& c);  // draws debug text (EAX origin, EDI colour, text)
 void f_00477290(Ctx& c);  // a model's surface count (EDX model, EDI levels; EAX)
 void f_00477340(Ctx& c);  // a model's surfaces (model, list, levels; ESI out)
 void f_00476510(Ctx& c);  // (model, the surfaces' out)
-void f_00506310(Ctx& c);  // (entity, out)
-void f_005065E0(Ctx& c);  // (entity, out)
-void f_00506070(Ctx& c);  // adds a model's surface (model, index; EDI shader, EDX surface)
 void f_005068B0(Ctx& c);  // a debug draw of the cvar 0x15346D4 (EBX entity, EDI out)
 void f_004AC890(Ctx& c);  // a debug draw of the cvar 0x15344D0
 void f_0051D45A(Ctx& c);  // the CRT's fprintf
+void f_0052E610(Ctx& c);  // the CRT's square root (ST0)
+void f_00447CA0(Ctx& c);  // a warning icon (stack its image's name; EAX, ECX)
+void f_004DA330(Ctx& c);  // a model cache entry of a size class (EBX the cache, class; EAX)
+void f_004DA420(Ctx& c);  // a vertex's lighting (EBX the refentity; position, normal, colour out)
+void f_004771B0(Ctx& c);  // a model's bones' bounds (EDX out, model)
+void f_0040F4E0(Ctx& c);  // draws a debug line (from, 0, 0, 0; ESI colour, EDI to)
 // ComputeTexCoords' texture coordinate generators and modifiers.
 void f_0050A2B0(Ctx& c);
 void f_0050ABF0(Ctx& c);
@@ -2862,6 +2864,61 @@ void f_004DE980(Ctx& c) {
   c.esp = e + 4;
 }
 
+// RE_AddRefEntityToScene (its "bad reType" error; stack: the refentity and
+// the pointer for its +0x2B0): none before the renderer is registered
+// (0x1535A20); the warning icon 0x447CA0 with the cvar 0x14E43EC from
+// 0x731 entities (0x154D70C) on; from 0x7FE none, ri.Printf's "too many
+// visible models" once per view count (0x11CE848 the one it was printed
+// at). Else, after ri.Error for a type outside 0-15, the refentity's 0x9C
+// bytes copied to the next of the back end's entities (+0x81700, 0x2B8
+// bytes each), its +0xA1, +0x2B4 and +0xCC cleared and +0x2B0 the second
+// argument; that count and the scene's (0x153646C) incremented.
+void f_004DEC10(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi;
+  c.esp = e + 4;
+  if (!U32(0x1535A20)) return;
+  if (CvarInt(0x14E43EC) && I32(0x154D70C) >= 0x731) {
+    c.esp = e;
+    Push(c, 0x541CB8);
+    c.eax = 0xBB8;
+    c.ecx = 9;
+    Call(c, f_00447CA0, 0x4DEC49);
+    c.esp = e + 4;
+  }
+  if (I32(0x154D70C) >= 0x7FE) {
+    if (const uint32_t vc = U32(kViewCount); U32(0x11CE848) != vc) {
+      c.esp = e;
+      Push(c, 0x7FD);
+      Push(c, 0x541C90);
+      Push(c, 2);
+      Put(0x11CE848, vc);
+      CallPtr(c, U32(kPrintfPtr), 0x4DEC80, 0x4DEC7A);
+      c.esp = e + 4;
+    }
+    return;
+  }
+  const uint32_t ref = Arg(c, e, 1);
+  if (const int32_t type = I32(ref); type < 0 || type >= 0x10) {
+    c.esp = e - 8;
+    c.esi = ref;
+    Push(c, uint32_t(type));
+    Push(c, 0x541C68);
+    Push(c, 1);
+    CallPtr(c, U32(0x1549604), 0x4DECA3, 0x4DEC9D);
+  }
+  const uint32_t n = U32(0x154D70C), ent = U32(kBackEndData) + n * 0x2B8;
+  MovsD(ent + 0x81700, ref, 0x27);
+  Wr<uint8_t>(g_guest_base, ent + 0x817A1, 0);
+  Put(ent + 0x819B4, 0u);
+  Put(ent + 0x819B0, Arg(c, e, 2));
+  Put(ent + 0x817CC, 0u);
+  Put(0x154D70C, n + 1);
+  Put(0x153646C, U32(0x153646C) + 1);
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
 // A brush model entity's surfaces (type 0; EAX the entity): none for the
 // entity's +0x2B4 at 2 or without the cvar 0x1534420; else its orientation
 // into 0x153629C (0x4C9580), the dlights on its model (the model handle +8
@@ -2958,11 +3015,200 @@ void f_00500920(Ctx& c) {
   c.esp = e + 4;
 }
 
-// The level-of-detail distance (0x4DF2D0's ST0) as the original stores it.
+// ST0 popped as the float the original stores.
 uint32_t PopF32(Ctx& c) {
   const uint32_t v = x87::StoreF32(c.fpu);
   x87::Pop(c.fpu);
   return v;
+}
+
+// An entity's (ESI) level-of-detail distance, pushed on the x87 stack: the
+// view origin's (0x1536030) less the entity's (+0x44) stored as floats,
+// the CRT's square root of their squares summed z + y + x, times
+// 0x1536174 plus 0x1536170, over the entity's +0x40 unless that is 0.
+void f_004DF2D0(Ctx& c) {
+  const uint32_t e = c.esp, ent = c.esi;
+  const F32 dx = Fst(St(Ld(0x1536030)) - Ld(ent + 0x44));
+  const F32 dy = Fst(St(Ld(0x1536034)) - Ld(ent + 0x48));
+  const F32 dz = Fst(St(Ld(0x1536038)) - Ld(ent + 0x4C));
+  const St sum = (St(dz) * dz + St(dy) * dy) + St(dx) * dx;
+  x87::LoadF64(c.fpu, std::bit_cast<uint64_t>(sum.v));
+  c.esp = e - 0x10;
+  Call(c, f_0052E610, 0x4DF31B);
+  F32 d{PopF32(c)};
+  d = Fst(St(Ld(0x1536174)) * d + Ld(0x1536170));
+  if (!(St(Ld(ent + 0x40)) == 0.0f)) d = Fst(St(d) / Ld(ent + 0x40));
+  x87::LoadF32(c.fpu, d.bits);
+  c.esp = e + 4;
+}
+
+// A model's level of detail at a distance (ECX the model, its XModel +4;
+// cdecl the distance): the first of the XModel's levels (16-bit count
+// +0x64, 0x14 bytes each from +4, a distance first) whose distance is 0 or
+// beyond the distance, else -1. While the byte 0xA8F804 is set the levels'
+// distances are those at 0xA8F808 instead, and a distance 0xA8F800 other
+// than 0 replaces the argument (in its slot).
+void f_00480DD0(Ctx& c) {
+  const uint32_t e = c.esp;
+  uint32_t lod = U8(0xA8F804) ? 0xA8F808 : U32(c.ecx + 4) + 4;
+  if (!(St(Ld(0xA8F800)) == 0.0f)) Put(e + 4, U32(0xA8F800));
+  const int32_t n = int16_t(U16(U32(c.ecx + 4) + 0x64));
+  c.eax = 0xFFFFFFFF;
+  for (int32_t i = 0; i < n; ++i, lod += 0x14)
+    if (St(Ld(lod)) == 0.0f || St(Ld(e + 4)) < Ld(lod)) {
+      c.eax = uint32_t(i);
+      break;
+    }
+  c.esp = e + 4;
+}
+
+// A model surface's cache entry (EAX the entity, ECX the surface; stack
+// its index, the refentity, the inverse of the entity's axes; EAX the
+// entry or 0): none without the cvar 0x1534680 or above 0x200 vertices
+// (+0x12). An entry of the size class (32 vertices up, by powers of two)
+// from 0x4DA330 (the cache 0x11BEC28 in EBX), counted (0x11CD058 the
+// vertices of the classes, 0x11CD05C the surfaces'), with the mode
+// 0x1549558, the surface, the index and the entity. Its vertices (24
+// bytes: texture coordinates from +0x14, a colour, the position from +0x1C
+// into the world by the entity's axes and origin) in a temporary block; the
+// colours by the surface's shader's (+0xC) stage +0x154 rgbGen (+0x664: 1
+// the identity light byte 0x1536294 in all four, 2 white, 10 each normal
+// (+0x18) by the inverse, normalised (0x426710), lit by 0x4DA420, 11 the
+// refentity's +0x6C, 12 the stage's +0x680) and alphaGen (+0x67C: 0 opaque
+// unless rgbGen is 2, 9 the stage's +0x683 unless rgbGen is 12). Then into
+// the vertex buffer at the entry's +8 vertices by mode: 12 and 15 copied
+// to 0x154955C, 13 through the buffer object 0x154955C (glBindBufferARB
+// 0x1534DE4, glBufferSubDataARB 0x1534B14), 14 by 0x15350DC with
+// 0x1549560; the block freed.
+void f_004DA9F0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t ent = c.eax, surf = c.ecx, inv = Arg(c, e, 3), s = e - 0x30;
+  auto done = [&](uint32_t r) {
+    c.eax = r;
+    c.ebx = ebx;
+    c.ebp = ebp;
+    c.esi = esi;
+    c.edi = edi;
+    c.esp = e + 4;
+  };
+  if (!CvarInt(0x1534680) || U16(surf + 0x12) > 0x200) return done(0);
+  uint32_t size = 5;
+  if (const int32_t n = U16(surf + 0x12); n > 0x20)
+    do ++size;
+    while (n > 1 << size);
+  c.esp = s;
+  Push(c, size);
+  c.ebx = 0x11BEC28;
+  c.ebp = inv;
+  c.esi = ent;
+  c.edi = surf;
+  Call(c, f_004DA330, 0x4DAA41);
+  c.esp = s;
+  const uint32_t entry = c.eax;
+  if (!entry) return done(0);
+  const uint32_t surfs = U32(0x11CD05C);
+  Put(0x11CD058, U32(0x11CD058) + (1u << size));
+  Put(0x11CD05C, surfs + U16(surf + 0x12));
+  Put(entry, U32(0x1549558));
+  Put(entry + 0x10, ent);
+  Put(entry + 4, surf);
+  Put(entry + 0xC, Arg(c, e, 1));
+  const uint32_t buf = TempAlloc(c, s, U16(surf + 0x12) * 24, 0x4DAAA9, 0x4DAAA3);
+  auto count = [&] { return int32_t(U16(surf + 0x12)); };
+  for (int32_t i = 0; i < count(); ++i) {
+    const uint32_t v = buf + 24 * uint32_t(i);
+    Put(v, U32(U32(surf + 0x14) + 8 * uint32_t(i)));
+    Put(v + 4, U32(U32(surf + 0x14) + 8 * uint32_t(i) + 4));
+    auto at = [&](uint32_t axis) {
+      const uint32_t p = U32(surf + 0x1C) + 12 * uint32_t(i);
+      return Fst(((St(Ld(p + 8)) * Ld(ent + 0x34 + axis) + St(Ld(p + 4)) * Ld(ent + 0x28 + axis)) +
+                  St(Ld(p)) * Ld(ent + 0x1C + axis)) +
+                 Ld(ent + 0x44 + axis));
+    };
+    Put(v + 0xC, at(0));
+    Put(v + 0x10, at(4));
+    Put(v + 0x14, at(8));
+  }
+  auto colours = [&](uint32_t rgba) {
+    for (int32_t i = 0; i < count(); ++i) Put(buf + 24 * uint32_t(i) + 8, rgba);
+  };
+  uint32_t stage = U32(U32(surf + 0xC) + 0x154);
+  switch (U32(stage + 0x664)) {
+    case 1:
+      colours(U32(0x1536294) * 0x1010101u);
+      break;
+    case 2:
+      colours(0xFFFFFFFF);
+      break;
+    case 10:
+      for (int32_t i = 0; i < count(); ++i) {
+        const uint32_t nv = U32(surf + 0x18) + 12 * uint32_t(i), normal = s + 0x24;
+        Put(normal, Fst((St(Ld(nv + 4)) * Ld(inv + 4) + St(Ld(nv)) * Ld(inv)) + St(Ld(inv + 8)) * Ld(nv + 8)));
+        Put(normal + 4, Fst((St(Ld(inv + 0x14)) * Ld(nv + 8) + St(Ld(nv)) * Ld(inv + 0xC)) +
+                            St(Ld(nv + 4)) * Ld(inv + 0x10)));
+        Put(normal + 8, Fst((St(Ld(nv)) * Ld(inv + 0x18) + St(Ld(inv + 0x20)) * Ld(nv + 8)) +
+                            St(Ld(nv + 4)) * Ld(inv + 0x1C)));
+        c.esi = normal;
+        Call(c, f_00426710, 0x4DABFE);
+        c.esp = s;
+        x87::Pop(c.fpu);
+        const uint32_t v = buf + 24 * uint32_t(i);
+        Push(c, v + 8);
+        Push(c, normal);
+        Push(c, v + 0xC);
+        c.ebx = Arg(c, e, 2);
+        Call(c, f_004DA420, 0x4DAC13);
+        c.esp = s;
+      }
+      break;
+    case 11:
+      colours(U32(Arg(c, e, 2) + 0x6C));
+      break;
+    case 12:
+      colours(U32(stage + 0x680));
+      break;
+  }
+  stage = U32(U32(surf + 0xC) + 0x154);
+  auto alphas = [&](uint8_t a) {
+    for (int32_t i = 0; i < count(); ++i) Wr<uint8_t>(g_guest_base, buf + 24 * uint32_t(i) + 0xB, a);
+  };
+  if (const uint32_t alpha = U32(stage + 0x67C); !alpha) {
+    if (U32(stage + 0x664) != 2) alphas(0xFF);
+  } else if (alpha == 9 && U32(stage + 0x664) != 12) {
+    alphas(U8(stage + 0x683));
+  }
+  const uint32_t bytes = U16(surf + 0x12) * 24;
+  c.esp = s;
+  switch (U32(0x1549558)) {
+    case 12:
+    case 15:
+      MovsD(U32(0x154955C) + U32(entry + 8) * 24, buf, bytes >> 2);
+      break;
+    case 13:
+      Push(c, U32(0x154955C));
+      Push(c, 0x8892);
+      CallPtr(c, U32(0x1534DE4), 0x4DADB4, 0x4DADAE);
+      Push(c, buf);
+      Push(c, bytes);
+      Push(c, U32(entry + 8) * 24);
+      Push(c, 0x8892);
+      CallPtr(c, U32(0x1534B14), 0x4DADD9, 0x4DADD3);
+      Push(c, 0);
+      Push(c, 0x8892);
+      CallPtr(c, U32(0x1534DE4), 0x4DADE6, 0x4DADE0);
+      break;
+    case 14:
+      Push(c, 0x8762);
+      Push(c, buf);
+      Push(c, bytes);
+      Push(c, U32(0x1549560) + U32(entry + 8) * 24);
+      Push(c, U32(0x154955C));
+      CallPtr(c, U32(0x15350DC), 0x4DAE1A, 0x4DAE14);
+      break;
+  }
+  Push(c, buf);
+  CallPtr(c, U32(kFreePtr), 0x4DAE51, 0x4DAE4B);
+  done(entry);
 }
 
 // A model entity's surfaces (type 2; EAX the entity, its model +0x98): the
@@ -3093,6 +3339,180 @@ void f_004FA790(Ctx& c) {
     Call(c, f_004ABEF0, 0x4FAA9B);
   }
   done();
+}
+
+// Adds a composite model's surface (EDX the surface, EDI its shader; stack
+// the model and the submodel index): the next entity surface (16 bytes at
+// 0x153649C, count 0x1536498): its type 9 for a surface whose +6 is 0xFFFF,
+// else 4, either one more while 0x1530280 is set; for a shader without
+// the flags 0x3FF7FC00 (+0x50) 6 with the surface's +0x28, else 8 or 7
+// with the fog at +0x30 or +0x2C; then the model, the surface and the
+// index. A draw surface for it (the fog 0x1549548 unless one of those,
+// the view's flag, 4), and with the cvar 0x15343D8 at 2 and the shader's
+// +0x58 at 5.0 a second, of the shader 0x1535AEC, by R_AddDrawSurf; the
+// count incremented after each.
+void f_00506070(Ctx& c) {
+  const uint32_t e = c.esp, surf = c.edx, shader = c.edi;
+  const uint32_t es = U32(0x153649C) + (U32(0x1536498) << 4), lit = U32(0x1530280) != 0;
+  uint32_t fog = U32(0x1549548);
+  if (U16(surf + 6) == 0xFFFF) {
+    Put(es, lit + 9);
+  } else {
+    Put(es, lit + 4);
+    if (!(U32(shader + 0x50) & 0x3FF7FC00)) {
+      if (U32(surf + 0x28)) {
+        Put(es, 6u);
+        fog = U32(0x1549548);
+      } else if (U32(surf + 0x30)) {
+        Put(es, 8u);
+        fog = U32(U32(surf + 0x30));
+      } else if (U32(surf + 0x2C)) {
+        Put(es, 7u);
+        fog = U32(U32(surf + 0x2C));
+      }
+    }
+  }
+  Put(es + 8, surf);
+  Put(es + 4, Arg(c, e, 1));
+  Put(es + 0xC, Arg(c, e, 2));
+  if (const uint32_t n = U32(kNumDrawSurfs); int32_t(n) < 0x10000)
+    AddDrawSurf(n, (U32(shader + 0x48) | fog << 12) << 18 | U32(0x1536028) | 4, es);
+  Put(0x1536498, U32(0x1536498) + 1);
+  if (CvarInt(0x15343D8) == 2 && U32(shader + 0x58) == 0x40A00000) {
+    c.esp = e - 8;
+    Push(c, 0);
+    Push(c, 0);
+    Push(c, 0);
+    Push(c, es);
+    c.eax = fog;
+    c.edx = U32(0x1535AEC);
+    Call(c, f_004CAF00, 0x506178);
+    Put(0x1536498, U32(0x1536498) + 1);
+  }
+  c.esp = e + 4;
+}
+
+// A point p through a bone's matrix (rows m - 0x10, m and m + 0x10, the
+// translation at m + 0x20) and then the entity's axes (+0x1C, 0xC apart)
+// into out, each world coordinate stored and then the origin (+0x44) added
+// to it: row r of each sums the products of the coordinates bone[r] and
+// world[r] name, in that order (as the debug draws' x87 code does; each
+// product loads the coordinate and multiplies by the matrix's or axis'
+// element, but for some of 0x5065E0's, whose points are never NaNs).
+struct Sums {
+  int bone[3][3], world[3][3];
+};
+void BoneToWorld(uint32_t out, uint32_t ent, uint32_t m, const F32 p[3], const Sums& o) {
+  F32 q[3];
+  for (uint32_t r = 0; r < 3; ++r) {
+    auto t = [&](int k) { return St(p[k]) * Ld(m - 0x10 + 0x10 * uint32_t(k) + 4 * r); };
+    q[r] = Fst(((t(o.bone[r][0]) + t(o.bone[r][1])) + t(o.bone[r][2])) + Ld(m + 0x20 + 4 * r));
+  }
+  for (uint32_t r = 0; r < 3; ++r) {
+    auto t = [&](int k) { return St(q[k]) * Ld(ent + 0x1C + 0xC * uint32_t(k) + 4 * r); };
+    Put(out + 4 * r, Fst((t(o.world[r][0]) + t(o.world[r][1])) + t(o.world[r][2])));
+  }
+  for (uint32_t r = 0; r < 3; ++r) Put(out + 4 * r, Fst(St(Ld(out + 4 * r)) + Ld(ent + 0x44 + 4 * r)));
+}
+
+// The debug boxes of a composite model's bones (stack: the entity, the
+// bones' bit array; r_xdebug): the bones' bounds (0x4771B0 of the model
+// +0x90 into an _alloca array of pointers, EDX), and for each bone (count
+// +0x17) whose bit is set the twelve edges of its bounds (corner indices
+// in the table 0x564150, six per edge) through the bone's matrix (the
+// model's +4, 0x40 bytes each from its +0x50th) into the world, drawn
+// white by 0x40F4E0.
+void f_00506310(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t bp = e - 4, ent = Arg(c, e, 1), out = Arg(c, e, 2);
+  const uint32_t model = U32(ent + 0x90), n = U8(model + 0x17);
+  c.ebp = bp;
+  c.esp = e - 0x68 - ((n * 4 + 3) & ~3u);
+  const uint32_t bones = c.esp;
+  Push(c, model);
+  c.ebx = model;
+  c.edx = bones;
+  c.esi = ent;
+  c.edi = n;
+  Call(c, f_004771B0, 0x506346);
+  c.esp = bones;
+  const uint32_t m0 = U32(ent + 0x90);
+  uint32_t m = (U8(m0 + 0x50) << 6) + U32(m0 + 4) + 0x40;
+  Put(bp - 0x58, 0x3F800000u);
+  Put(bp - 0x54, 0x3F800000u);
+  Put(bp - 0x50, 0x3F800000u);
+  Put(bp - 0x4C, 0u);
+  static constexpr Sums kFrom = {{{2, 1, 0}, {2, 1, 0}, {2, 1, 0}}, {{2, 1, 0}, {2, 1, 0}, {2, 1, 0}}};
+  static constexpr Sums kTo = {{{0, 2, 1}, {0, 2, 1}, {0, 2, 1}}, {{0, 2, 1}, {0, 2, 1}, {0, 2, 1}}};
+  for (uint32_t i = 0; int32_t(i) < int32_t(n); ++i, m += 0x40) {
+    if (!(int8_t(U8(out + (i >> 3))) & 1 << (i & 7))) continue;
+    const uint32_t b = U32(bones + 4 * i);
+    for (uint32_t k = 0; k < 12; ++k) {
+      const uint32_t t = 0x564150 + 0x18 * k;
+      const F32 from[3] = {Ld(b + 12 * U32(t)), Ld(b + 12 * U32(t + 4) + 4), Ld(b + 12 * U32(t + 8) + 8)};
+      BoneToWorld(bp - 0x3C, ent, m, from, kFrom);
+      const F32 to[3] = {Ld(b + 12 * U32(t + 0xC)), Ld(b + 12 * U32(t + 0x10) + 4), Ld(b + 12 * U32(t + 0x14) + 8)};
+      BoneToWorld(bp - 0x48, ent, m, to, kTo);
+      Push(c, 0);
+      Push(c, 0);
+      Push(c, 0);
+      Push(c, bp - 0x3C);
+      c.ebx = m;
+      c.esi = bp - 0x58;
+      c.edi = bp - 0x48;
+      Call(c, f_0040F4E0, 0x50659B);
+      c.esp = bones;
+    }
+  }
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The debug axes of a composite model's bones (stack: the entity, the
+// bones' bit array; r_xdebug): for each bone (count +0x17) whose bit is
+// set, from the bone's origin (the point 0x537E54 through its matrix, as
+// 0x506310's) a line 6 along each of its axes (a diagonal 3x3 of 6.0 in
+// the frame), coloured red, green and blue, by 0x40F4E0. The axis' index
+// is kept in the entity's argument slot.
+void f_005065E0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t ent = Arg(c, e, 1), out = Arg(c, e, 2), model = U32(ent + 0x90);
+  for (uint32_t k = 0; k < 9; ++k) Put(e - 0x24 + 4 * k, k % 4 ? 0u : 0x40C00000u);
+  const uint32_t n = U8(model + 0x17);
+  uint32_t m = (U8(model + 0x50) << 6) + U32(model + 4) + 0x40;
+  static constexpr Sums kFrom = {{{1, 2, 0}, {1, 2, 0}, {1, 2, 0}}, {{2, 1, 0}, {2, 1, 0}, {2, 1, 0}}};
+  static constexpr Sums kTo = {{{1, 2, 0}, {1, 0, 2}, {0, 1, 2}}, {{2, 1, 0}, {0, 2, 1}, {0, 2, 1}}};
+  for (uint32_t i = 0; int32_t(i) < int32_t(n); ++i, m += 0x40) {
+    if (!(int8_t(U8(out + (i >> 3))) & 1 << (i & 7))) continue;
+    for (uint32_t j = 0; j < 3; ++j) {
+      Put(e + 4, j);
+      for (uint32_t k = 0; k < 4; ++k) Put(e - 0x34 + 4 * k, k == j ? 0x3F800000u : 0u);
+      const F32 o[3] = {Ld(0x537E54), Ld(0x537E58), Ld(0x537E5C)};
+      BoneToWorld(e - 0x4C, ent, m, o, kFrom);
+      const uint32_t row = e - 0x24 + 0xC * j;
+      const F32 a[3] = {Ld(row), Ld(row + 4), Ld(row + 8)};
+      BoneToWorld(e - 0x40, ent, m, a, kTo);
+      c.esp = e - 0x74;
+      Push(c, 0);
+      Push(c, 0);
+      Push(c, 0);
+      Push(c, e - 0x4C);
+      c.ebx = m;
+      c.ebp = ent;
+      c.esi = e - 0x34;
+      c.edi = e - 0x40;
+      Call(c, f_0040F4E0, 0x506865);
+    }
+    Put(e + 4, 3u);
+  }
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
 }
 
 // A model's submodel handle (the 16-bit handle at the model's +0x38 + 2 x

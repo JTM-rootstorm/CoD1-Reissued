@@ -167,6 +167,9 @@ speed.
   between two runs of main); mean 2.385-2.875 ms (main) and 2.275-2.869
   ms, with another game's run loading the machine (load 9) throughout;
   errors 3.
+  With layer 8: 13 of 13 shared, 46 of 1629 in-level identical (46 of
+  1640 between two runs of main); mean 1.872-1.952 ms (main) and
+  1.872-1.890 ms, p95 2.6 and p99 2.7-2.9 for both; errors 3.
 - Layer 4, the cell walk (2026-11-09): a polygon's clip 0x4D7F30 (ECX
   plane; stack points, &count, out: distances z + x + y less the plane's,
   behind below -0.001, in front above 0.001; none in front: count 0, EAX
@@ -410,6 +413,103 @@ speed.
   over 0x200 polygons), a negative draw surface count, a negative brush
   model cvar, a surface count landing exactly on 0x2000 and the handle's
   high half (a count above 0x10000 with 0x1536498 far below 0).
+- Layer 8, the model surfaces (2026-11-15): RE_AddRefEntityToScene
+  0x4DEC10 (its strings; none until 0x1535A20; the warning icon 0x447CA0
+  ("gfx/2d/warning@models.jpg", EAX 3000, ECX 9) with the cvar 0x14E43EC
+  from 0x731 entities (0x154D70C, signed) on; from 0x7FE ri.Printf's "too
+  many visible models" once per view count (0x11CE848); else ri.Error for
+  a type outside 0-15 (and on, as the original does when it returns), the
+  0x9C bytes by rep movs into the back end's entity +0x81700 + 0x2B8 x
+  count, +0xA1, +0x2B4, +0xCC cleared, +0x2B0 the second argument, both
+  counts (and the scene's 0x153646C) incremented), an entity's
+  level-of-detail distance 0x4DF2D0 (ESI; ST0: the view origin 0x1536030
+  less the entity's +0x44 stored as floats, squares summed z + y + x, the
+  CRT's square root 0x52E610 stored, x 0x1536174 + 0x1536170, over +0x40
+  unless that compares equal to 0), a model's level of detail 0x480DD0
+  (ECX the model, +4 its XModel: 16-bit count +0x64, distances 0x14 apart
+  from +4; the first that is 0 or above the distance, else -1; the byte
+  0xA8F804 swaps the distances for the table 0xA8F808, a 0xA8F800 that
+  is not 0 (NaN too) overwrites the argument's slot), a surface's cache
+  entry 0x4DA9F0 (EAX the entity, ECX the surface; stack index,
+  refentity, the axes' inverse; EAX the entry: none without the cvar
+  0x1534680 or above 0x200 vertices (+0x12, unsigned 16-bit); a size
+  class from 5 by powers of two from 0x4DA330 (EBX the cache 0x11BEC28);
+  0x11CD058 += 1 << class, 0x11CD05C += vertices; the entry's mode
+  0x1549558, surface, index, entity; 24-byte vertices in a temporary
+  block: texture coordinates (+0x14), a colour, the position (+0x1C)
+  through the entity's axes and origin (z + y + x); the colour by the
+  shader's (+0xC) stage +0x154: rgbGen +0x664 1 the identity light byte
+  0x1536294 x 0x1010101, 2 white, 10 each normal (+0x18) through the
+  inverse (three sum orders), normalised by 0x426710 in a local (the
+  frame's e-0xC) and lit by 0x4DA420 (EBX the refentity), 11 the
+  refentity's +0x6C, 12 the stage's +0x680; alphaGen +0x67C 0 opaque
+  unless rgbGen 2, 9 the stage's +0x683 unless rgbGen 12; then by mode 12
+  and 15 copied to 0x154955C + 24 x the entry's +8, 13 through the buffer
+  object (glBindBufferARB 0x1534DE4, glBufferSubDataARB 0x1534B14, both
+  stdcall), 14 by 0x15350DC with 0x1549560 and 0x8762; the block freed),
+  a composite model's surface 0x506070 (EDX the surface, EDI the shader;
+  stack model, submodel index: entity surface 0x153649C + 16 x 0x1536498:
+  type 9 for +6 = 0xFFFF else 4, one more while 0x1530280; for shader flags
+  +0x50 & 0x3FF7FC00 clear, 6 with +0x28 (fog 0x1549548), else 8 or 7 with
+  the fog dword at +0x30 or +0x2C; model, surface, index; a draw surface
+  (sort | fog << 12) << 18 | 0x1536028 | 4 below 0x10000, the count
+  incremented; with the cvar 0x15343D8 at 2 and +0x58 the bits of 5.0 a
+  second by R_AddDrawSurf of the shader 0x1535AEC, the count again), and
+  the r_xdebug bone draws 0x506310 (an _alloca array filled by 0x4771B0
+  (EDX) with each bone's bounds; for each bone (model +0x17) whose bit is
+  set, the twelve edges of the table 0x564150 (six corner indices each)
+  through the bone's matrix (model +4, 0x40 bytes, from the +0x50th; rows
+  at +0x30, translation +0x60) and the entity into the world, white lines
+  by 0x40F4E0 (stack the start, 0, 0, 0; ESI colour, EDI end)) and 0x5065E0
+  (from the origin 0x537E54 through the matrix, a line 6 along each axis,
+  red, green, blue; the axis' index kept in the entity's argument slot).
+  Each of the four points' sums has its own order (BoneToWorld's tables).
+  Left lifted: 0x477290, 0x477340 and 0x476510. They are the DObj's
+  (0x476xxx-0x47Cxxx, where src/xanim.cpp's DObjCalcSkel 0x4766E0 lives):
+  the DObj's models +0x18, count +0x16, the bone bits and the part
+  duplicates 0x4761F0 (which xanim.cpp calls lifted); 0x477290 and
+  0x477340 are also called from 0x4F7F5D, 0x4F97F6 and 0x4F9CEA, outside
+  the front end. Their place is src/xanim.cpp under xanim_oracle. 0x480DD0
+  is ported here: its only callers are the front end's (0x4FA790,
+  0x506980) and it reads the front end's 0xA8F800-0xA8F848. Still lifted
+  under layer 8: 0x447CA0, 0x4DA330, 0x4DA420, 0x4771B0, 0x40F4E0, 0x426710,
+  the CRT's square root and the GL entry points.
+- Layer 8 oracle and mutations: new stubs 0x447CA0, 0x4DA330 (an entry of
+  the first eight, now and then misaligned, its +8 a vertex index, or
+  none), 0x4DA420 (writes a colour; records hashes of its position and
+  normal), 0x4771B0 (pointers to eight test bounds) and 0x40F4E0 (hashes
+  of both points and the colour); the three GL pointers are fake stdcall
+  targets; 0x427CB0 now writes a finite inverse, 0x477340 the bone bits.
+  The fixtures: EntityModels' XModels have up to three levels (0, equal
+  or NaN distances, negative counts), the model surfaces vertices (about
+  32 and 0x200 too), the shaders stages, the composite models bones and
+  matrices, the composite surfaces fogs; entity origins and the view
+  origin finite (the CRT's square root of a NaN reports through the
+  Windows API: the portal cases with special values keep model entities
+  out); EntitySlots puts RE_AddRefEntityToScene's slots in compared
+  memory for every case reaching it (cells, entity culls, the walks,
+  coronas, scenes, portals), the walk's added entities after its static
+  models. Each new entry is also reached alone (about 3000 cases each,
+  with cancelling sums for the vertex, normal and bone transforms). 756k
+  random cases, 3.5M calls out, 0 mismatched, peak 97 MB, 54 s; ctest 68
+  of 68 (the build lists SwARc's tests too). A first fixture let
+  0x2001-0x10003 pairs reach the composite model's debug count of
+  distinct shaders (cvar 0x15343B0, quadratic in the pairs through the
+  refimport's 0x1549688): 48-54 GB of recorded calls; large pair counts
+  are now only made without that cvar. 128 mutants: 116 caught (6 of them
+  by crashing the oracle: wild copies or pointers); 12 survive, all
+  equivalent but one: the return addresses and ESP of calls into
+  lifted, not stubbed callees (0x52E610 twice, 0x426710, R_AddDrawSurf
+  from 0x506070), the alpha writes' rgbGen tests (rgbGen 2 is already
+  opaque white; rgbGen 12's alpha is its own colour's top byte),
+  0x5065E0's axis index stored per axis (only the last value outlives
+  the calls), its point sums (the origin 0x537E54 is zero and each axis
+  has two zero coordinates: exact sums, symmetric NaN choice; three
+  mutants) and two equal zero constants; and 0x4DF2D0's squares summed in
+  another order (a double's last bit under a float's store, as layer 3's).
+  The first run also missed the unordered tests of 0.0 (until NaN scales,
+  distances and overrides), the sum orders (until cancelling values), the
+  shader flag bit 0x400 and a 0x15343D8 above 2.
 
 ## Renderer back end (2026-10-25, branch render-backend)
 The back end is going native from the bottom up (src/render_backend.cpp),
