@@ -6,10 +6,7 @@ replace 004AD630
 replace 004AD760
 replace 004CA8D0
 replace 004AC890
-replace 004AA490
 replace 00427CB0
-replace 004ABEF0
-replace 004ABDC0
 replace 00440940
 replace 00440940
 replace 004AD8F0
@@ -18,10 +15,13 @@ replace 00477340
 replace 00476510
 replace 005068B0
 replace 00447CA0
-replace 004DA330
-replace 004DA420
 replace 004771B0
 replace 0040F4E0
+replace 004AA0F0
+replace 004AA8D0
+replace 004AA5C0
+replace 004AA970
+replace 004AACB0
 replace 0051D45A
 replace 00427E80
 replace 0050A2B0

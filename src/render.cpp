@@ -12,7 +12,9 @@
 // the brush, model and composite model entities' surfaces, the polygons'
 // and the world's without the cell walk; RE_AddRefEntityToScene, the
 // model surfaces' levels of detail, cache entries and entity surfaces and
-// the composite models' debug bone draws);
+// the composite models' debug bone draws; the entity lighting: the dlights
+// on a brush model, an entity's lights from its own or the light grid, a
+// vertex's colour; the model cache's blocks, splits, eviction and frees);
 // the back end's sky clipping (ClipSkyPolygon, AddSkyPolygon), texture
 // coordinates (ComputeTexCoords); and the draw surface sort (qsortFast),
 // the 4x4 matrix product and the memcpy 0x42B0A0 under both. Replacements of lifted
@@ -70,10 +72,17 @@ void f_00426AB0(Ctx& c);  // rotates a point about EAX (out, point, degrees)
 void f_0052E6D0(Ctx& c);  // the CRT's trigonometric function of ST0 called by the portal rotation
 void f_004CB270(Ctx& c);  // renders a view (view parms)
 void f_004C97D0(Ctx& c);  // the viewer's orientation (src/render_backend.cpp)
-void f_004AA490(Ctx& c);  // the dlights on a brush model (model)
+void f_004AA490(Ctx& c);  // the dlights on a brush model (model), below
 void f_00427CB0(Ctx& c);  // a 3x3 matrix's inverse (EAX in, ECX out)
-void f_004ABEF0(Ctx& c);  // an entity's lighting, once (EAX entity, ECX refdef)
-void f_004ABDC0(Ctx& c);  // an entity's lighting, once, the other way (EDI entity, refdef)
+void f_004ABEF0(Ctx& c);  // an entity's lighting, once (EAX entity, ECX refdef), below
+void f_004ABDC0(Ctx& c);  // an entity's lighting from the grid, once (EDI entity, refdef), below
+void f_004ABD30(Ctx& c);  // an entity's lights from the grid (EAX entity, ESI origin; refdef, flag), below
+void f_004AB490(Ctx& c);  // an entity's lights (EDI entity; refdef, origin, count, scales, sun, lights, flag), below
+void f_004AA0F0(Ctx& c);  // the dlights into an orientation (EAX count, EDX dlights, ECX orientation)
+void f_004AA8D0(Ctx& c);  // a light's (EDX) intensity at a point (ESI; ST0)
+void f_004AA5C0(Ctx& c);  // a debug draw of an entity's lights (origin, entity)
+void f_004AA970(Ctx& c);  // the lights beyond the limit merged into one (EBX entity; origin, values, order)
+void f_004AACB0(Ctx& c);  // the light grid's lights at a point (origin, scales, &sun, lights; EAX count)
 void f_00440940(Ctx& c);  // va(format, ...)
 void f_004AD8F0(Ctx& c);  // draws debug text (EAX origin, EDI colour, text)
 void f_00477290(Ctx& c);  // a model's surface count (EDX model, EDI levels; EAX)
@@ -84,8 +93,11 @@ void f_004AC890(Ctx& c);  // a debug draw of the cvar 0x15344D0
 void f_0051D45A(Ctx& c);  // the CRT's fprintf
 void f_0052E610(Ctx& c);  // the CRT's square root (ST0)
 void f_00447CA0(Ctx& c);  // a warning icon (stack its image's name; EAX, ECX)
-void f_004DA330(Ctx& c);  // a model cache entry of a size class (EBX the cache, class; EAX)
-void f_004DA420(Ctx& c);  // a vertex's lighting (EBX the refentity; position, normal, colour out)
+void f_004DA330(Ctx& c);  // a model cache entry of a size class (EBX the cache, class; EAX), below
+void f_004DA220(Ctx& c);  // a free block of a level in the model cache (cache, level; EAX), below
+void f_004DA1B0(Ctx& c);  // the model cache's oldest entry freed (EDI the cache; EAX), below
+void f_004DA0F0(Ctx& c);  // a model cache entry's blocks freed (cache, entry, node, shift), below
+void f_004DA420(Ctx& c);  // a vertex's lighting (EBX the refentity; position, normal, colour out), below
 void f_004771B0(Ctx& c);  // a model's bones' bounds (EDX out, model)
 void f_0040F4E0(Ctx& c);  // draws a debug line (from, 0, 0, 0; ESI colour, EDI to)
 // ComputeTexCoords' texture coordinate generators and modifiers.
@@ -3968,6 +3980,548 @@ void f_004DEEC0(Ctx& c) {
   CallPtr(c, U32(0x1549608), 0x4DF29F, 0x4DF299);
   Put(0x15364F0, U32(0x15364F0) + (c.eax - t0));
   done();
+}
+
+// ---- the front end: the model cache ------------------------------------------
+//
+// The model cache 0x11BEC28 (EBX or the first argument): 0x1C8-byte
+// entries (+0/+4 the list of entries in use, oldest first from the head
+// at +0xE428, +8 the frame 0x1535A24 last drawn; a tree of 31 nodes from
+// +0xC, 4 bytes each: a 16-bit count of the vertices in use below and a
+// byte at +2 set for a block in use; from +0x88 sixteen 20-byte blocks of
+// 32 vertices: +0/+4 a free list's links, +8 the first vertex, then a
+// surface's cache entry's +0xC slot and +0x10 owner) and five free lists
+// by level (+0xE400 + 8 x level, 512 vertices at level 0 down to 32 at 4;
+// the block of a node is the first of the blocks below it); +0xE430 and
+// +0xE434 the vertices of the blocks in use and of their surfaces.
+
+namespace {
+
+void Unlink(uint32_t node) {
+  Put(U32(node + 4), U32(node));
+  Put(U32(node) + 4, U32(node + 4));
+}
+// node at the end of the list at head.
+void Append(uint32_t head, uint32_t node) {
+  Put(node, head);
+  Put(node + 4, U32(head + 4));
+  Put(head + 4, node);
+  Put(U32(node + 4), node);
+}
+uint32_t EntryOf(uint32_t cache, uint32_t block) {
+  return cache + uint32_t(int32_t(block - cache) / 0x1C8) * 0x1C8;
+}
+
+}  // namespace
+
+// Frees an entry's blocks (stack: the cache, the entry, a node and the
+// shift of its first block: its block is (node + 1) << shift): a node in
+// use (byte +0xE) clears its block's owner's slot (+0x10 +0x248 + 4 x
+// +0xC) and takes its vertices (1 << (shift + 5)) and its surface's (+4,
+// +0x12) off the counts; a node with vertices below has its count cleared
+// and its children freed (the right one in the loop); a node without its
+// block taken off its free list.
+void f_004DA0F0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t cache = Arg(c, e, 1), entry = Arg(c, e, 2);
+  uint32_t node = Arg(c, e, 3), shift = Arg(c, e, 4);
+  auto done = [&] {
+    c.ebx = ebx;
+    c.ebp = ebp;
+    c.esi = esi;
+    c.edi = edi;
+    c.esp = e + 4;
+  };
+  auto block = [&] { return entry + 20 * ((node + 1) << (shift & 31)) - 0xB8; };
+  c.esp = e - 16;
+  while (U16(entry + node * 4 + 0xC)) {
+    const uint8_t used = U8(entry + node * 4 + 0xE);
+    Wr<uint16_t>(g_guest_base, entry + node * 4 + 0xC, 0);
+    if (used) {
+      const uint32_t b = block();
+      Put(U32(b + 0x10) + U32(b + 0xC) * 4 + 0x248, 0u);
+      Put(cache + 0xE430, U32(cache + 0xE430) + (0xFFFFFFFFu << ((shift + 5) & 31)));
+      Put(cache + 0xE434, U32(cache + 0xE434) - U16(U32(b + 4) + 0x12));
+      Wr<uint8_t>(g_guest_base, entry + node * 4 + 0xE, 0);
+      return done();
+    }
+    c.ebx = shift - 1;
+    c.ebp = cache;
+    c.esi = node;
+    c.edi = entry;
+    for (uint32_t v : {shift - 1, 2 * node + 1, entry, cache}) Push(c, v);
+    Call(c, f_004DA0F0, 0x4DA12F);
+    c.esp = e - 16;
+    node = 2 * node + 2;
+    shift -= 1;
+  }
+  Unlink(block());
+  done();
+}
+
+// The cache's (EDI) oldest entry freed for reuse: none (EAX 0) when it was
+// drawn this frame; else its blocks freed (0x4DA0F0), the entry off the
+// list in use and its whole block at the end of the free list of level 0
+// (EAX 1).
+void f_004DA1B0(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, cache = c.edi, entry = U32(cache + 0xE428);
+  if (U32(entry + 8) != U32(0x1535A24)) {
+    c.esp = e - 4;
+    c.esi = entry;
+    for (uint32_t v : {4u, 0u, entry, cache}) Push(c, v);
+    Call(c, f_004DA0F0, 0x4DA1D3);
+    Unlink(entry);
+    Append(cache + 0xE400, entry + 0x88);
+    c.eax = 1;
+  } else {
+    c.eax = 0;
+  }
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// A free block of a level (stack: the cache, the level 0-4; EAX 1, or 0
+// when there is none): level 0 frees the oldest entry (0x4DA1B0); else, with
+// the level's list empty, a block of the level above (recursively), whose
+// last free block is split: an entry whose whole block it was goes on the
+// list in use, and both halves go at the end of the level's list.
+void f_004DA220(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t cache = Arg(c, e, 1), level = Arg(c, e, 2);
+  auto done = [&](uint32_t r) {
+    c.eax = r;
+    c.ebx = ebx;
+    c.ebp = ebp;
+    c.esi = esi;
+    c.edi = edi;
+    c.esp = e + 4;
+  };
+  c.ebx = level;
+  if (!level) {
+    c.esp = e - 8;
+    c.edi = cache;
+    Call(c, f_004DA1B0, 0x4DA233);
+    return done(c.eax);
+  }
+  const uint32_t above = cache + 0xE3F8 + level * 8;
+  if (U32(above + 4) == above) {
+    c.esp = e - 12;
+    c.ebp = cache;
+    Push(c, level - 1);
+    Push(c, cache);
+    Call(c, f_004DA220, 0x4DA257);
+    if (!c.eax) return done(0);
+  }
+  const uint32_t b = U32(above + 4);
+  Unlink(b);
+  const uint32_t entry = EntryOf(cache, b);
+  if (level == 1) Append(cache + 0xE428, entry);
+  const uint32_t list = cache + 0xE400 + Arg(c, e, 2) * 8;
+  Append(list, b);
+  Append(list, entry + (uint32_t(int32_t(b - entry - 0x88) / 20) + (1u << ((4 - level) & 31))) * 20 + 0x88);
+  done(1);
+}
+
+// A block of a size class (EBX the cache; stack the class 5-9, 32 to 512
+// vertices; EAX the block or 0): the last free block of level 9 - class
+// (0x4DA220 first when there is none), off its list; an entry whose whole
+// block it is goes on the list in use; its node marked in use and the
+// class's vertices counted in it and the nodes above; its +8 its first
+// vertex, 32 x the block's index in the cache.
+void f_004DA330(Ctx& c) {
+  const uint32_t e = c.esp, ebp = c.ebp, esi = c.esi, edi = c.edi, cache = c.ebx;
+  const uint32_t cls = Arg(c, e, 1), level = 9 - cls, list = cache + 0xE400 + level * 8;
+  auto done = [&](uint32_t r) {
+    c.eax = r;
+    c.ebp = ebp;
+    c.esi = esi;
+    c.edi = edi;
+    c.esp = e + 4;
+  };
+  if (U32(list + 4) == list) {
+    c.esp = e - 4;
+    c.edi = level;
+    Push(c, level);
+    Push(c, cache);
+    Call(c, f_004DA220, 0x4DA355);
+    if (!c.eax) return done(0);
+  }
+  const uint32_t b = U32(list + 4);
+  Unlink(b);
+  const uint32_t index = uint32_t(int32_t(b - cache) / 0x1C8), entry = cache + index * 0x1C8;
+  if (!level) Append(cache + 0xE428, entry);
+  const uint32_t k = uint32_t(int32_t(b - entry - 0x88) / 20);
+  const int32_t node = int32_t(k + 16) >> ((4 - level) & 31);
+  Wr<uint8_t>(g_guest_base, entry + uint32_t(node) * 4 + 0xA, 1);
+  for (int32_t i = node - 1; i >= 0; i = (i - 1) >> 1) {
+    const uint32_t count = entry + uint32_t(i) * 4 + 0xC;
+    Wr<uint16_t>(g_guest_base, count, uint16_t(U16(count) + (1u << (cls & 31))));
+  }
+  Put(entry + k * 20 + 0x90, ((index << 4) + k) << 5);
+  done(entry + k * 20 + 0x88);
+}
+
+// ---- the front end: the entity lighting -----------------------------------------
+//
+// A light (0x88 bytes; the dlights 0x153647C, count 0x1536474 for the
+// surfaces and the refdef's +0x160 for the entities, and an entity's own):
+// type +0, colour +4 (intensity +0x10), two colours +0x14 and +0x24
+// (constant and along the normal), origin or direction +0x44, +0x50 0 for
+// a direction, a spot's axis +0x54, attenuation +0x60/+0x64/+0x68, spot
+// exponent +0x6C and angle +0x70 (180 for none), radius +0x74, the origin
+// in an entity's orientation +0x78. A refentity's lighting: +0xA0 a dlight
+// reached it, +0xA1 lit, +0xA4 the sun's direction in its axes (with the
+// cvar 0x15343D8 at 2), +0xCC up to eight lights (+0xD0: light, value), the
+// sun's value +0x110, and its sun lights +0x19C and +0x224. The world
+// (0x1535A34): +0x98 its light grid, ambient +0xD8, sun colour +0xF8, sun
+// +0x108, +0x118 lighting.
+
+namespace {
+
+// The light at l from the world's sun (colour +0xF8, intensity +0x108):
+// type 8, the colour, the colour by k as the constant one and by k2 along
+// the normal, pointing up.
+void SunLight(uint32_t l, uint32_t world, float k, float k2) {
+  Put(l, 8u);
+  for (uint32_t i = 0; i < 4; ++i) Put(l + 4 + 4 * i, U32(world + 0xF8 + 4 * i));
+  Put(l + 0x10, U32(world + 0x108));
+  for (uint32_t i = 0; i < 4; ++i) Put(l + 0x14 + 4 * i, Fst(St(Ld(world + 0xF8 + 4 * i)) * k));
+  for (uint32_t i = 0; i < 4; ++i) Put(l + 0x24 + 4 * i, Fst(St(Ld(world + 0xF8 + 4 * i)) * k2));
+  for (uint32_t o = 0x34; o < 0x4C; o += 4) Put(l + o, 0u);
+  Put(l + 0x4C, 0x3F800000u);
+  Put(l + 0x50, 0u);
+  Put(l + 0x70, 0x43340000u);
+}
+
+// The sun's direction (0x15364B0) into the entity's axes (+0x1C) at +0xA4,
+// by their inverse (0x427CB0 into m, from the call site ret).
+void SunAxes(Ctx& c, uint32_t ent, uint32_t m, uint32_t ret) {
+  c.eax = ent + 0x1C;
+  c.ecx = m;
+  Call(c, f_00427CB0, ret);
+  for (uint32_t row = 0; row < 3; ++row)
+    for (uint32_t i = 0; i < 3; ++i) {
+      const St v = St(Ld(0x15364B0 + 4 * row)) * Ld(m + 0xC * row + 4 * i);
+      Put(ent + 0xA4 + 4 * i, row ? Fst(v + Ld(ent + 0xA4 + 4 * i)) : Fst(v));
+    }
+}
+
+}  // namespace
+
+// The dlights on a brush model (stack: the model, mins +0, maxs +0xC,
+// surface references +0x18, count +0x1C): the dlights into the current
+// orientation 0x153629C (0x4AA0F0), then a bit for each whose origin
+// there (+0x78) is no more than its radius outside the bounds on any axis
+// (in the argument's slot); the bits the current entity's +0x9C and each
+// referenced surface's (+8) of type 0x18 and up its +8.
+void f_004AA490(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t model = Arg(c, e, 1);
+  c.esp = e - 8;
+  c.ebp = model;
+  c.edx = U32(0x153647C);
+  c.eax = U32(0x1536474);
+  c.ecx = 0x153629C;
+  Call(c, f_004AA0F0, 0x4AA4AB);
+  Put(e + 4, 0u);
+  const uint32_t dlights = U32(0x153647C);
+  for (int32_t i = 0; i < I32(0x1536474); ++i) {
+    const uint32_t dl = dlights + 0x88 * uint32_t(i);
+    bool lit = true;
+    for (uint32_t k = 0; k < 0xC && lit; k += 4)
+      lit = !(St(Ld(dl + 0x78 + k)) - Ld(model + 0xC + k) > Ld(dl + 0x74)) &&
+            !(St(Ld(model + k)) - Ld(dl + 0x78 + k) > Ld(dl + 0x74));
+    if (lit) Put(e + 4, Arg(c, e, 1) | 1u << (i & 31));
+  }
+  Put(U32(0x1535D68) + 0x9C, Arg(c, e, 1));
+  for (int32_t i = 0; i < I32(model + 0x1C); ++i) {
+    const uint32_t surf = U32(U32(model + 0x18) + 12 * uint32_t(i) + 8);
+    if (I32(surf) >= 0x18) Put(surf + 8, Arg(c, e, 1));
+  }
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// An entity's lights (EDI the refentity; stack: refdef, origin, count,
+// values, the sun's value, lights, flag; the count and the sun's value in
+// their slots change): +0xA0 cleared, then the refdef's dlights (+0x164,
+// count +0x160) whose radius x 2 reaches the origin added with the value
+// 1.0, setting +0xA0; the world's sun (unless the sun's value or the
+// world's +0x108 is 0, or 0x15364C0 is 0) added as one light at +0x19C
+// (0x15364C0 1 or more lights than 0x15364BC) or two, +0x19C and +0x224,
+// each with the sun's value, which then becomes 0. Of the lights with a
+// value other than 0: those of a negative or NaN intensity first (1e19),
+// the rest by 0x4AA8D0's intensity x the value (types 1 and 8 plus 1 <<
+// 0x1536298 x the sun's +0x108 x the sun's value), dropped below the cvar
+// 0x1534578; the eight greatest (ties: the first) in order at +0xD0 with
+// their values, their count +0xCC, the sun's value +0x110; with the cvar
+// 0x15344CC above 0 a debug draw (0x4AA5C0), with the flag those beyond
+// 0x15364BC merged (0x4AA970, from the values and the order on the stack).
+void f_004AB490(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, ent = c.edi, s = e - 0x110;
+  const uint32_t refdef = Arg(c, e, 1), origin = Arg(c, e, 2), values = Arg(c, e, 4), lights = Arg(c, e, 6);
+  const uint32_t order = s + 0x2C, value = s + 0x4C;
+  Wr<uint8_t>(g_guest_base, ent + 0xA0, 0);
+  uint32_t n = Arg(c, e, 3);
+  if (refdef && I32(refdef + 0x160) > 0) {
+    for (int32_t i = 0; i < I32(refdef + 0x160); ++i) {
+      const uint32_t dl = U32(refdef + 0x164) + 0x88 * uint32_t(i);
+      const F32 dx = Fst(St(Ld(origin)) - Ld(dl + 0x44));
+      const F32 dy = Fst(St(Ld(origin + 4)) - Ld(dl + 0x48));
+      const F32 dz = Fst(St(Ld(origin + 8)) - Ld(dl + 0x4C));
+      const St d2 = (St(dz) * dz + St(dy) * dy) + St(dx) * dx;
+      if (St(Ld(dl + 0x74)) * Ld(dl + 0x74) * 4.0f < d2) continue;
+      Put(lights + 4 * n, dl);
+      Put(values + 4 * n, 0x3F800000u);
+      ++n;
+      Wr<uint8_t>(g_guest_base, ent + 0xA0, 1);
+    }
+    Put(e + 0xC, n);
+  }
+  const uint32_t world = U32(0x1535A34);
+  if (!(St(Ld(e + 0x14)) == 0.0f) && !(St(Ld(world + 0x108)) == 0.0f) && U32(0x15364C0)) {
+    const uint32_t sun = Arg(c, e, 5);
+    const bool one = U32(0x15364C0) == 1 || int32_t(n) > I32(0x15364BC);
+    SunLight(ent + 0x19C, world, one ? 0.5f : 0.75f, one ? 0.5f : 0.25f);
+    Put(values + 4 * n, sun);
+    Put(lights + 4 * n, ent + 0x19C);
+    ++n;
+    if (!one) {
+      // The first's colour, the sun's intensity and colour by -0.25 along
+      // the normal, pointing down.
+      const uint32_t l = ent + 0x224;
+      Put(l, 8u);
+      for (uint32_t i = 0; i < 3; ++i) Put(l + 4 + 4 * i, U32(ent + 0x1A0 + 4 * i));
+      Put(l + 0x10, Fst(St(Ld(world + 0x108)) * -0.25f));
+      for (uint32_t i = 0; i < 4; ++i) Put(l + 0x14 + 4 * i, 0u);
+      for (uint32_t i = 0; i < 4; ++i) Put(l + 0x24 + 4 * i, Fst(St(Ld(world + 0xF8 + 4 * i)) * -0.25f));
+      for (uint32_t o = 0x34; o < 0x4C; o += 4) Put(l + o, 0u);
+      Put(l + 0x4C, 0xBF800000u);
+      Put(l + 0x50, 0u);
+      Put(l + 0x70, 0x43340000u);
+      Put(values + 4 * n, sun);
+      Put(lights + 4 * n, l);
+      ++n;
+    }
+    Put(e + 0xC, n);
+    Put(e + 0x14, 0u);
+  }
+  int32_t picked = 0;
+  for (int32_t i = 0; i < I32(e + 0xC); ++i) {
+    const uint32_t v = value + 4 * uint32_t(i);
+    if (St(Ld(values + 4 * uint32_t(i))) == 0.0f) continue;
+    const uint32_t light = U32(lights + 4 * uint32_t(i));
+    if (!(St(Ld(light + 0x10)) >= 0.0f)) {
+      Put(v, 0x5F0AC723u);
+    } else {
+      c.esp = s;
+      c.ebx = uint32_t(picked);
+      c.ebp = v;
+      c.esi = origin;
+      c.edx = light;
+      Call(c, f_004AA8D0, 0x4ABA99);
+      const St r(std::bit_cast<double>(x87::StoreF64(c.fpu)));
+      x87::Pop(c.fpu);
+      const F32 rv = Fst(r * Ld(values + 4 * uint32_t(i)));
+      Put(v, rv);
+      if (const uint32_t type = U32(light); type == 1 || type == 8) {
+        const F32 one = Fst(FromInt(int32_t(1u << (U32(0x1536298) & 31))));
+        Put(v, Fst(St(one) * Ld(U32(0x1535A34) + 0x108) * Ld(e + 0x14) + rv));
+      }
+      if (St(Ld(v)) < Ld(U32(0x1534578) + 0x1C)) continue;
+    }
+    int32_t at = 0;
+    while (at < picked && St(Ld(value + 4 * U32(order + 4 * uint32_t(at)))) > Ld(v)) ++at;
+    if (at >= 8) continue;
+    if (picked == 8) picked = 7;
+    for (int32_t k = picked; k > at; --k) Put(order + 4 * uint32_t(k), U32(order + 4 * uint32_t(k) - 4));
+    Put(order + 4 * uint32_t(at), uint32_t(i));
+    ++picked;
+  }
+  Put(ent + 0xCC, uint32_t(picked));
+  for (int32_t k = 0; k < picked; ++k) {
+    const uint32_t i = U32(order + 4 * uint32_t(k));
+    Put(ent + 0xD4 + 8 * uint32_t(k), U32(values + 4 * i));
+    Put(ent + 0xD0 + 8 * uint32_t(k), U32(lights + 4 * i));
+  }
+  Put(ent + 0x110, U32(e + 0x14));
+  c.ebx = uint32_t(picked);
+  c.esi = 0;
+  if (CvarInt(0x15344CC) > 0) {
+    c.esp = s;
+    Push(c, ent);
+    Push(c, origin);
+    Call(c, f_004AA5C0, 0x4ABCFE);
+  }
+  if (Arg(c, e, 7)) {
+    c.esp = s;
+    Push(c, order);
+    Push(c, value);
+    Push(c, origin);
+    c.ebx = ent;
+    Call(c, f_004AA970, 0x4ABD23);
+  }
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// An entity's lights from the light grid (EAX the refentity, ESI the
+// origin; stack refdef, flag): with a world with a grid (+0x98) and the
+// cvar 0x15346C4 clear, the grid's lights at the origin (0x4AACB0: values,
+// the sun's value and lights in this frame) through 0x4AB490; else none
+// (+0xCC).
+void f_004ABD30(Ctx& c) {
+  const uint32_t e = c.esp, edi = c.edi, ent = c.eax, s = e - 0x19C, world = U32(0x1535A34);
+  if (world && U32(world + 0x98) && !CvarInt(0x15346C4)) {
+    const uint32_t lights = s + 0xC, sun = s + 8, values = s + 0xD4;
+    c.esp = s;
+    c.edi = ent;
+    for (uint32_t v : {lights, sun, values, c.esi}) Push(c, v);
+    c.eax = values;
+    c.ecx = lights;
+    c.edx = sun;
+    Call(c, f_004AACB0, 0x4ABD70);
+    c.esp = s;
+    for (uint32_t v : {Arg(c, e, 2), lights, U32(sun), values, c.eax, c.esi, Arg(c, e, 1)}) Push(c, v);
+    Call(c, f_004AB490, 0x4ABD9C);
+  } else {
+    Put(ent + 0xCC, 0u);
+  }
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// An entity's lighting from the grid, once (EDI the refentity; stack the
+// refdef): unless lit (+0xA1, then set), its lights at its lighting origin
+// (+0xC with flag 0x80 at +4, else its origin +0x44) by 0x4ABD30, and the
+// sun's direction in its axes with the cvar 0x15343D8 at 2.
+void f_004ABDC0(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, ent = c.edi, s = e - 0x38;
+  if (!U8(ent + 0xA1)) {
+    const uint32_t o = U8(ent + 4) & 0x80 ? ent + 0xC : ent + 0x44;
+    Wr<uint8_t>(g_guest_base, ent + 0xA1, 1);
+    for (uint32_t k = 0; k < 0xC; k += 4) Put(s + 8 + k, U32(o + k));
+    c.esp = s;
+    Push(c, 1);
+    Push(c, Arg(c, e, 1));
+    c.eax = ent;
+    c.esi = s + 8;
+    Call(c, f_004ABD30, 0x4ABE12);
+    c.esp = s;
+    if (CvarInt(0x15343D8) == 2) SunAxes(c, ent, s + 0x14, 0x4ABE33);
+  }
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// An entity's lighting, once (EAX the refentity, ECX the refdef): with the
+// cvar 0x15344CC below 0 from the grid (0x4ABDC0); else, unless lit (+0xA1,
+// then set), its lights at its lighting origin (+0xC) from those its +0x2B0
+// gives (count +0xB8, the sun's value +0xBC, values +0xC0, lights +0x184)
+// by 0x4AB490, and the sun's direction in its axes with the cvar 0x15343D8
+// at 2.
+void f_004ABEF0(Ctx& c) {
+  const uint32_t e = c.esp, edi = c.edi, ent = c.eax, s = e - 0x2C;
+  c.edi = ent;
+  if (CvarInt(0x15344CC) < 0) {
+    c.esp = s;
+    Push(c, c.ecx);
+    Call(c, f_004ABDC0, 0x4ABF08);
+  } else if (!U8(ent + 0xA1)) {
+    const uint32_t info = U32(ent + 0x2B0);
+    c.esp = s;
+    Push(c, 1);
+    Push(c, info + 0x184);
+    Wr<uint8_t>(g_guest_base, ent + 0xA1, 1);
+    for (uint32_t v : {U32(info + 0xBC), info + 0xC0, U32(info + 0xB8), ent + 0xC, c.ecx}) Push(c, v);
+    Call(c, f_004AB490, 0x4ABF53);
+    c.esp = s;
+    if (CvarInt(0x15343D8) == 2) SunAxes(c, ent, s + 8, 0x4ABF73);
+  }
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// A vertex's colour (EBX the refentity; stack position, normal, the colour
+// out): without the world's lighting (+0x118) the identity light byte
+// 0x1536294 and alpha 255. Else the world's ambient (+0xD8) plus its sun
+// colour (+0xF8) x the entity's sun value (+0x110), then each of the
+// entity's lights (+0xCC, +0xD0: light, value): a direction (+0x50 == 0)
+// its dot product with the normal at its value; a point its direction
+// from the vertex, normalised (0x426710, the length l), the dot product,
+// the value over (l x +0x68 + +0x64) x l + +0x60, and for a spot (+0x70
+// not 180) 0 when the direction is not beyond the cosine of the table
+// 0x1544530 at the angle, else that by the cosine +0x6C times (at least
+// once while above 0); the dot product (0 below) x +0x24 + +0x14 by that
+// added to the colour, each sum stored. Each channel x 255 rounded
+// (+2^-30), clamped to 0-255.
+void f_004DA420(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, ref = c.ebx, world = U32(0x1535A34);
+  const uint32_t pos = Arg(c, e, 1), nrm = Arg(c, e, 2), out = Arg(c, e, 3);
+  if (!U32(world + 0x118)) {
+    for (uint32_t k = 0; k < 3; ++k) Wr<uint8_t>(g_guest_base, out + k, U8(0x1536294));
+    Wr<uint8_t>(g_guest_base, out + 3, 0xFF);
+    c.esp = e + 4;
+    return;
+  }
+  F32 colour[4];
+  for (uint32_t k = 0; k < 4; ++k)
+    colour[k] = Fst(St(Ld(world + 0xF8 + 4 * k)) * Ld(ref + 0x110) + Ld(world + 0xD8 + 4 * k));
+  for (int32_t i = 0; i < I32(ref + 0xCC); ++i) {
+    const uint32_t light = U32(ref + 0xD0 + 8 * uint32_t(i));
+    const F32 value = Fst(St(Ld(ref + 0xD4 + 8 * uint32_t(i))));
+    F32 dot;
+    St scale;
+    if (St(Ld(light + 0x50)) == 0.0f) {
+      const St d = (St(Ld(light + 0x4C)) * Ld(nrm + 8) + St(Ld(light + 0x44)) * Ld(nrm)) +
+                   St(Ld(light + 0x48)) * Ld(nrm + 4);
+      dot = d < 0.0f ? F32{0} : Fst(d);
+      scale = St(value);
+    } else {
+      const uint32_t dir = e - 0x1C;
+      for (uint32_t k = 0; k < 0xC; k += 4) Put(dir + k, Fst(St(Ld(light + 0x44 + k)) - Ld(pos + k)));
+      c.esp = e - 0x58;
+      c.esi = dir;
+      Call(c, f_00426710, 0x4DA55D);
+      const St len(std::bit_cast<double>(x87::StoreF64(c.fpu)));
+      x87::Pop(c.fpu);
+      const St d =
+          (St(Ld(dir + 8)) * Ld(nrm + 8) + St(Ld(dir + 4)) * Ld(nrm + 4)) + St(Ld(dir)) * Ld(nrm);
+      dot = d < 0.0f ? F32{0} : Fst(d);
+      scale = value / ((len * Ld(light + 0x68) + Ld(light + 0x64)) * len + Ld(light + 0x60));
+      const F32 stored = Fst(scale);
+      if (U32(light + 0x70) != 0x43340000) {
+        const F32 cosine = Fst((St(Ld(dir + 8)) * Ld(light + 0x5C) + St(Ld(dir + 4)) * Ld(light + 0x58)) +
+                               St(Ld(dir)) * Ld(light + 0x54));
+        const F32 angle = Fst((St(Ld(light + 0x70)) + 90.0f) * Ld(0x55B76C));
+        const uint32_t edge = 0x1544530 + 4 * (uint32_t(Fistp(St(angle) + St(0x1p-30))) & 0x3FF);
+        if (St(cosine) <= Ld(edge)) {
+          scale = St(0.0f);
+        } else if (!(St(0.0f) < Ld(light + 0x6C))) {
+          scale = St(stored);
+        } else {
+          const F32 exponent = Ld(light + 0x6C);
+          scale = St(stored);
+          int32_t n = 0;
+          do scale = scale * cosine;
+          while (FromInt(++n) < exponent);
+        }
+      }
+    }
+    for (uint32_t k = 0; k < 4; ++k)
+      colour[k] = Fst((St(dot) * Ld(light + 0x24 + 4 * k) + Ld(light + 0x14 + 4 * k)) * scale + colour[k]);
+  }
+  for (uint32_t k = 0; k < 4; ++k) {
+    const int32_t v = Fistp(St(Fst(St(colour[k]) * 255.0f)) + St(0x1p-30));
+    Wr<uint8_t>(g_guest_base, out + k, uint8_t(v < 0 ? 0 : v > 0xFF ? 0xFF : v));
+  }
+  c.esi = esi;
+  c.esp = e + 4;
 }
 
 }  // namespace recomp::gen

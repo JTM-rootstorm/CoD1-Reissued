@@ -66,4 +66,14 @@
 #define f_00506070 n_00506070
 #define f_00506310 n_00506310
 #define f_005065E0 n_005065E0
+#define f_004AA490 n_004AA490
+#define f_004AB490 n_004AB490
+#define f_004ABD30 n_004ABD30
+#define f_004ABDC0 n_004ABDC0
+#define f_004ABEF0 n_004ABEF0
+#define f_004DA420 n_004DA420
+#define f_004DA330 n_004DA330
+#define f_004DA220 n_004DA220
+#define f_004DA1B0 n_004DA1B0
+#define f_004DA0F0 n_004DA0F0
 #include "../src/render.cpp"

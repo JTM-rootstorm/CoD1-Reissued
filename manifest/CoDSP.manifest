@@ -87,7 +87,10 @@ replace 00519140
 # polygons, and the world's without the cell walk; the model surfaces:
 # RE_AddRefEntityToScene, an entity's level-of-detail distance, a model's
 # level of detail, a surface's cache entry, a composite model's surface
-# and its bones' debug boxes and axes. Back end:
+# and its bones' debug boxes and axes; the entity lighting and the model
+# cache: the dlights on a brush model, an entity's lights and its lighting
+# (from its lights or the light grid), a vertex's lighting, and the
+# cache's blocks of a size class, splits, eviction and frees. Back end:
 # ClipSkyPolygon, AddSkyPolygon and ComputeTexCoords. Under both:
 # qsortFast of the draw surfaces, the 4x4 matrix product and the memcpy
 # 0x42B0A0.
@@ -157,6 +160,16 @@ replace 004DA9F0
 replace 00506070
 replace 00506310
 replace 005065E0
+replace 004AA490
+replace 004AB490
+replace 004ABD30
+replace 004ABDC0
+replace 004ABEF0
+replace 004DA420
+replace 004DA330
+replace 004DA220
+replace 004DA1B0
+replace 004DA0F0
 
 # The renderer back end (src/render_backend.cpp): GL_Bind, the cull face,
 # the texture environment, the state bits and the client arrays, fog on

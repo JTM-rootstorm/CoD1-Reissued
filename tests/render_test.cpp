@@ -6,9 +6,10 @@
 // not replace are stubs (tests/render_stubs.manifest) that record each
 // call: its address, return address, ESP, the registers the callee reads
 // and its stack arguments, which must be the same on both sides; they
-// leave EAX, ECX and EDX changed; the debug polygon and line and an added
-// entity also record a hash of what they are handed (on the caller's
-// stack). ri.Milliseconds' time grows with the calls. The refimport's
+// leave EAX, ECX and EDX changed (a light's intensity keeps EDX, as the
+// original does, and pushes ST0); the debug polygon and line, an added
+// entity and the merge of the lights beyond the limit also record a hash
+// of what they are handed (on the caller's stack). ri.Milliseconds' time grows with the calls. The refimport's
 // temporary allocation hands out blocks of a heap that starts again for
 // each side. Each case runs one entry through the
 // lifted original and the native code from the same guest memory, and both
@@ -46,7 +47,10 @@
 // their planes, mirrors and rotating portals, for the portal orientations
 // and views, which the draw surface sort reaches too; entities of every
 // type; scenes over the world walk's (or without a world): the view's
-// surfaces, a view rendered and RE_RenderScene. Values are now and then
+// surfaces, a view rendered and RE_RenderScene; the entities' lighting and
+// a vertex's (point lights only where the positions are finite: the CRT's
+// square root of a NaN under 0x426710 reports through the Windows API),
+// over a model cache in states the game reaches. Values are now and then
 // zeros, denormals, infinities, NaNs or huge. Captures
 // (tests/render_capture.h) add the game's own calls.
 
@@ -121,8 +125,16 @@ uint32_t g_pairs = 0;
 // The models' cache (0x1C8-byte entries, the test's first eight, and the
 // head of their list).
 constexpr uint32_t kModelCache = 0x11BEC28, kModelCacheHead = 0x11CD050;
+// The cache entries' vertex buffer (0x154955C): 32 x the 16 blocks of the
+// eight entries, and a surface's 0x200 more.
+constexpr uint32_t kVertexBuffer = 0x6FC00000, kVertexBufferSize = 24 * (8 * 16 * 32 + 0x200);
 // Bounds for the bones' bounds 0x4771B0 hands out (eight of 24 bytes).
 uint32_t g_bone_bounds = 0;
+// The case's lights (kNumLights of 0x88 bytes, directions first), which
+// the light grid's 0x4AACB0 hands out (those of the entity's +0x2B0).
+constexpr uint32_t kNumLights = 12, kNumDirections = 6;
+uint32_t g_lights = 0;
+bool IsLight(uint32_t p) { return p >= g_lights && p < g_lights + kNumLights * 0x88 && (p - g_lights) % 0x88 == 0; }
 
 // What each stub compares: the registers its callee reads (and for the
 // texture coordinate callees the callee-saved ones, which ComputeTexCoords
@@ -137,10 +149,7 @@ constexpr StubInfo kStubs[] = {
     {0x4AD760, kEbx | kEsi | kEdi, 0},          // debug line
     {0x4CA8D0, 0, 2},                           // a portal surface off the screen
     {0x4AC890, 0, 0},                           // a debug draw
-    {0x4AA490, 0, 1},                           // the dlights on a brush model
     {0x427CB0, kEax | kEcx, 0},                 // a 3x3 inverse
-    {0x4ABEF0, kEax | kEcx, 0},                 // an entity's lighting
-    {0x4ABDC0, kEdi, 1},
     {0x440940, 0, -1},                          // va (its format's arguments)
     {0x4AD8F0, kEax | kEdi, 1},                 // debug text
     {0x477290, kEdx | kEdi, 0},                 // a composite model's surfaces
@@ -148,10 +157,13 @@ constexpr StubInfo kStubs[] = {
     {0x476510, 0, 2},
     {0x5068B0, kEbx | kEdi, 0},
     {0x447CA0, kEax | kEcx, 1},                 // a warning icon
-    {0x4DA330, kEbx, 1},                        // a cache entry of a size class
-    {0x4DA420, kEbx, 3},                        // a vertex's lighting
     {0x4771B0, kEdx, 1},                        // the bones' bounds
     {0x40F4E0, kEsi | kEdi, 4},                 // a debug line
+    {0x4AA0F0, kEax | kEcx | kEdx, 0},          // the dlights into an orientation
+    {0x4AA8D0, kEsi | kEdx, 0},                 // a light's intensity at a point
+    {0x4AA5C0, 0, 2},                           // a debug draw of an entity's lights
+    {0x4AA970, kEbx, 3},                        // the lights beyond the limit merged
+    {0x4AACB0, kEsi, 4},                        // the light grid's lights at a point
     {0x51D45A, 0, 3},                           // fprintf to the log
     {0x427E80, kEax | kEcx, 0},                 // a matrix's inverse
     {0x50A2B0, kSaved | kEax, 0},               // tcGens
@@ -205,25 +217,51 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
     for (uint32_t i = 0; i < size; i++) h = (h ^ g_mem.read<uint8_t>(va + i)) * 16777619u;
     return h;
   };
-  if (va == 0x4DA420) r.args[3] = hash(r.args[0], 0xC) ^ hash(r.args[1], 0xC) * 3;
+  // What the merge of the lights beyond the limit reads on the caller's
+  // stack: the order of the lights kept (+0xCC of them) and their values.
+  if (va == 0x4AA970) {
+    const int32_t n = std::clamp(int32_t(Rd(c.ebx + 0xCC)), 0, 8);
+    uint32_t h = hash(r.args[2], 4 * uint32_t(n));
+    for (int32_t i = 0; i < n; i++) h = h * 31 + Rd(r.args[1] + 4 * Rd(r.args[2] + 4 * uint32_t(i)));
+    r.args[3] = h;
+  }
   if (va == 0x40F4E0) r.args[4] = hash(r.args[0], 0xC) ^ hash(c.edi, 0xC) * 3 ^ hash(c.esi, 0x10) * 5;
   if (va == 0x4AD630 && c.ebx <= 0x1000) r.args[2] = hash(r.args[0], 0xC * c.ebx);
   if (va == 0x4AD760) r.args[2] = hash(c.ebx, 0xC) ^ hash(c.edi, 0xC) * 3;
   g_calls.push_back(r);
   const uint32_t k = uint32_t(g_calls.size());
   // What an entity's callees do: now and then change the current entity's
-  // number, which R_AddEntitySurfaces reloads; dlight bits for a brush
-  // model's surfaces; the lighting setting +0xA0 now and then; a cache
-  // entry of a size class (one of the first eight, its vertices at +8) or
-  // none; a vertex's colour; the bones' bounds.
-  if (va == 0x4AA490 && k % 5 == 0) Wr(0x1536024, Rd(0x1536024) + 1);
-  if (va == 0x4AA490 && k % 3) Wr(Rd(0x1535D68) + 0x9C, k % 3 == 1 ? k * 0x9E3779B9u : 0);
-  if (va == 0x4ABEF0) g_mem.write<uint8_t>(c.eax + 0xA0, k % 3 == 0);
+  // number, which R_AddEntitySurfaces reloads (the dlights' orientation,
+  // under a brush model's); a light's intensity (ST0: ordinary, equal,
+  // zero, negative and NaN values); the light grid's lights (from those of
+  // the entity's +0x2B0, values now and then 0 or NaN); the bones' bounds.
+  if (va == 0x4AA0F0 && k % 5 == 0) Wr(0x1536024, Rd(0x1536024) + 1);
+  // The walk's dlight counts beyond its 32 dlights (for its bits) cut to
+  // them for the brush models' dlights, which read them again.
+  if (va == 0x4AA0F0 && int32_t(Rd(0x1536474)) > 40) Wr(0x1536474, Rd(0x1536474) & 31);
   if (va == 0x427CB0)
     for (uint32_t i = 0; i < 9; i++) WrF(c.ecx + 4 * i, float(int((k * 13 + i * 7) % 9) - 4) * 0.375f);
-  const uint32_t entry = k % 4 ? kModelCache + k % 8 * 0x1C8 + (k % 5 ? 0 : k * 37 % 0x1B0) : 0;
-  if (va == 0x4DA330 && entry) Wr(entry + 8, k % 64);
-  if (va == 0x4DA420) Wr(r.args[2], k * 0x01020304u);
+  if (va == 0x4AA8D0) {
+    static const uint32_t kIntensity[] = {0x3F000000, 0x3F800000, 0x40000000, 0x3F800000, 0,
+                                          0xBE800000, 0x40400000, 0x7FC00000, 0x7149F2CA, 0x3F400000,
+                                          0x3DCCCCCD, 0x80000000, 0x3F800001};
+    recomp::x87::LoadF32(c.fpu, kIntensity[(k * 7 + c.edx / 8) % 13]);
+  }
+  if (va == 0x4AACB0) {
+    const uint32_t info = Rd(c.edi + 0x2B0);
+    uint32_t m = g_mem.IsCommitted(info & ~0xFFFu) && g_mem.IsCommitted((info + 0x248) & ~0xFFFu) ? Rd(info + 0xB8) : 0;
+    if (m > 12) m = 0;
+    for (uint32_t i = 0; i < m; i++)
+      if (!IsLight(Rd(info + 0x184 + 4 * i))) m = 0;
+    const uint32_t n = m ? (k * 5 + m) % 14 : 0;
+    static const uint32_t kValue[] = {0x3F800000, 0x3F000000, 0x40000000, 0, 0x7FC00000, 0xBF800000, 0x3E800000};
+    WrF(r.args[2], k % 4 ? float(k % 3) * 0.5f : std::bit_cast<float>(kValue[k % 7]));
+    for (uint32_t i = 0; i < n; i++) {
+      Wr(r.args[1] + 4 * i, kValue[(k + i) % 7]);
+      Wr(r.args[3] + 4 * i, Rd(info + 0x184 + 4 * ((k + 3 * i) % m)));
+    }
+    c.eax = n;
+  }
   if (va == 0x4771B0)
     for (uint32_t i = 0; i < g_mem.read<uint8_t>(r.args[0] + 0x17); i++) Wr(c.edx + 4 * i, g_bone_bounds + 24 * ((k + i) % 8));
   // A composite model's surfaces: none without submodels, now and then
@@ -252,10 +290,11 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
   // A portal surface now and then off the screen (EAX 1).
   c.eax = va == 0x4CA8D0   ? k % 4 == 0
           : va == 0x477290 ? g_pairs
-          : va == 0x4DA330 ? entry
+          : va == 0x4AACB0 ? c.eax
                            : junk;
   c.ecx = junk ^ 1;
-  c.edx = junk ^ 2;
+  // A light's intensity keeps EDX (its light), which its caller reads.
+  if (va != 0x4AA8D0) c.edx = junk ^ 2;
   c.esp += 4;
 }
 void StubFor(Ctx& c, uint32_t va) {
@@ -335,6 +374,16 @@ void f_004DA9F0_lifted(Ctx& c);
 void f_00506070_lifted(Ctx& c);
 void f_00506310_lifted(Ctx& c);
 void f_005065E0_lifted(Ctx& c);
+void f_004AA490_lifted(Ctx& c);
+void f_004AB490_lifted(Ctx& c);
+void f_004ABD30_lifted(Ctx& c);
+void f_004ABDC0_lifted(Ctx& c);
+void f_004ABEF0_lifted(Ctx& c);
+void f_004DA420_lifted(Ctx& c);
+void f_004DA330_lifted(Ctx& c);
+void f_004DA220_lifted(Ctx& c);
+void f_004DA1B0_lifted(Ctx& c);
+void f_004DA0F0_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_native.cpp renames
 // its entries).
 void f_004D68E0(Ctx& c) { f_004D68E0_lifted(c); }
@@ -403,6 +452,16 @@ void f_004DA9F0(Ctx& c) { f_004DA9F0_lifted(c); }
 void f_00506070(Ctx& c) { f_00506070_lifted(c); }
 void f_00506310(Ctx& c) { f_00506310_lifted(c); }
 void f_005065E0(Ctx& c) { f_005065E0_lifted(c); }
+void f_004AA490(Ctx& c) { f_004AA490_lifted(c); }
+void f_004AB490(Ctx& c) { f_004AB490_lifted(c); }
+void f_004ABD30(Ctx& c) { f_004ABD30_lifted(c); }
+void f_004ABDC0(Ctx& c) { f_004ABDC0_lifted(c); }
+void f_004ABEF0(Ctx& c) { f_004ABEF0_lifted(c); }
+void f_004DA420(Ctx& c) { f_004DA420_lifted(c); }
+void f_004DA330(Ctx& c) { f_004DA330_lifted(c); }
+void f_004DA220(Ctx& c) { f_004DA220_lifted(c); }
+void f_004DA1B0(Ctx& c) { f_004DA1B0_lifted(c); }
+void f_004DA0F0(Ctx& c) { f_004DA0F0_lifted(c); }
 // unzCloseCurrentFile and tolower, native in the game (src/unzip.cpp,
 // src/crt.cpp): here only lifted code the stubs stand for reaches them.
 void f_0049EAA0_lifted(Ctx& c);
@@ -417,8 +476,6 @@ void f_00508940(Ctx& c) { f_00508940_lifted(c); }
 // lifted renderer code reaches them.
 void f_0041CD60_lifted(Ctx& c);
 void f_0041CD60(Ctx& c) { f_0041CD60_lifted(c); }
-void f_004AA0F0_lifted(Ctx& c);
-void f_004AA0F0(Ctx& c) { f_004AA0F0_lifted(c); }
 void f_004C9250_lifted(Ctx& c);
 void f_004C9250(Ctx& c) { f_004C9250_lifted(c); }
 void f_004C9580_lifted(Ctx& c);
@@ -501,6 +558,16 @@ void n_004DA9F0(Ctx& c);
 void n_00506070(Ctx& c);
 void n_00506310(Ctx& c);
 void n_005065E0(Ctx& c);
+void n_004AA490(Ctx& c);
+void n_004AB490(Ctx& c);
+void n_004ABD30(Ctx& c);
+void n_004ABDC0(Ctx& c);
+void n_004ABEF0(Ctx& c);
+void n_004DA420(Ctx& c);
+void n_004DA330(Ctx& c);
+void n_004DA220(Ctx& c);
+void n_004DA1B0(Ctx& c);
+void n_004DA0F0(Ctx& c);
 // The stubs.
 #define COD1_STUB(va) \
   void f_##va(Ctx& c) { StubFor(c, 0x##va); }
@@ -509,10 +576,7 @@ COD1_STUB(004AD630)
 COD1_STUB(004AD760)
 COD1_STUB(004CA8D0)
 COD1_STUB(004AC890)
-COD1_STUB(004AA490)
 COD1_STUB(00427CB0)
-COD1_STUB(004ABEF0)
-COD1_STUB(004ABDC0)
 COD1_STUB(00440940)
 COD1_STUB(004AD8F0)
 COD1_STUB(00477290)
@@ -520,10 +584,13 @@ COD1_STUB(00477340)
 COD1_STUB(00476510)
 COD1_STUB(005068B0)
 COD1_STUB(00447CA0)
-COD1_STUB(004DA330)
-COD1_STUB(004DA420)
 COD1_STUB(004771B0)
 COD1_STUB(0040F4E0)
+COD1_STUB(004AA0F0)
+COD1_STUB(004AA8D0)
+COD1_STUB(004AA5C0)
+COD1_STUB(004AA970)
+COD1_STUB(004AACB0)
 COD1_STUB(0051D45A)
 COD1_STUB(00427E80)
 COD1_STUB(0050A2B0)
@@ -690,6 +757,11 @@ const Entry kEntries[] = {
     COD1_ENTRY(00480DD0, "level of detail"),   COD1_ENTRY(004DA9F0, "surface cache entry"),
     COD1_ENTRY(00506070, "composite surface"), COD1_ENTRY(00506310, "bone boxes"),
     COD1_ENTRY(005065E0, "bone axes"),
+    COD1_ENTRY(004AA490, "brush model dlights"), COD1_ENTRY(004AB490, "entity lights"),
+    COD1_ENTRY(004ABD30, "grid lights"),         COD1_ENTRY(004ABDC0, "grid lighting"),
+    COD1_ENTRY(004ABEF0, "entity lighting"),     COD1_ENTRY(004DA420, "vertex lighting"),
+    COD1_ENTRY(004DA330, "cache block"),         COD1_ENTRY(004DA220, "cache split"),
+    COD1_ENTRY(004DA1B0, "cache eviction"),      COD1_ENTRY(004DA0F0, "cache free"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -762,10 +834,12 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   // The models' cache and its counters, for whatever reaches the
   // entities' surfaces, and the heap of the cache entries' vertices.
   if (k.fn == 0x4CB0C0 || k.fn == 0x4CB210 || k.fn == 0x4CB270 || k.fn == 0x4DEEC0 ||
-      k.fn == 0x4CAB80 || k.fn == 0x4CAFC0 || k.fn == 0x4FA790 || k.fn == 0x4DA9F0) {
+      k.fn == 0x4CAB80 || k.fn == 0x4CAFC0 || k.fn == 0x4FA790 || k.fn == 0x4DA9F0 ||
+      k.fn == 0x4DA330 || k.fn == 0x4DA220 || k.fn == 0x4DA1B0 || k.fn == 0x4DA0F0) {
     w.push_back({kModelCache, 8 * 0x1C8});
-    w.push_back({kModelCacheHead, 0x10});
+    w.push_back({kModelCache + 0xE400, 0x38});
     w.push_back({kHeap, 0x10000});
+    w.push_back({kVertexBuffer, kVertexBufferSize});
   }
   Wr(esp, 0xDEAD0000);
   for (size_t i = 0; i < k.args.size(); i++) Wr(esp + 4 + 4 * uint32_t(i), k.args[i]);
@@ -806,7 +880,7 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   const bool eax = k.fn == 0x4D68E0 || k.fn == 0x4C8D50 || k.fn == 0x4C9070 || k.fn == 0x4D7DF0 ||
                    k.fn == 0x4D7E70 || k.fn == 0x4D7ED0 || k.fn == 0x4D7F30 || k.fn == 0x4D6BC0 ||
                    k.fn == 0x4D80F0 || k.fn == 0x4CA240 || k.fn == 0x4CAB80 || k.fn == 0x480DD0 ||
-                   k.fn == 0x4DA9F0;
+                   k.fn == 0x4DA9F0 || k.fn == 0x4DA330 || k.fn == 0x4DA220 || k.fn == 0x4DA1B0;
   // A result on the x87 stack: its register.
   const bool st0 = k.fn == 0x4D6880 || k.fn == 0x4DF2D0;
   bool ok = cn.esp == cl.esp && cn.ebp == cl.ebp && cn.ebx == cl.ebx && cn.esi == cl.esi &&
@@ -2763,6 +2837,10 @@ std::vector<Window> WorldWalkScene(Arena& a, std::mt19937& g, const World& base)
   Wr(world + 0x144, nw);
   Wr(world + 0x148, wm);
   EntityModels(a, g, models, nm, false, false);
+  // The world's draw surfaces go on from its count (near the limit now and
+  // then) into room of their own: the world's small buffer, which the
+  // cases before may have filled, would take them over later allocations.
+  Wr(kNumDrawSurfs + 4, a.Alloc(0x1000 * 8) - Rd(kNumDrawSurfs) * 8);
   std::vector<Window> win = {{0x11BEA00, 0x224}, {0x1535900, 0xB80}, {kNumDrawSurfs, 8}, {0x564550, 4}, {kHeap, 0x10000}};
   EntitySlots(a, g, win, true, models + 0x2B8 * nm);
   win.push_back(a.All());
@@ -2809,6 +2887,244 @@ void ModelSurface(Arena& a, std::mt19937& g, uint32_t s) {
   Wr(s + 0x1C, xyz);
 }
 
+// A spot angle whose table position ((angle + 90) x 1024 / 360, stored)
+// is a half of an even integer, where the rounding's 2^-30 decides the
+// index (searched; else any angle).
+float TieAngle(std::mt19937& g) {
+  const float k = std::bit_cast<float>(0x40360B61u);
+  for (int t = 0; t < 32; t++) {
+    const float target = float(2 * (g() % 256)) + 0.5f, a = float(double(target) / k - 90.0);
+    for (float c : {a, std::nextafter(a, -INFINITY), std::nextafter(a, INFINITY)})
+      if (float(double(float(double(c) + 90.0)) * double(k)) == target) return c;
+  }
+  return Uniform(g, 0, 90);
+}
+
+// A light (0x88 bytes): a direction (+0x50 0, now and then -0) or a point
+// (+0x50 not 0, now and then a NaN) with a finite origin, a spot now and
+// then (+0x70 not 180: an angle, now and then special, and a spot exponent
+// +0x6C of 0, below, small or NaN, never far above 0: the lighting raises
+// to it by repeated products); types 0, 1, 2 and 8; intensities (+0x10)
+// now and then negative or NaN; colours and attenuations with special
+// values now and then.
+void NewLight(std::mt19937& g, uint32_t l, bool point) {
+  for (uint32_t k = 0; k < 0x88; k += 4) WrF(l + k, Value(g, -2, 2, 32));
+  Wr(l, uint32_t(Pick(g, {0, 1, 2, 8, 8, 1})));
+  WrF(l + 0x10, g() % 8 ? Uniform(g, 0, 2) : Value(g, -2, 2, 512));
+  for (uint32_t k = 0; k < 0x20; k += 4) WrF(l + 0x14 + k, g() % 8 ? Value(g, -1, 2, 16) : 0.0f);
+  float v[3];
+  Normal(g, v);
+  if (point)
+    for (float& x : v) x = Uniform(g, -128, 128);
+  else if (g() % 16 == 0)
+    v[g() % 3] = Value(g, -1, 1, 1024);
+  WrVec(l + 0x44, v);
+  WrF(l + 0x50, point ? (g() % 8 ? 1.0f : Value(g, -2, 2, 1024)) : g() % 8 ? 0.0f : -0.0f);
+  Normal(g, v);
+  WrVec(l + 0x54, v);
+  for (uint32_t k = 0x60; k < 0x6C; k += 4) WrF(l + k, g() % 8 ? Uniform(g, 0, 0.01f) : Value(g, 0, 1, 256));
+  WrF(l + 0x6C, std::bit_cast<float>(uint32_t(Pick(g, {0, 0x3F800000, 0x40000000, 0x40600000, int32_t(0xBF800000),
+                                                        0x3F000000, 0x40C00000, 0x7FC00000, int32_t(0xFF800000)}))));
+  WrF(l + 0x70, g() % 2 ? 180.0f : g() % 8 ? (g() % 4 ? Uniform(g, 0, 90) : TieAngle(g)) : Value(g, -360, 360, 1024));
+  if (g() % 32 == 0) WrF(l + 0x54 + 4 * (g() % 3), NAN);
+  WrF(l + 0x74, Uniform(g, 0, 256));
+}
+
+// Whether a model surface's vertices (+0x12 of them at +0x1C) are free of
+// infinities and NaNs: through finite axes they stay off NaNs, and so does
+// a point light's direction from them (the CRT's square root of a NaN, under
+// the normalisation 0x426710, reports through the Windows API).
+bool FinitePositions(uint32_t s) {
+  for (uint32_t i = 0; i < 3 * g_mem.read<uint16_t>(s + 0x12); i++)
+    if (!std::isfinite(g_mem.read<float>(Rd(s + 0x1C) + 4 * i))) return false;
+  return true;
+}
+bool FiniteAxes(uint32_t e) {
+  for (uint32_t k = 0x1C; k < 0x50; k += 4)
+    if (!std::isfinite(g_mem.read<float>(e + k))) return false;
+  return true;
+}
+// An entity whose model's surfaces through its axes or its +0x2B0's stay
+// finite: point lights may light it.
+bool PointLit(uint32_t e) {
+  if (!FiniteAxes(e) || !FiniteAxes(Rd(e + 0x2B0))) return false;
+  for (uint32_t l = 0; l < 4; l++) {
+    const uint32_t list = Rd(Rd(e + 0x98) + 0xC + 4 * l);
+    for (uint32_t j = 0; j < Rd(list); j++)
+      if (!FinitePositions(list + 4 + 0x30 * j)) return false;
+  }
+  return true;
+}
+uint32_t PickLight(std::mt19937& g, bool point) { return g_lights + 0x88 * (g() % (point ? kNumLights : kNumDirections)); }
+// An entity's lights (+0xCC, +0xD0: light, value) directions only.
+void Directional(std::mt19937& g, uint32_t e) {
+  for (uint32_t i = 0; i < 8; i++)
+    if (g_mem.read<float>(Rd(e + 0xD0 + 8 * i) + 0x50) != 0) Wr(e + 0xD0 + 8 * i, PickLight(g, false));
+}
+
+// The lighting of n entities at ents (EntityModels'): the case's lights;
+// the world's lighting (a world of its own but a walk's): ambient +0xD8, sun colour +0xF8 and intensity +0x108 (now and
+// then 0 or NaN), +0x98 its grid (a walk's its BSP), +0x118 lighting now and then
+// off; the sun's direction 0x15364B0, the light limit 0x15364BC, the sun's
+// mode 0x15364C0, the overbright shift 0x1536298, the refdef's dlight count
+// (0x1536478; the dlights directions unless every entity is point lit; a
+// walk's own 32 kept), the spot cosines 0x1544530 and the cvars. Per
+// entity: lit (+0xA1) now and then, a lighting origin (+0xC), its lights
+// (+0xCC, +0xD0, sun value +0x110), and the lights its +0x2B0 gives (count
+// +0xB8 up to 12, the sun's value +0xBC, values +0xC0, lights +0x184; up
+// to 6 in its own, for a static model, whose +0x2B0 is itself once added).
+void Lighting(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dlights) {
+  g_lights = a.Alloc(kNumLights * 0x88);
+  for (uint32_t i = 0; i < kNumLights; i++) NewLight(g, g_lights + 0x88 * i, i >= kNumDirections);
+  if (dlights) Wr(kWorld, a.Alloc(0x150));
+  const uint32_t w = Rd(kWorld);
+  if (dlights) Wr(w + 0x98, g() % 4 ? 1 : 0);
+  for (uint32_t k = 0; k < 0x10; k += 4) {
+    WrF(w + 0xD8 + k, Value(g, 0, 1, 32));
+    WrF(w + 0xF8 + k, Value(g, 0, 1, 32));
+  }
+  WrF(w + 0x108, g() % 4 ? Uniform(g, 0, 2) : float(Pick(g, {0, 0, -1, 2})));
+  if (g() % 16 == 0) Wr(w + 0x108, 0x7FC00000);
+  Wr(w + 0x114, g());
+  Wr(w + 0x118, g() % 8 != 0);
+  float v[3];
+  Normal(g, v);
+  WrVec(0x15364B0, v);
+  Wr(0x15364BC, uint32_t(Pick(g, {0, 2, 4, 6, 8, 8, -1})));
+  Wr(0x15364C0, uint32_t(Pick(g, {0, 1, 2, 2})));
+  Wr(0x1536298, uint32_t(Pick(g, {0, 0, 1, 2, 31})));
+  for (uint32_t i = 0; i < 0x400; i++)
+    WrF(0x1544530 + 4 * i, g() % 16 ? Uniform(g, -1, 1) : std::bit_cast<float>(uint32_t(Pick(g, {int32_t(0xBF800000), 0, 0x3F800000, 0x7FC00000}))));
+  auto cvar = [&](uint32_t va, uint32_t i, float f) {
+    const uint32_t c = a.Alloc(0x24);
+    Wr(va, c);
+    Wr(c + 0x20, i);
+    WrF(c + 0x1C, f);
+  };
+  cvar(0x15344CC, uint32_t(Pick(g, {0, 0, 0, 1, -1})), 0);
+  cvar(0x1534578, 0, g() % 2 ? 0.0f : std::bit_cast<float>(uint32_t(Pick(g, {0x3E800000, int32_t(0xBF800000), 0x7FC00000, 0x40000000, 0x3F000000, 0x3F800000}))));
+  cvar(0x15346C4, g() % 4 == 0, 0);
+  bool all = true;
+  for (uint32_t i = 0; i < n; i++) {
+    const uint32_t e = ents + 0x2B8 * i, info = Rd(e + 0x2B0);
+    const bool point = PointLit(e);
+    all = all && point;
+    g_mem.write<uint8_t>(e + 0xA1, g() % 4 == 0);
+    for (uint32_t k = 0; k < 0xC; k += 4) WrF(e + 0xC + k, Value(g, -128, 128, 32));
+    const uint32_t lit = g() % 8 ? g() % 9 : uint32_t(Pick(g, {-1, INT32_MIN}));
+    Wr(e + 0xCC, lit);
+    for (uint32_t j = 0; j < 8; j++) {
+      Wr(e + 0xD0 + 8 * j, PickLight(g, point));
+      WrF(e + 0xD4 + 8 * j, Value(g, 0, 2, 64));
+    }
+    WrF(e + 0x110, Value(g, 0, 1, 64));
+    Wr(e + 0xB8, g() % 7);
+    WrF(e + 0xBC, Value(g, 0, 1, 64));
+    for (uint32_t j = 0; j < 6; j++) Wr(e + 0x184 + 4 * j, PickLight(g, point));
+    Wr(info + 0xB8, g() % 13);
+    WrF(info + 0xBC, g() % 4 ? Uniform(g, 0, 1) : Value(g, 0, 1, 1024));
+    for (uint32_t j = 0; j < 12; j++) {
+      WrF(info + 0xC0 + 4 * j, g() % 4 ? 1.0f : Value(g, 0, 2, 256));
+      Wr(info + 0x184 + 4 * j, PickLight(g, point));
+    }
+  }
+  if (dlights) {
+    Wr(0x1536478, g() % 8 ? g() % 5 : uint32_t(Pick(g, {0, -1})));
+    for (uint32_t i = 0; i < 4; i++) {
+      const uint32_t dl = Rd(kRefdef) + 0x88 * i;
+      for (uint32_t k = 0x60; k < 0x6C; k += 4) WrF(dl + k, Uniform(g, 0, 0.01f));
+      WrF(dl + 0x6C, float(g() % 4));
+      if (!all || g() % 2) WrF(dl + 0x50, 0);
+    }
+  } else {
+    Wr(0x1536478, g() % 33);
+  }
+}
+
+// The model cache (0x11BEC28) in a state the game reaches, over its first
+// eight entries: each wholly free (on the list of level 0) or in use (on
+// the list in use, in random order, the oldest now and then drawn this
+// frame), split at random into free blocks (on their levels' lists, in
+// random order) and blocks in use, each owned by one of the n entities'
+// +0x2B0 (or a spare) at a slot 0-15, of a surface of random vertices. The
+// entities' slots (+0x248) none or within an entry in use. The nodes of
+// the entries' trees 0x4DA0F0 may be handed (entry, node, shift).
+// node at the end of the list at head (next +0, previous +4).
+void ListAppend(uint32_t head, uint32_t node) {
+  Wr(node, head);
+  Wr(node + 4, Rd(head + 4));
+  Wr(head + 4, node);
+  Wr(Rd(node + 4), node);
+}
+struct CacheNode {
+  uint32_t entry, node, shift;
+};
+std::vector<CacheNode> g_cache_nodes;
+std::vector<uint32_t> g_cache_used;
+void ModelCache(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n) {
+  for (uint32_t l = 0; l < 6; l++) {
+    const uint32_t head = kModelCache + 0xE400 + 8 * l;
+    Wr(head, head);
+    Wr(head + 4, head);
+  }
+  Wr(kModelCache + 0xE430, g());
+  Wr(kModelCache + 0xE434, g());
+  const uint32_t spare = a.Alloc(0x248 + 4 * 16), surf = a.Alloc(0x14);
+  g_mem.write<uint16_t>(surf + 0x12, uint16_t(g()));
+  std::vector<uint32_t> free[5];
+  g_cache_nodes.clear();
+  g_cache_used.clear();
+  for (uint32_t k = 0; k < 8; k++) {
+    const uint32_t entry = kModelCache + 0x1C8 * k;
+    for (uint32_t i = 0; i < 0x1C8; i += 4) Wr(entry + i, g());
+    for (uint32_t i = 0; i < 31; i++) {
+      g_mem.write<uint16_t>(entry + 0xC + 4 * i, 0);
+      g_mem.write<uint8_t>(entry + 0xE + 4 * i, 0);
+    }
+    if (g() % 4 == 0) {
+      free[0].push_back(entry + 0x88);
+      continue;
+    }
+    g_cache_used.push_back(entry);
+    Wr(entry + 8, g() % 4 ? g() : Rd(0x1535A24));
+    // Each node free, in use or split (the root never free).
+    auto node = [&](auto& self, uint32_t i, uint32_t depth) -> void {
+      g_cache_nodes.push_back({entry, i, 4 - depth});
+      const uint32_t first = ((i + 1) << (4 - depth)) - 16, block = entry + 0x88 + 20 * first;
+      const uint32_t r = g() % 8;
+      if (depth && r < 3) {
+        free[depth].push_back(block);
+      } else if (depth == 4 || r < 5) {
+        g_mem.write<uint8_t>(entry + 0xE + 4 * i, 1);
+        for (int32_t j = int32_t(i); j >= 0; j = (j - 1) >> 1) {
+          const uint32_t count = entry + 0xC + 4 * uint32_t(j);
+          g_mem.write<uint16_t>(count, uint16_t(g_mem.read<uint16_t>(count) + (512u >> depth)));
+        }
+        const uint32_t owner = n && g() % 4 ? Rd(ents + 0x2B8 * (g() % n) + 0x2B0) : spare;
+        Wr(block + 4, surf);
+        Wr(block + 8, (k * 16 + first) * 32);
+        Wr(block + 0xC, g() % 16);
+        Wr(block + 0x10, owner);
+      } else {
+        self(self, 2 * i + 1, depth + 1);
+        self(self, 2 * i + 2, depth + 1);
+      }
+    };
+    node(node, 0, 0);
+  }
+  for (uint32_t l = 0; l < 5; l++) {
+    std::shuffle(free[l].begin(), free[l].end(), g);
+    for (uint32_t b : free[l]) ListAppend(kModelCache + 0xE400 + 8 * l, b);
+  }
+  std::shuffle(g_cache_used.begin(), g_cache_used.end(), g);
+  for (uint32_t entry : g_cache_used) ListAppend(kModelCacheHead, entry);
+  for (uint32_t i = 0; i < n; i++) {
+    const uint32_t info = Rd(ents + 0x2B8 * i + 0x2B0);
+    for (uint32_t q = 0; q < 16; q++)
+      Wr(info + 0x248 + 4 * q, g() % 2 || g_cache_used.empty() ? 0 : g_cache_used[g() % g_cache_used.size()] + g() % 0x1C8);
+  }
+}
+
 // What the entities' surfaces read, for n entities at ents (any types):
 // the models 0-7 (0x15364F8; those of a walk keep their first 0x50 bytes
 // and bounds): a brush model (+0x4C: bounds, surface references +0x18,
@@ -2827,13 +3143,14 @@ void ModelSurface(Arena& a, std::mt19937& g, uint32_t s) {
 // negative); by level 0-2 at +0xC a count and 0x30-byte surfaces: fog +4,
 // shader +8, now and then a second shader +0xC, 16-bit triangle and
 // vertex counts +0x10 and +0x12 (now and then about the limits of 32 and
-// 0x200), texture coordinates +0x14, normals +0x18, positions +0x1C); a
-// cache (+0x2B0, slots from +0x248: none or a byte of one of the cache's
-// first eight entries); the callback +0x94 and +0xA0 now and then. The
-// shaders' stages (+0x154: rgbGen +0x664, alphaGen +0x67C, colour +0x680)
-// and +0x58 now and then 5.0; the cache's entries and head linked among
-// themselves; the cvars of the entity types and the cache's (0x1534680),
-// its vertex buffer and mode (0x1549558); a finite view origin and the
+// 0x200), texture coordinates +0x14, normals +0x18, positions +0x1C); its
+// +0x2B0 (finite axes and origin from +0x1C, cache slots from +0x248:
+// none or a byte of an entry in use); the callback +0x94 and +0xA0 now
+// and then. The shaders' stages (+0x154: rgbGen +0x664, alphaGen +0x67C,
+// colour +0x680) and +0x58 now and then 5.0; the model cache
+// (ModelCache); the cvars of the entity types and the cache's
+// (0x1534680), its vertex buffer and mode (0x1549558); the entities'
+// lighting (Lighting); a finite view origin and the
 // level-of-detail globals (0x1536170, 0x1536174, 0xA8F800-0xA8F848); the
 // bones' bounds; when asked, dlights (count 0x1536474, 0x153647C) and the
 // shaders of the handles (as SceneShaders'); 0x1536498 mostly in range,
@@ -2975,18 +3292,9 @@ void EntityModels(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dli
     Wr(e + 0x98, m);
     const uint32_t cache = a.Alloc(0x248 + 4 * 16);
     for (uint32_t q = 0x1C; q < 0x50; q += 4) WrF(cache + q, q < 0x40 ? Uniform(g, -2, 2) : Uniform(g, -4096, 4096));
-    for (uint32_t q = 0; q < 16; q++)
-      Wr(cache + 0x248 + 4 * q, g() % 2 ? 0 : kModelCache + g() % 8 * 0x1C8 + g() % 0x1C8);
     Wr(e + 0x2B0, cache);
   }
-  auto link = [&] { return g() % 9 == 8 ? kModelCacheHead : kModelCache + g() % 8 * 0x1C8; };
-  for (uint32_t k = 0; k < 8; k++) {
-    Wr(kModelCache + k * 0x1C8, link());
-    Wr(kModelCache + k * 0x1C8 + 4, link());
-    Wr(kModelCache + k * 0x1C8 + 8, g());
-  }
-  Wr(kModelCacheHead, link());
-  Wr(kModelCacheHead + 4, link());
+  ModelCache(a, g, ents, n);
   auto cvar = [&](uint32_t va, uint32_t v) {
     const uint32_t c = a.Alloc(0x24);
     Wr(va, c);
@@ -3015,7 +3323,7 @@ void EntityModels(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dli
   }
   cvar(0x1534680, g() % 8 != 0);
   Wr(0x1549558, uint32_t(Pick(g, {12, 13, 14, 15, 12, 15, 11, 16})));
-  Wr(0x154955C, a.Alloc(24 * (64 + 0x201)));
+  Wr(0x154955C, kVertexBuffer);
   Wr(0x1549560, g());
   Wr(0x1536294, g());
   Wr(0x1530280, g() % 2 ? 0 : g());
@@ -3027,6 +3335,7 @@ void EntityModels(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dli
   Wr(0x1536498, g() % 4 ? g() % 0x2001 : uint32_t(Pick(g, {0x1FFA, 0x1FFD, int32_t(g() | 0x80000000u)})));
   const uint32_t count = Rd(0x1536498), es = a.Alloc(16 * (int32_t(count) < 0 ? 0x30010 : 0x400));
   Wr(0x153649C, es - 16 * count);
+  Lighting(a, g, ents, n, dlights);
 }
 
 // A viewport (now and then empty) and fovs (with a world finite and in
@@ -3102,6 +3411,7 @@ void ModelSurfaceCase(Arena& a, std::mt19937& g, Stats& s, uint32_t e, uint32_t 
           WrVec(Rd(surf + 0x18) + (row ? 12 : 0), cp);
         }
       }
+      if (!FinitePositions(surf) || !FiniteAxes(ent)) Directional(g, e);
       win.push_back(a.All());
       Run({0x4DA9F0, ent, surf, rnd[2], rnd[3], rnd[4], rnd[5], {uint32_t(g() % 64), e, inv}}, win, g, s,
           "random");
@@ -3174,6 +3484,7 @@ void EntityCase(Arena& a, std::mt19937& g, Stats& s) {
   }
   Wr(kNumEntities, n);
   Wr(kEntities, ents);
+  Wr(0x1535A24, g());
   EntityModels(a, g, ents, m, true, false);
   const uint32_t surfs = a.Alloc(0x100 * 8);
   Wr(kNumDrawSurfs, g() % 8 ? g() % 4 : uint32_t(Pick(g, {0xFFFF, 0x10000, -1})));
@@ -3183,7 +3494,6 @@ void EntityCase(Arena& a, std::mt19937& g, Stats& s) {
   Wr(kNumDrawSurfs + 4, surfs + 0x400 - Rd(kNumDrawSurfs) * 8);
   Wr(0x1549548, g());
   Wr(0x1549554, g());
-  Wr(0x1535A24, g());
   std::vector<Window> win = {{0x1536000, 0x500}, {0x1535D60, 8}, a.All()};
   const uint32_t r = g() % 11;
   if (r == 0 || !m) {
@@ -3298,6 +3608,275 @@ void SceneCase(Arena& a, std::mt19937& g, const World& base, Stats& s) {
   }
 }
 
+// ---- the entity lighting and the model cache -------------------------------------
+
+// A refdef (+0x160 the dlight count, +0x164 the dlights) of up to 20 of
+// the case's lights, now and then exactly twice their radius from p.
+uint32_t LightRefdef(Arena& a, std::mt19937& g, uint32_t p) {
+  const uint32_t r = a.Alloc(0x168), n = g() % 8 ? g() % 21 : uint32_t(Pick(g, {-1, 0})), dl = a.Alloc(0x88 * 21);
+  for (uint32_t i = 0; i < 21; i++) {
+    std::memcpy(g_mem.ptr<uint8_t>(dl + 0x88 * i), g_mem.ptr<uint8_t>(PickLight(g, g() % 2)), 0x88);
+    const uint32_t d = dl + 0x88 * i;
+    if (g() % 4 == 0) {
+      const float radius = float(1 + g() % 8);
+      WrF(d + 0x74, radius);
+      for (uint32_t k = 0; k < 0xC; k += 4) WrF(d + 0x44 + k, g_mem.read<float>(p + k));
+      const uint32_t k = 4 * (g() % 3);
+      WrF(d + 0x44 + k, g_mem.read<float>(p + k) + 2 * radius * (g() % 2 ? 1 : -1) + float(Pick(g, {0, 0, 1, -1})) / 64);
+    } else if (g() % 4 == 0 && g_mem.read<float>(p) == 0 && g_mem.read<float>(p + 4) == 0 &&
+               g_mem.read<float>(p + 8) == 0) {
+      // From an origin at 0: z exactly twice the radius, x and y each
+      // about 0.3 of the reach's last bit squared, so that z + y + x is
+      // the reach and x + y + z an ulp more.
+      const float radius = Uniform(g, 1, 64);
+      const double reach = double(radius) * radius * 4, t = std::sqrt(std::ldexp(0.3, std::ilogb(reach) - 52));
+      const float l[3] = {-float(t), float(t), -2 * radius * (g() % 2 ? 1 : -1)};
+      WrF(d + 0x74, radius);
+      WrVec(d + 0x44, l);
+    } else if (g() % 4 == 0) {
+      // Near the reach, where the order of the squares' sum decides it
+      // (searched: the sums z + y + x and x + y + z on either side of the
+      // radius x 2 squared).
+      float o[3];
+      RdVec(p, o);
+      if (!std::isfinite(o[0]) || !std::isfinite(o[1]) || !std::isfinite(o[2])) continue;
+      const float radius = Uniform(g, 1, 64);
+      const double reach = double(radius) * radius * 4;
+      for (int t = 0; t < 64; t++) {
+        float l[3], q[3];
+        for (int k = 0; k < 2; k++) l[k] = o[k] - Uniform(g, -radius, radius);
+        for (int k = 0; k < 2; k++) q[k] = float(double(o[k]) - l[k]);
+        const double rest = reach - double(q[0]) * q[0] - double(q[1]) * q[1];
+        if (rest <= 0) continue;
+        l[2] = float(double(o[2]) - std::sqrt(rest));
+        for (int ulp = g() % 3; ulp; ulp--) l[2] = std::nextafter(l[2], g() % 2 ? INFINITY : -INFINITY);
+        q[2] = float(double(o[2]) - l[2]);
+        const double zyx = (double(q[2]) * q[2] + double(q[1]) * q[1]) + double(q[0]) * q[0];
+        const double xyz = (double(q[0]) * q[0] + double(q[1]) * q[1]) + double(q[2]) * q[2];
+        if ((reach < zyx) != (reach < xyz)) {
+          WrF(d + 0x74, radius);
+          WrVec(d + 0x44, l);
+          break;
+        }
+      }
+    }
+  }
+  Wr(r + 0x160, n);
+  Wr(r + 0x164, dl);
+  return r;
+}
+
+// The lighting and the model cache's entries alone, over one to three
+// entities of EntityModels: the dlights on a brush model (40 dlights of
+// local origins exactly the radius off the bounds now and then, which
+// are integral then); an entity's lights (the refdef's, one of the
+// case's or none; its lighting origin or a point; up to 20 lights, values
+// now and then 0 or NaN, the sun's value 0, -0 or NaN now and then), from
+// the grid and once both ways; a vertex's colour (a position, a normal
+// and its lights: directions and points whose dot products nearly
+// cancel, a spot straight along the direction with the table's cosine at
+// its angle equal to the spot's, or ulps off; ambient colours at the
+// rounding and clamping edges); a block of each size class, a split of
+// each level, the eviction and the frees of the trees' nodes.
+void LightCase(Arena& a, std::mt19937& g, Stats& s) {
+  a.Reset();
+  for (uint32_t va = 0x1536000; va < 0x1536500; va += 4) Wr(va, g());
+  const uint32_t m = 1 + g() % 3, ents = a.Alloc(m * 0x2B8 + 4);
+  for (uint32_t i = 0; i < m * 0x2B8; i += 4) Wr(ents + i, g());
+  for (uint32_t i = 0; i < m; i++) Wr(ents + 0x2B8 * i, uint32_t(Pick(g, {0, 1, 2})));
+  Wr(kNumEntities, m);
+  Wr(kEntities, ents);
+  Wr(0x1535A24, g() % 64);
+  EntityModels(a, g, ents, m, true, false);
+  const uint32_t e = ents + 0x2B8 * (g() % m);
+  std::vector<Window> win = {{0x1536000, 0x500}, {0x1535D60, 8}};
+  const uint32_t rnd[6] = {uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g())};
+  auto vec = [&](float lo, float hi, uint32_t special) {
+    const uint32_t v = a.Alloc(12);
+    for (uint32_t k = 0; k < 12; k += 4) WrF(v + k, Value(g, lo, hi, special));
+    return v;
+  };
+  auto refdef = [&](uint32_t p) { return g() % 4 == 0 ? 0 : g() % 2 ? 0x1536318 : LightRefdef(a, g, p); };
+  switch (g() % 10) {
+    case 0: {
+      const uint32_t model = Rd(Rd(kXModels + 4 * Rd(e + 8)) + 0x4C), n = g() % 4 ? g() % 41 : uint32_t(Pick(g, {-1, 0}));
+      const uint32_t dl = a.Alloc(0x88 * 40);
+      const bool exact = g() % 2;
+      if (exact)
+        for (uint32_t k = 0; k < 0xC; k += 4) {
+          WrF(model + k, float(int(g() % 64) - 32));
+          WrF(model + 0xC + k, g_mem.read<float>(model + k) + float(g() % 16));
+        }
+      for (uint32_t i = 0; i < 40; i++) {
+        const uint32_t d = dl + 0x88 * i;
+        const float r = exact ? float(g() % 8) / 2 : Value(g, 0, 64, 32);
+        WrF(d + 0x74, r);
+        for (uint32_t k = 0; k < 0xC; k += 4) {
+          const float lo = g_mem.read<float>(model + k), hi = g_mem.read<float>(model + 0xC + k);
+          const uint32_t q = g() % 8;
+          WrF(d + 0x78 + k, q == 0 ? hi + r : q == 1 ? lo - r : q == 2 ? std::nextafter(hi + r, INFINITY)
+                           : q == 3 ? std::nextafter(lo - r, -INFINITY) : exact ? Uniform(g, lo, hi) : Value(g, lo - r, hi + r, 32));
+        }
+      }
+      Wr(0x1536474, n);
+      Wr(kRefdef, dl);
+      Wr(0x1535D68, e);
+      win.push_back(a.All());
+      Run({0x4AA490, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {model}}, win, g, s, "random");
+      break;
+    }
+    case 1: {
+      const uint32_t o = g() % 2 ? e + 0xC : vec(-128, 128, 64), n = g() % 21;
+      if (o != e + 0xC && g() % 4 == 0)
+        for (uint32_t k = 0; k < 12; k += 4) WrF(o + k, 0);
+      const uint32_t values = a.Alloc(4 * 50), lights = a.Alloc(4 * 50);
+      for (uint32_t i = 0; i < 50; i++) {
+        WrF(values + 4 * i, g() % 4 ? 1.0f : g() % 2 ? Value(g, 0, 2, 256) : float(Pick(g, {0, 2})));
+        Wr(lights + 4 * i, PickLight(g, PointLit(e)));
+      }
+      const float sun = g() % 4 ? Uniform(g, 0, 1) : std::bit_cast<float>(uint32_t(Pick(g, {0, int32_t(0x80000000), 0x7FC00000, 0x3F800000})));
+      win.push_back(a.All());
+      Run({0x4AB490, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], e,
+           {refdef(o), o, n, values, std::bit_cast<uint32_t>(sun), lights, uint32_t(g() % 2)}}, win, g, s, "random");
+      break;
+    }
+    case 2: {
+      const uint32_t o = g() % 2 ? e + 0xC : vec(-128, 128, 64);
+      if (g() % 8 == 0) Wr(kWorld, 0);
+      win.push_back(a.All());
+      Run({0x4ABD30, e, rnd[1], rnd[2], rnd[3], o, rnd[5], {refdef(o), uint32_t(g() % 2)}}, win, g, s, "random");
+      break;
+    }
+    case 3:
+      g_mem.write<uint8_t>(e + 4, uint8_t(g()));
+      win.push_back(a.All());
+      Run({0x4ABDC0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], e, {refdef(e + 0xC)}}, win, g, s, "random");
+      break;
+    case 4:
+      win.push_back(a.All());
+      Run({0x4ABEF0, e, refdef(e + 0xC), rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    case 5: {
+      const uint32_t pos = vec(-64, 64, 16), nrm = a.Alloc(12), out = a.Alloc(4);
+      float n[3], p[3];
+      Normal(g, n);
+      WrVec(nrm, n);
+      Wr(out, g());
+      if (g() % 16 == 0) WrF(nrm + 4 * (g() % 3), Value(g, -1, 1, 1024));
+      if (!PointLit(e) || !std::isfinite(g_mem.read<float>(pos)) || !std::isfinite(g_mem.read<float>(pos + 4)) ||
+          !std::isfinite(g_mem.read<float>(pos + 8)))
+        Directional(g, e);
+      const uint32_t r = std::min(uint32_t(g() % 5), 3u);
+      if (r == 0 || r == 1) {
+        // A dot product that nearly cancels: a direction, or a point (the
+        // vertex at 0) along it, its first light; a point's spot straight
+        // along it with the table's cosine its own, or an ulp off.
+        const uint32_t l = a.Alloc(0x88);
+        std::memcpy(g_mem.ptr<uint8_t>(l), g_mem.ptr<uint8_t>(PickLight(g, r)), 0x88);
+        Cancel3(g, n, p);
+        WrVec(nrm, n);
+        // Colours along the normal large enough for a dot product's last
+        // bits to show.
+        for (uint32_t k = 0; k < 0x10; k += 4) {
+          WrF(l + 0x14 + k, g() % 2 ? 0.0f : Uniform(g, 0, 1));
+          WrF(l + 0x24 + k, std::ldexp(Uniform(g, 1, 2), 40 + int(g() % 40)) * (g() % 2 ? 1 : -1));
+        }
+        if (r) {
+          for (float& x : p) x = x * float(g() % 4 + 1);
+          for (uint32_t k = 0; k < 12; k += 4) WrF(pos + k, 0);
+          WrF(l + 0x50, 1.0f);
+          const uint32_t axis = g() % 3;
+          if (g() % 2) {
+            // A spot whose axis nearly cancels the direction, against a
+            // cosine of 0 at its angle; the normal along the direction.
+            WrVec(l + 0x54, n);
+            const double len = std::sqrt(double(p[0]) * p[0] + double(p[1]) * p[1] + double(p[2]) * p[2]);
+            for (uint32_t k = 0; k < 3; k++) WrF(nrm + 4 * k, float(p[k] / len));
+            for (uint32_t k = 0; k < 0x10; k += 4) WrF(l + 0x14 + k, std::ldexp(Uniform(g, 1, 2), 40 + int(g() % 20)));
+            const float angle = float(g() % 90);
+            WrF(l + 0x70, angle);
+            const float t = float(double(float(double(angle) + 90.0) * double(std::bit_cast<float>(0x40360B61u))));
+            WrF(0x1544530 + 4 * uint32_t(int32_t(std::nearbyint(double(t) + 0x1p-30)) & 0x3FF), 0.0f);
+          } else if (g() % 3 == 0) {
+            // Straight along an axis, a power of two away: the direction
+            // normalised exactly.
+            p[0] = p[1] = p[2] = 0;
+            p[axis] = float(1 << (g() % 4)) * (g() % 2 ? 1 : -1);
+            const float c = Uniform(g, -1, 1);
+            float sp[3] = {0, 0, 0};
+            sp[axis] = p[axis] > 0 ? c : -c;
+            WrVec(l + 0x54, sp);
+            const float angle = float(g() % 90);
+            WrF(l + 0x70, angle);
+            const float t = float(double(float(double(angle) + 90.0) * double(std::bit_cast<float>(0x40360B61u))));
+            const int32_t idx = int32_t(std::nearbyint(double(t) + 0x1p-30)) & 0x3FF;
+            WrF(0x1544530 + 4 * uint32_t(idx), g() % 2 ? c : std::nextafter(c, g() % 2 ? 2.0f : -2.0f));
+          } else {
+            WrF(l + 0x70, 180.0f);
+          }
+          WrVec(l + 0x44, p);
+        } else {
+          WrF(l + 0x50, 0.0f);
+          WrVec(l + 0x44, p);
+        }
+        if (r && g() % 3 == 0) {
+          // A value over a denormal attenuation: beyond a float, and
+          // channels of no colour (0 x the unrounded value, 0 x the
+          // stored infinity a NaN).
+          WrF(l + 0x60, std::bit_cast<float>(uint32_t(1 + g() % 0x1000)));
+          WrF(l + 0x64, 0);
+          WrF(l + 0x68, 0);
+          for (uint32_t k = 0; k < 0x10; k += 8) {
+            WrF(l + 0x14 + k, 0);
+            WrF(l + 0x24 + k, 0);
+          }
+        }
+        if (r && g() % 4 == 0) {
+          // The table's two positions about a tie different.
+          const float angle = TieAngle(g);
+          WrF(l + 0x70, angle);
+          const int32_t i = int32_t(std::floor(double(float(double(float(double(angle) + 90.0)) * double(std::bit_cast<float>(0x40360B61u))))));
+          WrF(0x1544530 + 4 * uint32_t(i & 0x3FF), 2.0f);
+          WrF(0x1544530 + 4 * uint32_t((i + 1) & 0x3FF), -2.0f);
+        }
+        Wr(e + 0xD0, l);
+        if (int32_t(Rd(e + 0xCC)) < 1) Wr(e + 0xCC, 1);
+      } else if (r == 2) {
+        // Ambient only, at the edges of rounding (n + 0.5) / 255 and of
+        // the clamps.
+        Wr(e + 0xCC, 0);
+        WrF(e + 0x110, 0);
+        for (uint32_t k = 0; k < 0x10; k += 4)
+          WrF(Rd(kWorld) + 0xD8 + k, g() % 4 ? (float(g() % 258) - 1.5f + float(g() % 2)) / 255.0f
+                                             : std::bit_cast<float>(uint32_t(Pick(g, {0, int32_t(0x80000000), 0x7FC00000, 0x3F800000, 0x40000000}))));
+        Wr(Rd(kWorld) + 0x118, 1);
+      }
+      win.push_back(a.All());
+      Run({0x4DA420, rnd[0], rnd[1], rnd[2], e, rnd[4], rnd[5], {pos, nrm, out}}, win, g, s, "random");
+      break;
+    }
+    case 6:
+      win.push_back(a.All());
+      Run({0x4DA330, rnd[0], rnd[1], rnd[2], kModelCache, rnd[4], rnd[5], {uint32_t(5 + g() % 5)}}, win, g, s, "random");
+      break;
+    case 7:
+      win.push_back(a.All());
+      Run({0x4DA220, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {kModelCache, uint32_t(g() % 5)}}, win, g, s, "random");
+      break;
+    case 8:
+      win.push_back(a.All());
+      Run({0x4DA1B0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], kModelCache, {}}, win, g, s, "random");
+      break;
+    default: {
+      if (g_cache_nodes.empty()) return;
+      const CacheNode& c = g_cache_nodes[g() % g_cache_nodes.size()];
+      win.push_back(a.All());
+      Run({0x4DA0F0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {kModelCache, c.entry, c.node, c.shift}}, win, g, s, "random");
+      break;
+    }
+  }
+}
+
 // ---- captures ------------------------------------------------------------------
 
 bool ReadCaptures(const char* path, std::vector<Record>& out) {
@@ -3374,6 +3953,7 @@ int main(int argc, char** argv) {
   g_mem.Commit(kArena, kArenaSize, recomp::Prot::RW);
   g_mem.Commit(kStack, kStackSize, recomp::Prot::RW);
   g_mem.Commit(kHeap, kHeapSize, recomp::Prot::RW);
+  g_mem.Commit(kVertexBuffer, (kVertexBufferSize + 0xFFF) & ~0xFFFu, recomp::Prot::RW);
   // R_CellForCamera reads its node through a null world (after ri.Error).
   g_mem.Commit(0, 0x1000, recomp::Prot::RW);
   Wr(kErrorPtr, kError);
@@ -3413,6 +3993,7 @@ int main(int argc, char** argv) {
   for (int i = 0; i < 40000; i++) WorldViewCase(a, g, s, i < 20000 ? 0 : i < 30000 ? 4 : 48);
   for (int i = 0; i < 40000; i++) PortalCase(a, g, s, i < 20000 ? 0 : 48);
   for (int i = 0; i < 40000; i++) EntityCase(a, g, s);
+  for (int i = 0; i < 30000; i++) LightCase(a, g, s);
   const int random = s.cases;
   for (int i = 2; i < argc; i++)
     if (!RunCaptures(argv[i], g, s)) return 1;

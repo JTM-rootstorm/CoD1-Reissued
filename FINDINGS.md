@@ -170,6 +170,9 @@ speed.
   With layer 8: 13 of 13 shared, 46 of 1629 in-level identical (46 of
   1640 between two runs of main); mean 1.872-1.952 ms (main) and
   1.872-1.890 ms, p95 2.6 and p99 2.7-2.9 for both; errors 3.
+  With layer 9: 13 of 13 shared, 47 of 1640 in-level identical (47
+  between two runs of main); mean 1.799-1.892 ms (main) and 1.735-1.739
+  ms, p95 2.4-2.6 and 2.4, p99 2.6-2.7 and 2.6; errors 3.
 - Layer 4, the cell walk (2026-11-09): a polygon's clip 0x4D7F30 (ECX
   plane; stack points, &count, out: distances z + x + y less the plane's,
   behind below -0.001, in front above 0.001; none in front: count 0, EAX
@@ -510,6 +513,156 @@ speed.
   The first run also missed the unordered tests of 0.0 (until NaN scales,
   distances and overrides), the sum orders (until cancelling values), the
   shader flag bit 0x400 and a 0x15343D8 above 2.
+- Layer 9, the entity lighting and the model cache (2026-11-15): the
+  dlights on a brush model 0x4AA490 (the model on the stack: the dlights
+  into the current orientation 0x153629C by 0x4AA0F0, then a bit for each
+  dlight (0x153647C, count 0x1536474 read again each time, the array
+  once) whose local origin +0x78 is no more than its radius +0x74 outside
+  the model's mins/maxs on any axis, each unrounded difference against
+  the radius; the bits kept in the argument's slot, then the current
+  entity's +0x9C and each referenced surface's (+8 of +0x18, count +0x1C
+  read again) +8 for types 0x18 and up), an entity's lights 0x4AB490
+  (EDI the refentity; stack refdef, origin, count, values, the sun's
+  value, lights, flag; +0xA0 cleared, then each of the refdef's dlights
+  (+0x164, count +0x160 read again) not further than twice its radius
+  (the radius squared x 4 below the squares summed z + y + x of the
+  distances stored as floats; NaN reaches) added with the value 1.0,
+  setting +0xA0, and the count's slot written; the world's sun (unless
+  the sun's value or the world's +0x108 is 0 (or -0; NaN goes on), or
+  0x15364C0 is 0) as one light at +0x19C (0x15364C0 at 1, or more lights
+  than 0x15364BC) of colours x 0.5 and 0.5, or two, +0x19C (x 0.75 and
+  0.25, pointing up) and +0x224 (the first's colour, intensity and
+  colour x -0.25 along the normal, pointing down), each with the sun's
+  value, whose slot then becomes 0. Each light whose value is not 0: a
+  negative or NaN intensity (+0x10) gives 1e19 (0x5F0AC723); else
+  0x4AA8D0's intensity (ESI the origin, EDX the light, ST0) x the value
+  stored, types 1 and 8 then plus 1 << 0x1536298 (FILD, stored) x the
+  world's +0x108 x the sun's slot, dropped below the cvar 0x1534578; kept
+  in an insertion order of eight on the stack (a search stops at the first
+  not greater, NaN too, so of equal values the later goes first; at eight
+  the last drops out).
+  +0xCC the count, +0xD0 the lights with their values, +0x110 the sun's
+  slot; the debug draw 0x4AA5C0 with the cvar 0x15344CC above 0; with the
+  flag 0x4AA970 (EBX; origin, the values and the order on the stack)
+  merges those beyond 0x15364BC), the grid's lights 0x4ABD30 (EAX the
+  refentity, ESI the origin; stack refdef, flag; with a world, its grid
+  +0x98 and the cvar 0x15346C4 clear, the light grid's lights at the
+  origin by 0x4AACB0 (values, the sun's value and up to 50 lights in its
+  0x19C-byte frame) through 0x4AB490; else +0xCC 0), an entity's lighting
+  from the grid 0x4ABDC0 (EDI; stack refdef; once, +0xA1: the lighting
+  origin +0xC with flag 0x80 at +4, else the origin +0x44, copied; then
+  with the cvar 0x15343D8 at 2 the sun's direction 0x15364B0 through the
+  inverse of the axes (0x427CB0) into +0xA4, each row's products added to
+  the stored sums) and an entity's lighting 0x4ABEF0 (EAX, ECX refdef;
+  with the cvar 0x15344CC below 0 0x4ABDC0, else once from the lights the
+  entity's +0x2B0 gives: count +0xB8, the sun's value +0xBC, values +0xC0,
+  lights +0x184; the lighting origin +0xC; the sun's direction as above).
+  A refentity's +0x2B0 is the cache's owner and, for a static model added
+  by the walk (RE_AddRefEntityToScene(ent, ent)), the static model itself:
+  its +0xB8-+0x248 hold its lights before the cache slots at +0x248. The
+  vertex lighting 0x4DA420 (EBX the refentity; stack position, normal,
+  colour out; without the world's +0x118 the identity light byte 0x1536294
+  and alpha 255; else the world's ambient +0xD8 plus its sun colour +0xF8
+  x +0x110 stored, then per light (+0xCC, +0xD0): a direction (+0x50 equal
+  to 0) its dot product with the normal summed z + x + y at the value
+  (FLD: an SNaN quietened); a point: its origin less the position stored
+  as floats in the frame, normalised by 0x426710 (the length in ST0), the
+  dot product z + y + x, the value over (l x +0x68 + +0x64) x l + +0x60
+  (unrounded, but stored for a spot); a spot (+0x70 not the bits of 180)
+  is 0 when its cosine (z + y + x with +0x54, stored) is not above the
+  table 0x1544530 at (angle + 90) x 1024 / 360 (FISTP + 2^-30, & 0x3FF;
+  NaN passes), else the stored value times the cosine as many times as it
+  takes an integer counter to reach +0x6C (once at least) while +0x6C is
+  above 0; a dot product below 0 is 0; each channel's sum (dot x +0x24 +
+  +0x14) x that + the channel stored; then x 255 stored, FISTP + 2^-30,
+  clamped to 0-255 (NaN 0)) and the model cache (0x11BEC28, 128 entries
+  of 0x1C8 bytes, five free lists by level at +0xE400, the entries in use
+  from the head +0xE428, oldest first; the counters +0xE430/+0xE434 of
+  layer 8): a block of a size class 0x4DA330 (EBX; stack the class
+  5-9 for 32-512 vertices: the last block of the list of level 9 - class,
+  0x4DA220 first when it is empty, unlinked; an entry wholly allocated
+  goes on the list in use; its tree node (16 + block index) >> (4 - level)
+  marked (byte +0xA + 4 x node) and 1 << class added to its 16-bit count
+  and its ancestors'; +8 its first vertex ((entry << 4) + block) << 5;
+  EAX the block or 0), a split 0x4DA220 (stack cache, level: level 0 is
+  0x4DA1B0's eviction; else the level above's last block (recursively
+  made), an entry split from whole on the list in use, both halves
+  appended to the level's list; EAX 1 or 0), the eviction 0x4DA1B0 (EDI:
+  none when the oldest entry was drawn this frame (+8 against 0x1535A24);
+  else its blocks freed, the entry off the list in use and its whole block
+  on the free list of level 0) and the free 0x4DA0F0 (cache, entry, node,
+  shift: a node in use clears its owner's slot +0x248 + 4 x index, takes
+  1 << (shift + 5) and its surface's vertices off the counters and its
+  mark; a node with a count is cleared and its children freed, the right
+  one in the loop; a free node's block unlinked). The signed divisions of
+  block addresses by 0x1C8 and 20 are kept. Still lifted under them:
+  0x4AA0F0 (native in the back end), 0x4AA8D0 (a light's intensity at a
+  point), 0x4AA5C0 (the lights' debug draw), 0x4AA970 (the merge of the
+  lights beyond 0x15364BC into +0x114), 0x4AACB0 (the light grid's lights
+  at a point; also called from 0x4FA5AF), 0x427CB0 and 0x426710. 0x4DA0F0
+  is also called by 0x4DB370 (the cache's flush, outside the front end),
+  which now reaches the native one.
+- Layer 9 oracle and mutations: new stubs 0x4AA0F0 (records EAX, ECX,
+  EDX; the bump of the current entity's number moved here from
+  0x4AA490's stub; a walk's dlight count above 40, which its bits take,
+  cut to & 31 for the brush model's loop, which reads it again),
+  0x4AA8D0 (keeps EDX, pushes ordinary, equal, 0, -0, negative, 1e30 and
+  NaN intensities), 0x4AA5C0, 0x4AA970 (a hash of the order and the
+  values it reads on 0x4AB490's stack) and 0x4AACB0 (lights of the
+  entity's +0x2B0, values now and then 0 or NaN, the sun's value). New
+  fixtures: Lighting (the case's twelve lights, directions and points,
+  spots with exponents 0, fractional, negative or NaN, never far above 0
+  (the power is a loop), intensities negative or NaN; the world's
+  lighting, a world of its own outside a walk; the sun, limit, mode,
+  shift, the refdef's dlight count, the spot cosines (NaN now and then),
+  cvars; each entity's lights, its +0x2B0's and, for a static model whose
+  copies point +0x2B0 at it, its own +0xB8-+0x198) and ModelCache (the
+  first eight entries in states the game reaches: wholly free on level
+  0's list or in use, oldest now and then drawn this frame, split at
+  random into blocks in use (owned by an entity's +0x2B0 or a spare) and
+  free blocks on their lists; the slots point into entries in use). Point
+  lights light only entities whose positions are finite: the CRT's square
+  root of a NaN under 0x426710 reports through the Windows API. The
+  vertex buffer moved out of the arena into a compared window of its own
+  (the eight entries' 4096 vertices and 0x200 more); the cache's windows
+  cover the free lists +0xE400-+0xE438. Each new entry also reached alone
+  (about 3000 cases each, LightCase): brush models' dlights exactly the
+  radius off integral bounds (40 dlights, bits past 31); refdefs of up to
+  20 dlights exactly twice the radius away, or found by search on either
+  side of it by the order of the squares' sum, or z twice the radius with
+  x and y 0.3 of its last bit (z + y + x the reach, x + y + z an ulp
+  more); vertices with directions and points whose dot products and spot
+  cosines nearly cancel (Cancel3, colours along the normal of 2^40-2^80),
+  spots straight along an axis with the table's cosine theirs or an ulp
+  off, angles at a tie of the index's rounding (searched), denormal
+  attenuations whose value overflows a float against colourless channels
+  (0 x the unrounded value, NaN from the stored infinity), ambient colours
+  at (n + 0.5) / 255 and the clamps; every size class, level, the eviction
+  and the frees of every node a free can be handed. The world walk's draw
+  surfaces now go on from the world's count into 0x8000 bytes of their
+  own: a changed random stream showed that the world's 0x20-byte buffer,
+  filled by the cases before, let the walk's draw surfaces overwrite a
+  cell's tree in the arena (a crash of the lifted side, not a mismatch).
+  786k random cases, 3.0M calls out, 0 mismatched, peak 98 MB, 66 s;
+  ctest 68 of 68. 151 mutants: 138 caught (18 by crashing the oracle:
+  wild links and pointers); 13 survive, all equivalent: the return
+  addresses of calls into the native functions (0x4DA0F0's recursion,
+  0x4DA1B0's, 0x4DA220's and 0x4DA330's calls, 0x4ABD30's and 0x4ABDC0's
+  of 0x4AB490 and 0x4ABD30, 0x4ABEF0's of 0x4ABDC0: seven) and of
+  0x426710 (lifted, not a stub), where the slot is below ESP and nothing
+  reads it; the buddy's index from b - entry - 0x84 (the truncating
+  division of 20 x k + 4 by 20 is k for every block); the vertex value's
+  SNaN not quietened (only a NaN's payload changes, and any NaN colour is
+  0); `!(v == 0)` written `v != 0` (the same for NaN); the second sun
+  light's colour from the world rather than the first's copy of it; and
+  an unlink's two writes in the other order (they commute unless a node
+  links to itself). The first runs missed the squares' sum order (until
+  the exact reach), the dot products' and the spot cosine's orders (until
+  colours large enough to show their last bits and a spot against a
+  cosine of 0), the index's tie, NaN cosines and the stored value of a
+  spot (until the ties, NaN table entries and spot axes, and the
+  overflowing attenuations); logs mut15_round1-4.log and mut15_final.log
+  in the session's scratchpad.
 
 ## Renderer back end (2026-10-25, branch render-backend)
 The back end is going native from the bottom up (src/render_backend.cpp),
