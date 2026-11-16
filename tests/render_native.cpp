@@ -76,4 +76,18 @@
 #define f_004DA220 n_004DA220
 #define f_004DA1B0 n_004DA1B0
 #define f_004DA0F0 n_004DA0F0
+#define f_004AA8D0 n_004AA8D0
+#define f_004AA970 n_004AA970
+#define f_004AACB0 n_004AACB0
+#define f_004AA5C0 n_004AA5C0
+#define f_004268B0 n_004268B0
+#define f_00426710 n_00426710
+#define f_004273C0 n_004273C0
+#define f_00426AB0 n_00426AB0
+#define f_00427CB0 n_00427CB0
+#define f_00427E80 n_00427E80
+#define f_00429070 n_00429070
+#define f_004290E0 n_004290E0
+#define f_00429800 n_00429800
+#define f_00429650 n_00429650
 #include "../src/render.cpp"

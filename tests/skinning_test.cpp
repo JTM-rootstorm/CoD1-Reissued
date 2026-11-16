@@ -51,6 +51,12 @@ void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 // lifted code reaches it.
 void f_0042B0A0_lifted(Ctx& c);
 void f_0042B0A0(Ctx& c) { f_0042B0A0_lifted(c); }
+// VectorNormalize and the 4x4 inverse, native in the game (src/render.cpp):
+// here only lifted code reaches them.
+void f_00426710_lifted(Ctx& c);
+void f_00426710(Ctx& c) { f_00426710_lifted(c); }
+void f_00427E80_lifted(Ctx& c);
+void f_00427E80(Ctx& c) { f_00427E80_lifted(c); }
 // The back end's GL state, texture units, flush setup and the flush, native
 // in the game (src/render_backend.cpp): here only lifted code reaches them.
 void f_004C89D0_lifted(Ctx& c);

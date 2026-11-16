@@ -90,7 +90,13 @@ replace 00519140
 # and its bones' debug boxes and axes; the entity lighting and the model
 # cache: the dlights on a brush model, an entity's lights and its lighting
 # (from its lights or the light grid), a vertex's lighting, and the
-# cache's blocks of a size class, splits, eviction and frees. Back end:
+# cache's blocks of a size class, splits, eviction and frees; a light's
+# intensity at a point, the lights beyond the limit merged, the light
+# grid's lights at a point and the lights' debug draw; the vector helpers
+# the whole game calls: the two normalisations, a perpendicular vector, a
+# point rotated about a vector, the 3x3 and 4x4 inverses, a point and
+# bounds added to bounds, BoxOnPlaneSide and a plane through three points.
+# Back end:
 # ClipSkyPolygon, AddSkyPolygon and ComputeTexCoords. Under both:
 # qsortFast of the draw surfaces, the 4x4 matrix product and the memcpy
 # 0x42B0A0.
@@ -170,6 +176,20 @@ replace 004DA330
 replace 004DA220
 replace 004DA1B0
 replace 004DA0F0
+replace 004AA8D0
+replace 004AA970
+replace 004AACB0
+replace 004AA5C0
+replace 004268B0
+replace 00426710
+replace 004273C0
+replace 00426AB0
+replace 00427CB0
+replace 00427E80
+replace 00429070
+replace 004290E0
+replace 00429800
+replace 00429650
 
 # The renderer back end (src/render_backend.cpp): GL_Bind, the cull face,
 # the texture environment, the state bits and the client arrays, fog on

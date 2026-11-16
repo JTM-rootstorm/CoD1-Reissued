@@ -76,6 +76,10 @@ void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 // lifted code reaches it.
 void f_0042B0A0_lifted(Ctx& c);
 void f_0042B0A0(Ctx& c) { f_0042B0A0_lifted(c); }
+// BoxOnPlaneSide, native in the game (src/render.cpp): here the lifted
+// traces reach it.
+void f_00429800_lifted(Ctx& c);
+void f_00429800(Ctx& c) { f_00429800_lifted(c); }
 }  // namespace gen
 
 PeImage* g_exe = nullptr;

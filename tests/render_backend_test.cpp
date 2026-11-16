@@ -308,6 +308,20 @@ void f_004DB660_lifted(Ctx& c);
 void f_004DB660(Ctx& c) { f_004DB660_lifted(c); }
 void f_004DB3E0_lifted(Ctx& c);
 void f_004DB3E0(Ctx& c) { f_004DB3E0_lifted(c); }
+// The vector helpers, native in the game (src/render.cpp): here the native
+// back end and the lifted bodies reach their originals.
+void f_004268B0_lifted(Ctx& c);
+void f_004268B0(Ctx& c) { f_004268B0_lifted(c); }
+void f_00426710_lifted(Ctx& c);
+void f_00426710(Ctx& c) { f_00426710_lifted(c); }
+void f_004273C0_lifted(Ctx& c);
+void f_004273C0(Ctx& c) { f_004273C0_lifted(c); }
+void f_00426AB0_lifted(Ctx& c);
+void f_00426AB0(Ctx& c) { f_00426AB0_lifted(c); }
+void f_00427E80_lifted(Ctx& c);
+void f_00427E80(Ctx& c) { f_00427E80_lifted(c); }
+void f_00429650_lifted(Ctx& c);
+void f_00429650(Ctx& c) { f_00429650_lifted(c); }
 // The originals...
 void f_004C89D0_lifted(Ctx& c);
 void f_004C8A20_lifted(Ctx& c);

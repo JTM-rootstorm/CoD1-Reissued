@@ -6,19 +6,24 @@
 // not replace are stubs (tests/render_stubs.manifest) that record each
 // call: its address, return address, ESP, the registers the callee reads
 // and its stack arguments, which must be the same on both sides; they
-// leave EAX, ECX and EDX changed (a light's intensity keeps EDX, as the
-// original does, and pushes ST0); the debug polygon and line, an added
-// entity and the merge of the lights beyond the limit also record a hash
-// of what they are handed (on the caller's stack). ri.Milliseconds' time grows with the calls. The refimport's
+// leave EAX, ECX and EDX changed (a squared distance pushes ST0); the
+// debug polygon, line and box, a trace and an added entity also record a
+// hash of what they are handed (on the caller's stack). ri.Milliseconds' time grows with the calls. The refimport's
 // temporary allocation hands out blocks of a heap that starts again for
-// each side. Each case runs one entry through the
+// each side. The CRT's math errors (its square root of a NaN, under
+// 0x426710) reach GetLastError, TlsGetValue and SetLastError, recorded and
+// answering with the thread's data at the end of the heap (the fixtures
+// kept finite for want of them, below, stay finite). The lifted light
+// intensity holds the x87 registers below aside (its seven would overflow
+// the stack under the two a case may start with). Each case runs one entry through the
 // lifted original and the native code from the same guest memory, and both
 // must leave the same bytes in the case's memory (the structures, the
 // globals, the stack arguments), the same calls, and the same ESP, EBX,
 // ESI, EDI, EBP and x87 stack (top, empty registers, control word), and
-// the entries that return a value the same EAX (ST0 for 0x4D6880 and
-// 0x4DF2D0). Not
-// compared: EAX otherwise, ECX, EDX, EFLAGS, the x87 status word and the
+// the entries that return a value the same EAX (ST0 for 0x4D6880,
+// 0x4DF2D0, 0x4AA8D0 and 0x426710), and the vector helpers the same ECX
+// and EDX where their originals leave them. Not compared: EAX, ECX and EDX
+// otherwise, EFLAGS, the x87 status word and the
 // stack below the return address (refilled with one pattern before each
 // side for the entries that keep locals there for their callees).
 //
@@ -50,7 +55,8 @@
 // surfaces, a view rendered and RE_RenderScene; the entities' lighting and
 // a vertex's (point lights only where the positions are finite: the CRT's
 // square root of a NaN under 0x426710 reports through the Windows API),
-// over a model cache in states the game reaches. Values are now and then
+// over a model cache in states the game reaches; the light grid and the
+// merge of the lights beyond the limit; the vector helpers alone. Values are now and then
 // zeros, denormals, infinities, NaNs or huge. Captures
 // (tests/render_capture.h) add the game's own calls.
 
@@ -109,6 +115,13 @@ constexpr uint32_t kGlBindPtr = 0x1534DE4, kGlBind = 0x7FFE0070;
 constexpr uint32_t kGlSubDataPtr = 0x1534B14, kGlSubData = 0x7FFE0080;
 constexpr uint32_t kGlUpdatePtr = 0x15350DC, kGlUpdate = 0x7FFE0090;
 constexpr uint32_t kHeap = 0x6FE00000, kHeapSize = 0x100000;
+// What the CRT's math errors (a square root of a NaN under 0x426710) reach
+// to set errno: GetLastError, TlsGetValue (the thread's data, at the end
+// of the heap) and SetLastError (stdcall).
+constexpr uint32_t kGetLastErrorPtr = 0x5331D4, kGetLastError = 0x7FFE00A0;
+constexpr uint32_t kTlsGetValuePtr = 0x5330F4, kTlsGetValue = 0x7FFE00B0;
+constexpr uint32_t kSetLastErrorPtr = 0x533100, kSetLastError = 0x7FFE00C0;
+constexpr uint32_t kThreadData = 0x6FEFF000;
 uint32_t g_heap_top = kHeap;
 
 enum Reg { kEax = 1, kEcx = 2, kEdx = 4, kEbx = 8, kEsi = 16, kEdi = 32, kEbp = 64 };
@@ -130,11 +143,14 @@ constexpr uint32_t kModelCache = 0x11BEC28, kModelCacheHead = 0x11CD050;
 constexpr uint32_t kVertexBuffer = 0x6FC00000, kVertexBufferSize = 24 * (8 * 16 * 32 + 0x200);
 // Bounds for the bones' bounds 0x4771B0 hands out (eight of 24 bytes).
 uint32_t g_bone_bounds = 0;
-// The case's lights (kNumLights of 0x88 bytes, directions first), which
-// the light grid's 0x4AACB0 hands out (those of the entity's +0x2B0).
+// The case's lights (kNumLights of 0x88 bytes, directions first), the
+// world's lights the light grid's indexes point into.
 constexpr uint32_t kNumLights = 12, kNumDirections = 6;
 uint32_t g_lights = 0;
-bool IsLight(uint32_t p) { return p >= g_lights && p < g_lights + kNumLights * 0x88 && (p - g_lights) % 0x88 == 0; }
+// The light grid's points (0x1C bytes: +0xC its cell, below 0 outside the
+// grid; +0x10 the sun; lights +0x18 from +0x14 of the world's indexes).
+constexpr uint32_t kNumGridPoints = 8;
+uint32_t g_grid_points = 0;
 
 // What each stub compares: the registers its callee reads (and for the
 // texture coordinate callees the callee-saved ones, which ComputeTexCoords
@@ -149,7 +165,6 @@ constexpr StubInfo kStubs[] = {
     {0x4AD760, kEbx | kEsi | kEdi, 0},          // debug line
     {0x4CA8D0, 0, 2},                           // a portal surface off the screen
     {0x4AC890, 0, 0},                           // a debug draw
-    {0x427CB0, kEax | kEcx, 0},                 // a 3x3 inverse
     {0x440940, 0, -1},                          // va (its format's arguments)
     {0x4AD8F0, kEax | kEdi, 1},                 // debug text
     {0x477290, kEdx | kEdi, 0},                 // a composite model's surfaces
@@ -160,12 +175,11 @@ constexpr StubInfo kStubs[] = {
     {0x4771B0, kEdx, 1},                        // the bones' bounds
     {0x40F4E0, kEsi | kEdi, 4},                 // a debug line
     {0x4AA0F0, kEax | kEcx | kEdx, 0},          // the dlights into an orientation
-    {0x4AA8D0, kEsi | kEdx, 0},                 // a light's intensity at a point
-    {0x4AA5C0, 0, 2},                           // a debug draw of an entity's lights
-    {0x4AA970, kEbx, 3},                        // the lights beyond the limit merged
-    {0x4AACB0, kEsi, 4},                        // the light grid's lights at a point
+    {0x5008B0, kEsi, 0},                        // the light grid's point
+    {0x4A9EC0, kEax | kEcx, 6},                 // a grid corner's lights
+    {0x426610, kEax | kEcx, 0},                 // a squared distance
+    {0x4A99C0, kEax | kEcx, 0},                 // a trace
     {0x51D45A, 0, 3},                           // fprintf to the log
-    {0x427E80, kEax | kEcx, 0},                 // a matrix's inverse
     {0x50A2B0, kSaved | kEax, 0},               // tcGens
     {0x50ABF0, kSaved | kEax, 0},
     {0x50A7C0, kSaved | kEax, 1},
@@ -217,51 +231,29 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
     for (uint32_t i = 0; i < size; i++) h = (h ^ g_mem.read<uint8_t>(va + i)) * 16777619u;
     return h;
   };
-  // What the merge of the lights beyond the limit reads on the caller's
-  // stack: the order of the lights kept (+0xCC of them) and their values.
-  if (va == 0x4AA970) {
-    const int32_t n = std::clamp(int32_t(Rd(c.ebx + 0xCC)), 0, 8);
-    uint32_t h = hash(r.args[2], 4 * uint32_t(n));
-    for (int32_t i = 0; i < n; i++) h = h * 31 + Rd(r.args[1] + 4 * Rd(r.args[2] + 4 * uint32_t(i)));
-    r.args[3] = h;
-  }
+  // The points a trace and a debug box are handed.
+  if (va == 0x4A99C0 || va == 0x4AD7E0) r.args[0] = hash(c.ecx, 0xC) ^ hash(va == 0x4A99C0 ? c.eax : c.edx, 0xC) * 3;
   if (va == 0x40F4E0) r.args[4] = hash(r.args[0], 0xC) ^ hash(c.edi, 0xC) * 3 ^ hash(c.esi, 0x10) * 5;
   if (va == 0x4AD630 && c.ebx <= 0x1000) r.args[2] = hash(r.args[0], 0xC * c.ebx);
-  if (va == 0x4AD760) r.args[2] = hash(c.ebx, 0xC) ^ hash(c.edi, 0xC) * 3;
+  // The lights' debug draw ends an unblocked trace's line (ESI 0x5378E0)
+  // at a local the original never writes: its address only.
+  if (va == 0x4AD760) r.args[2] = hash(c.ebx, 0xC) ^ (c.esi == 0x5378E0 ? 0 : hash(c.edi, 0xC) * 3);
   g_calls.push_back(r);
   const uint32_t k = uint32_t(g_calls.size());
   // What an entity's callees do: now and then change the current entity's
   // number, which R_AddEntitySurfaces reloads (the dlights' orientation,
-  // under a brush model's); a light's intensity (ST0: ordinary, equal,
-  // zero, negative and NaN values); the light grid's lights (from those of
-  // the entity's +0x2B0, values now and then 0 or NaN); the bones' bounds.
+  // under a brush model's); a squared distance (ST0: about the lights' debug
+  // draw's 96 squared, NaN too); a grid corner's lights (its byte, the bits
+  // of the lights it sees: none, -1 or any of 16); the bones' bounds.
   if (va == 0x4AA0F0 && k % 5 == 0) Wr(0x1536024, Rd(0x1536024) + 1);
   // The walk's dlight counts beyond its 32 dlights (for its bits) cut to
   // them for the brush models' dlights, which read them again.
   if (va == 0x4AA0F0 && int32_t(Rd(0x1536474)) > 40) Wr(0x1536474, Rd(0x1536474) & 31);
-  if (va == 0x427CB0)
-    for (uint32_t i = 0; i < 9; i++) WrF(c.ecx + 4 * i, float(int((k * 13 + i * 7) % 9) - 4) * 0.375f);
-  if (va == 0x4AA8D0) {
-    static const uint32_t kIntensity[] = {0x3F000000, 0x3F800000, 0x40000000, 0x3F800000, 0,
-                                          0xBE800000, 0x40400000, 0x7FC00000, 0x7149F2CA, 0x3F400000,
-                                          0x3DCCCCCD, 0x80000000, 0x3F800001};
-    recomp::x87::LoadF32(c.fpu, kIntensity[(k * 7 + c.edx / 8) % 13]);
+  if (va == 0x426610) {
+    static const uint32_t kDistance[] = {0x46100000, 0x46100001, 0x460FFFFF, 0, 0x49742400, 0x7FC00000, 0x42C80000};
+    recomp::x87::LoadF32(c.fpu, kDistance[k % 7]);
   }
-  if (va == 0x4AACB0) {
-    const uint32_t info = Rd(c.edi + 0x2B0);
-    uint32_t m = g_mem.IsCommitted(info & ~0xFFFu) && g_mem.IsCommitted((info + 0x248) & ~0xFFFu) ? Rd(info + 0xB8) : 0;
-    if (m > 12) m = 0;
-    for (uint32_t i = 0; i < m; i++)
-      if (!IsLight(Rd(info + 0x184 + 4 * i))) m = 0;
-    const uint32_t n = m ? (k * 5 + m) % 14 : 0;
-    static const uint32_t kValue[] = {0x3F800000, 0x3F000000, 0x40000000, 0, 0x7FC00000, 0xBF800000, 0x3E800000};
-    WrF(r.args[2], k % 4 ? float(k % 3) * 0.5f : std::bit_cast<float>(kValue[k % 7]));
-    for (uint32_t i = 0; i < n; i++) {
-      Wr(r.args[1] + 4 * i, kValue[(k + i) % 7]);
-      Wr(r.args[3] + 4 * i, Rd(info + 0x184 + 4 * ((k + 3 * i) % m)));
-    }
-    c.eax = n;
-  }
+  if (va == 0x4A9EC0) g_mem.write<uint8_t>(r.args[5], uint8_t(k * 37));
   if (va == 0x4771B0)
     for (uint32_t i = 0; i < g_mem.read<uint8_t>(r.args[0] + 0x17); i++) Wr(c.edx + 4 * i, g_bone_bounds + 24 * ((k + i) % 8));
   // A composite model's surfaces: none without submodels, now and then
@@ -288,13 +280,16 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
   }
   const uint32_t junk = 0xC0DE0000u + k;
   // A portal surface now and then off the screen (EAX 1).
+  // The grid's point: one of the case's, none now and then for the debug
+  // draw (which tests it). A trace blocked (AL 2 or 0x80) or not.
   c.eax = va == 0x4CA8D0   ? k % 4 == 0
           : va == 0x477290 ? g_pairs
-          : va == 0x4AACB0 ? c.eax
+          : va == 0x5008B0 ? (r.ret == 0x4AA67F && k % 7 == 0) || !g_grid_points ? 0 : g_grid_points + 0x1C * ((k * 3) % kNumGridPoints)
+          : va == 0x4A9EC0 ? (k % 5 == 0 ? 0xFFFFFFFFu : k % 5 == 1 ? 0 : (k * 0x9E3779B9u) >> 16)
+          : va == 0x4A99C0 ? (junk & ~0xFFu) | (k % 3 == 0 ? 0 : k % 3 == 1 ? 2 : 0x80)
                            : junk;
   c.ecx = junk ^ 1;
-  // A light's intensity keeps EDX (its light), which its caller reads.
-  if (va != 0x4AA8D0) c.edx = junk ^ 2;
+  c.edx = junk ^ 2;
   c.esp += 4;
 }
 void StubFor(Ctx& c, uint32_t va) {
@@ -384,6 +379,20 @@ void f_004DA330_lifted(Ctx& c);
 void f_004DA220_lifted(Ctx& c);
 void f_004DA1B0_lifted(Ctx& c);
 void f_004DA0F0_lifted(Ctx& c);
+void f_004AA8D0_lifted(Ctx& c);
+void f_004AA970_lifted(Ctx& c);
+void f_004AACB0_lifted(Ctx& c);
+void f_004AA5C0_lifted(Ctx& c);
+void f_004268B0_lifted(Ctx& c);
+void f_00426710_lifted(Ctx& c);
+void f_004273C0_lifted(Ctx& c);
+void f_00426AB0_lifted(Ctx& c);
+void f_00427CB0_lifted(Ctx& c);
+void f_00427E80_lifted(Ctx& c);
+void f_00429070_lifted(Ctx& c);
+void f_004290E0_lifted(Ctx& c);
+void f_00429800_lifted(Ctx& c);
+void f_00429650_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_native.cpp renames
 // its entries).
 void f_004D68E0(Ctx& c) { f_004D68E0_lifted(c); }
@@ -462,6 +471,35 @@ void f_004DA330(Ctx& c) { f_004DA330_lifted(c); }
 void f_004DA220(Ctx& c) { f_004DA220_lifted(c); }
 void f_004DA1B0(Ctx& c) { f_004DA1B0_lifted(c); }
 void f_004DA0F0(Ctx& c) { f_004DA0F0_lifted(c); }
+// A light's intensity with the x87 registers below held aside: its seven
+// would overflow the stack under the two a case may start with (the game
+// calls it on an empty one). Its result goes back above them.
+void f_004AA8D0(Ctx& c) {
+  x87::F80 held[8];
+  int n = 0;
+  while (!(c.fpu.empty >> c.fpu.top & 1)) {
+    held[n++] = x87::StoreF80(c.fpu);
+    x87::Pop(c.fpu);
+  }
+  f_004AA8D0_lifted(c);
+  const x87::F80 r = x87::StoreF80(c.fpu);
+  x87::Pop(c.fpu);
+  while (n) x87::LoadF80(c.fpu, held[--n]);
+  x87::LoadF80(c.fpu, r);
+}
+void f_004AA970(Ctx& c) { f_004AA970_lifted(c); }
+void f_004AACB0(Ctx& c) { f_004AACB0_lifted(c); }
+void f_004AA5C0(Ctx& c) { f_004AA5C0_lifted(c); }
+void f_004268B0(Ctx& c) { f_004268B0_lifted(c); }
+void f_00426710(Ctx& c) { f_00426710_lifted(c); }
+void f_004273C0(Ctx& c) { f_004273C0_lifted(c); }
+void f_00426AB0(Ctx& c) { f_00426AB0_lifted(c); }
+void f_00427CB0(Ctx& c) { f_00427CB0_lifted(c); }
+void f_00427E80(Ctx& c) { f_00427E80_lifted(c); }
+void f_00429070(Ctx& c) { f_00429070_lifted(c); }
+void f_004290E0(Ctx& c) { f_004290E0_lifted(c); }
+void f_00429800(Ctx& c) { f_00429800_lifted(c); }
+void f_00429650(Ctx& c) { f_00429650_lifted(c); }
 // unzCloseCurrentFile and tolower, native in the game (src/unzip.cpp,
 // src/crt.cpp): here only lifted code the stubs stand for reaches them.
 void f_0049EAA0_lifted(Ctx& c);
@@ -568,6 +606,20 @@ void n_004DA330(Ctx& c);
 void n_004DA220(Ctx& c);
 void n_004DA1B0(Ctx& c);
 void n_004DA0F0(Ctx& c);
+void n_004AA8D0(Ctx& c);
+void n_004AA970(Ctx& c);
+void n_004AACB0(Ctx& c);
+void n_004AA5C0(Ctx& c);
+void n_004268B0(Ctx& c);
+void n_00426710(Ctx& c);
+void n_004273C0(Ctx& c);
+void n_00426AB0(Ctx& c);
+void n_00427CB0(Ctx& c);
+void n_00427E80(Ctx& c);
+void n_00429070(Ctx& c);
+void n_004290E0(Ctx& c);
+void n_00429800(Ctx& c);
+void n_00429650(Ctx& c);
 // The stubs.
 #define COD1_STUB(va) \
   void f_##va(Ctx& c) { StubFor(c, 0x##va); }
@@ -576,7 +628,6 @@ COD1_STUB(004AD630)
 COD1_STUB(004AD760)
 COD1_STUB(004CA8D0)
 COD1_STUB(004AC890)
-COD1_STUB(00427CB0)
 COD1_STUB(00440940)
 COD1_STUB(004AD8F0)
 COD1_STUB(00477290)
@@ -586,13 +637,12 @@ COD1_STUB(005068B0)
 COD1_STUB(00447CA0)
 COD1_STUB(004771B0)
 COD1_STUB(0040F4E0)
+COD1_STUB(005008B0)
+COD1_STUB(004A9EC0)
+COD1_STUB(00426610)
+COD1_STUB(004A99C0)
 COD1_STUB(004AA0F0)
-COD1_STUB(004AA8D0)
-COD1_STUB(004AA5C0)
-COD1_STUB(004AA970)
-COD1_STUB(004AACB0)
 COD1_STUB(0051D45A)
-COD1_STUB(00427E80)
 COD1_STUB(0050A2B0)
 COD1_STUB(0050ABF0)
 COD1_STUB(0050A7C0)
@@ -657,6 +707,13 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
   if (target == kGlBind || target == kGlSubData || target == kGlUpdate) {
     const int n = target == kGlBind ? 2 : target == kGlSubData ? 4 : 5;
     Stub(c, target == kGlBind ? kGlBindPtr : target == kGlSubData ? kGlSubDataPtr : kGlUpdatePtr, 0, n);
+    c.esp += 4 * uint32_t(n);
+    return;
+  }
+  if (target == kGetLastError || target == kTlsGetValue || target == kSetLastError) {
+    const int n = target == kGetLastError ? 0 : 1;
+    Stub(c, target == kGetLastError ? kGetLastErrorPtr : target == kTlsGetValue ? kTlsGetValuePtr : kSetLastErrorPtr, 0, n);
+    c.eax = target == kTlsGetValue ? kThreadData : 0;
     c.esp += 4 * uint32_t(n);
     return;
   }
@@ -762,6 +819,13 @@ const Entry kEntries[] = {
     COD1_ENTRY(004ABEF0, "entity lighting"),     COD1_ENTRY(004DA420, "vertex lighting"),
     COD1_ENTRY(004DA330, "cache block"),         COD1_ENTRY(004DA220, "cache split"),
     COD1_ENTRY(004DA1B0, "cache eviction"),      COD1_ENTRY(004DA0F0, "cache free"),
+    {0x4AA8D0, recomp::gen::f_004AA8D0, recomp::gen::n_004AA8D0, "light intensity"}, COD1_ENTRY(004AA970, "lights merged"),
+    COD1_ENTRY(004AACB0, "grid's lights"),       COD1_ENTRY(004AA5C0, "lights debug draw"),
+    COD1_ENTRY(004268B0, "fast normalise"),      COD1_ENTRY(00426710, "VectorNormalize"),
+    COD1_ENTRY(004273C0, "perpendicular"),       COD1_ENTRY(00426AB0, "rotation about a vector"),
+    COD1_ENTRY(00427CB0, "3x3 inverse"),         COD1_ENTRY(00427E80, "4x4 inverse"),
+    COD1_ENTRY(00429070, "point to bounds"),     COD1_ENTRY(004290E0, "bounds to bounds"),
+    COD1_ENTRY(00429800, "BoxOnPlaneSide"),      COD1_ENTRY(00429650, "plane from points"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -888,12 +952,18 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   const bool eax = k.fn == 0x4D68E0 || k.fn == 0x4C8D50 || k.fn == 0x4C9070 || k.fn == 0x4D7DF0 ||
                    k.fn == 0x4D7E70 || k.fn == 0x4D7ED0 || k.fn == 0x4D7F30 || k.fn == 0x4D6BC0 ||
                    k.fn == 0x4D80F0 || k.fn == 0x4CA240 || k.fn == 0x4CAB80 || k.fn == 0x480DD0 ||
-                   k.fn == 0x4DA9F0 || k.fn == 0x4DA330 || k.fn == 0x4DA220 || k.fn == 0x4DA1B0;
+                   k.fn == 0x4DA9F0 || k.fn == 0x4DA330 || k.fn == 0x4DA220 || k.fn == 0x4DA1B0 ||
+                   k.fn == 0x4AACB0 || k.fn == 0x4268B0 || k.fn == 0x427CB0 || k.fn == 0x427E80 ||
+                   k.fn == 0x429800 || k.fn == 0x429650;
+  // The vector helpers' ECX and EDX where the originals leave them.
+  const bool ecx = k.fn == 0x427CB0 || k.fn == 0x4290E0;
+  const bool edx = k.fn == 0x427CB0 || k.fn == 0x429070;
   // A result on the x87 stack: its register.
-  const bool st0 = k.fn == 0x4D6880 || k.fn == 0x4DF2D0;
+  const bool st0 = k.fn == 0x4D6880 || k.fn == 0x4DF2D0 || k.fn == 0x4AA8D0 || k.fn == 0x426710;
   bool ok = cn.esp == cl.esp && cn.ebp == cl.ebp && cn.ebx == cl.ebx && cn.esi == cl.esi &&
             cn.edi == cl.edi && cn.fpu.top == cl.fpu.top && cn.fpu.empty == cl.fpu.empty &&
-            cn.fpu.cw == cl.fpu.cw && (!eax || cn.eax == cl.eax) &&
+            cn.fpu.cw == cl.fpu.cw && (!eax || cn.eax == cl.eax) && (!ecx || cn.ecx == cl.ecx) &&
+            (!edx || cn.edx == cl.edx) &&
             (!st0 || (cn.fpu.r[cn.fpu.top].sig == cl.fpu.r[cl.fpu.top].sig &&
                       cn.fpu.r[cn.fpu.top].se == cl.fpu.r[cl.fpu.top].se));
   if (!ok && s.failures < 20)
@@ -3001,12 +3071,35 @@ void Lighting(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dlights
   }
   WrF(w + 0x108, g() % 4 ? Uniform(g, 0, 2) : float(Pick(g, {0, 0, -1, 2})));
   if (g() % 16 == 0) Wr(w + 0x108, 0x7FC00000);
-  Wr(w + 0x114, g());
   Wr(w + 0x118, g() % 8 != 0);
+  // The light grid: the world's lights +0x110 (the case's), its default
+  // light +0x114 (or none), 16-bit indexes +0x11C into the lights (now and
+  // then the same light twice), and the grid's points (up to 20 lights:
+  // with the refdef's 20 and the sun's two they fit the 50 of 0x4ABD30's
+  // frame, which more would overrun), their scale 0x15364C8, the scale 0x1536290 of the merged light's colours and the
+  // grid's size 0x15364C4.
+  Wr(w + 0x110, g_lights);
+  Wr(w + 0x114, g() % 4 ? PickLight(g, g() % 2) : 0);
+  const uint32_t index = a.Alloc(2 * 64);
+  Wr(w + 0x11C, index);
+  for (uint32_t i = 0; i < 64; i++) g_mem.write<uint16_t>(index + 2 * i, uint16_t(g() % 8 ? g() % kNumLights : 0));
+  g_grid_points = a.Alloc(0x1C * kNumGridPoints);
+  for (uint32_t i = 0; i < kNumGridPoints; i++) {
+    const uint32_t p = g_grid_points + 0x1C * i;
+    Wr(p + 0xC, g() % 8 ? g() % 64 : uint32_t(Pick(g, {-1, INT32_MIN})));
+    Wr(p + 0x10, g() % 2);
+    Wr(p + 0x14, g() % 32);
+    Wr(p + 0x18, g() % 8 ? g() % 17 : g() % 2 ? 0 : 20);
+  }
+  WrF(0x15364C8, g() % 4 ? Uniform(g, 0, 1) : Value(g, 0, 1, 256));
+  WrF(0x1536290, g() % 4 ? Uniform(g, 0, 2) : Value(g, 0, 2, 256));
+  Wr(0x15364C4, uint32_t(Pick(g, {1, 2, 3, 4, 5, 0, -1})));
   float v[3];
   Normal(g, v);
   WrVec(0x15364B0, v);
-  Wr(0x15364BC, uint32_t(Pick(g, {0, 2, 4, 6, 8, 8, -1})));
+  // The light limit at least 1: below it the merge of the lights beyond it
+  // reads the order of the lights kept past them (the order on the stack).
+  Wr(0x15364BC, uint32_t(Pick(g, {1, 2, 4, 6, 8, 8, 1})));
   Wr(0x15364C0, uint32_t(Pick(g, {0, 1, 2, 2})));
   Wr(0x1536298, uint32_t(Pick(g, {0, 0, 1, 2, 31})));
   for (uint32_t i = 0; i < 0x400; i++)
@@ -3017,7 +3110,8 @@ void Lighting(Arena& a, std::mt19937& g, uint32_t ents, uint32_t n, bool dlights
     Wr(c + 0x20, i);
     WrF(c + 0x1C, f);
   };
-  cvar(0x15344CC, uint32_t(Pick(g, {0, 0, 0, 1, -1})), 0);
+  cvar(0x15344CC, uint32_t(Pick(g, {0, 0, 0, 1, -1, 2, 3, 4, 5})), 0);
+  cvar(0x153440C, 0, std::bit_cast<float>(uint32_t(Pick(g, {0, 0x3F000000, 0x3E99999A, 0x3F800000, 0x7FC00000, int32_t(0xBF800000)}))));
   cvar(0x1534578, 0, g() % 2 ? 0.0f : std::bit_cast<float>(uint32_t(Pick(g, {0x3E800000, int32_t(0xBF800000), 0x7FC00000, 0x40000000, 0x3F000000, 0x3F800000}))));
   cvar(0x15346C4, g() % 4 == 0, 0);
   bool all = true;
@@ -3682,8 +3776,11 @@ uint32_t LightRefdef(Arena& a, std::mt19937& g, uint32_t p) {
   return r;
 }
 
-// The lighting and the model cache's entries alone, over one to three
-// entities of EntityModels: the dlights on a brush model (40 dlights of
+const std::vector<float>& UnitHeights();
+
+// The lighting, the light grid, the merge and the model cache's entries
+// alone, over one to three entities of EntityModels: the dlights on a
+// brush model (40 dlights of
 // local origins exactly the radius off the bounds now and then, which
 // are integral then); an entity's lights (the refdef's, one of the
 // case's or none; its lighting origin or a point; up to 20 lights, values
@@ -3692,8 +3789,13 @@ uint32_t LightRefdef(Arena& a, std::mt19937& g, uint32_t p) {
 // and its lights: directions and points whose dot products nearly
 // cancel, a spot straight along the direction with the table's cosine at
 // its angle equal to the spot's, or ulps off; ambient colours at the
-// rounding and clamping edges); a block of each size class, a split of
-// each level, the eviction and the frees of the trees' nodes.
+// rounding and clamping edges); a light's intensity (attenuations 0,
+// denormal, huge or NaN; differences whose squares' order shows); the
+// merge (ties with the least kept, 1e19 first, a pair of opposite colours
+// that leaves the products' rounding); the grid's lights (on the cells'
+// edges, weights 0.98 and 0.02); the lights' debug draw (each mode, a view
+// along it at exactly 0.95); a block of each size class, a split of each
+// level, the eviction and the frees of the trees' nodes.
 void LightCase(Arena& a, std::mt19937& g, Stats& s) {
   a.Reset();
   for (uint32_t va = 0x1536000; va < 0x1536500; va += 4) Wr(va, g());
@@ -3713,7 +3815,12 @@ void LightCase(Arena& a, std::mt19937& g, Stats& s) {
     return v;
   };
   auto refdef = [&](uint32_t p) { return g() % 4 == 0 ? 0 : g() % 2 ? 0x1536318 : LightRefdef(a, g, p); };
-  switch (g() % 10) {
+  auto finite = [](uint32_t v) {
+    for (uint32_t k = 0; k < 12; k += 4)
+      if (!std::isfinite(g_mem.read<float>(v + k))) return false;
+    return true;
+  };
+  switch (g() % 14) {
     case 0: {
       const uint32_t model = Rd(Rd(kXModels + 4 * Rd(e + 8)) + 0x4C), n = g() % 4 ? g() % 41 : uint32_t(Pick(g, {-1, 0}));
       const uint32_t dl = a.Alloc(0x88 * 40);
@@ -3883,11 +3990,413 @@ void LightCase(Arena& a, std::mt19937& g, Stats& s) {
       win.push_back(a.All());
       Run({0x4DA1B0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], kModelCache, {}}, win, g, s, "random");
       break;
+    case 10: {
+      // A light's intensity at a point: attenuations 0, denormal, huge or
+      // NaN now and then; the point on the light, or off it by a
+      // difference whose squares round by the order of their sum (one
+      // about 2^27 times the others).
+      const uint32_t l = a.Alloc(0x88), p = vec(-128, 128, 64);
+      std::memcpy(g_mem.ptr<uint8_t>(l), g_mem.ptr<uint8_t>(PickLight(g, g() % 4 != 0)), 0x88);
+      WrF(l + 0x10, g() % 4 ? Uniform(g, 0, 4) : Value(g, 0, 4, 512));
+      for (uint32_t k = 0x60; k < 0x6C; k += 4)
+        if (g() % 3 == 0) WrF(l + k, g() % 2 ? 0.0f : Value(g, 0, 1, 512));
+      if (g() % 8 == 0) WrF(l + 0x50, Value(g, -1, 1, 512));
+      if (g() % 4 == 0) {
+        std::memcpy(g_mem.ptr<uint8_t>(p), g_mem.ptr<uint8_t>(l + 0x44), 12);
+      } else if (g() % 3 == 0) {
+        const int k = int(g() % 20) - 10;
+        const uint32_t big = 4 * (g() % 3);
+        for (uint32_t o = 0; o < 12; o += 4)
+          WrF(p + o, g_mem.read<float>(l + 0x44 + o) - (o == big ? std::ldexp(Uniform(g, 1, 2), k) : std::ldexp(Uniform(g, 1, 2), k - 26 - int(g() % 2))) * (g() % 2 ? 1 : -1));
+      }
+      win.push_back(a.All());
+      Run({0x4AA8D0, rnd[0], rnd[1], l, rnd[3], p, rnd[5], {}}, win, g, s, "random");
+      break;
+    }
+    case 11: {
+      // The lights beyond the limit merged: up to eight kept lights (points
+      // only from a finite origin), their values (ties with the least kept,
+      // the first now and then 1e19, special values now and then) in an
+      // order (repeats now and then); the merged light's own type.
+      const uint32_t o = g() % 2 ? e + 0xC : vec(-128, 128, 16), values = a.Alloc(4 * 8), order = a.Alloc(4 * 8);
+      const bool point = finite(o);
+      Wr(e + 0xCC, 1 + g() % 8);
+      for (uint32_t j = 0; j < 8; j++) {
+        Wr(e + 0xD0 + 8 * j, PickLight(g, point));
+        WrF(e + 0xD4 + 8 * j, 1.0f);
+        WrF(values + 4 * j, g() % 4 ? Uniform(g, 0, 4) : g() % 2 ? float(g() % 4) : Value(g, 0, 4, 256));
+        Wr(order + 4 * j, j);
+      }
+      for (uint32_t j = 7; j > 0; j--) std::swap(*g_mem.ptr<uint32_t>(order + 4 * j), *g_mem.ptr<uint32_t>(order + 4 * (g() % (j + 1))));
+      if (g() % 8 == 0) Wr(order + 4 * (g() % 8), g() % 8);
+      if (g() % 4 == 0) Wr(values + 4 * Rd(order), 0x5F0AC723);
+      if (g() % 4 == 0) {
+        // The least kept times the cvar equal to a later value.
+        const float least = g_mem.read<float>(values + 4 * Rd(order + 4 * (Rd(values + 4 * Rd(order)) == 0x5F0AC723)));
+        WrF(Rd(0x153440C) + 0x1C, 0.5f);
+        WrF(values + 4 * Rd(order + 4 * (2 + g() % 6)), float(double(least) * 0.5));
+      }
+      Wr(e + 0x114, uint32_t(Pick(g, {8, 1, 0, 8})));
+      if (g() % 4 == 0) {
+        // The last two merged a direction and its copy of the opposite
+        // colour at the same value: the merged colours their products'
+        // rounding (the limit 1 merges from the second or third on).
+        const uint32_t l = a.Alloc(2 * 0x88);
+        std::memcpy(g_mem.ptr<uint8_t>(l), g_mem.ptr<uint8_t>(PickLight(g, false)), 0x88);
+        std::memcpy(g_mem.ptr<uint8_t>(l + 0x88), g_mem.ptr<uint8_t>(l), 0x88);
+        for (uint32_t k = 4; k < 0x10; k += 4) {
+          WrF(l + k, Wide(g, -4, 4));
+          WrF(l + 0x88 + k, -g_mem.read<float>(l + k));
+        }
+        Wr(e + 0xCC, 8);
+        Wr(0x15364BC, 1);
+        Wr(e + 0xD0 + 8 * 6, l);
+        Wr(e + 0xD0 + 8 * 7, l + 0x88);
+        Wr(values + 4 * Rd(order + 4 * 7), Rd(values + 4 * Rd(order + 4 * 6)));
+      }
+      win.push_back(a.All());
+      Run({0x4AA970, rnd[0], rnd[1], rnd[2], e, rnd[4], rnd[5], {o, values, order}}, win, g, s, "random");
+      break;
+    }
+    case 12: {
+      // The lights' debug draw: each mode, the view origin and its forward
+      // axis, an entity with the grid's lights now and then; no world or
+      // grid now and then.
+      const uint32_t o = vec(-128, 128, 32);
+      Wr(Rd(0x15344CC) + 0x20, uint32_t(Pick(g, {1, 2, 3, 3, 4, 4, 5})));
+      for (uint32_t k = 0; k < 0x18; k += 4) WrF(0x1536330 + k, Value(g, -128, 128, 16));
+      for (uint32_t j = 0; j < 8; j++)
+        if (g() % 2) Wr(e + 0xD0 + 8 * j, g_lights + 0x88 * g_mem.read<uint16_t>(Rd(Rd(kWorld) + 0x11C) + 2 * (g() % 64)));
+      Wr(e + 0xCC, g() % 9);
+      if (g() % 4 == 0 && !UnitHeights().empty()) {
+        // Looking along it at exactly 0.95: the origin straight above the
+        // view by a height the fast normalisation takes to exactly 1.
+        for (uint32_t k = 0; k < 8; k += 4) WrF(o + k, g_mem.read<float>(0x1536330 + k));
+        WrF(0x1536338, 0);
+        WrF(o + 8, UnitHeights()[g() % UnitHeights().size()]);
+        WrF(0x153633C, 0);
+        WrF(0x1536340, 0);
+        WrF(0x1536344, g() % 2 ? 0.95f : std::nextafter(0.95f, g() % 2 ? 1.0f : 0.0f));
+        Wr(Rd(0x15344CC) + 0x20, 3);
+      }
+      if (g() % 16 == 0) Wr(Rd(kWorld) + 0x98, 0);
+      if (g() % 16 == 0) Wr(kWorld, 0);
+      win.push_back(a.All());
+      Run({0x4AA5C0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {o, e}}, win, g, s, "random");
+      break;
+    }
+    case 13: {
+      // The light grid's lights at a point: on the cells' edges (multiples
+      // of 32 and 64, or an ulp off) now and then; the lights out, values
+      // and the sun's value garbage before.
+      const uint32_t o = vec(-128, 128, 32), values = a.Alloc(4 * 50), lights = a.Alloc(4 * 50), sun = a.Alloc(4);
+      if (g() % 4 == 0)
+        for (uint32_t k = 0; k < 12; k += 4) {
+          float x = float(int(g() % 9) - 4) * (k == 8 ? 64.0f : 32.0f);
+          if (g() % 2) x = std::nextafter(x, g() % 2 ? INFINITY : -INFINITY);
+          WrF(o + k, x);
+        }
+      if (g() % 4 == 0) {
+        // Weights 0.98 and 0.02 along x (x 0.64 into a cell), y and z on a
+        // cell's edge: a total of exactly 0.98 when the second corner
+        // sees nothing (-1).
+        WrF(o, g() % 2 ? 0.64f : 32.64f);
+        WrF(o + 4, 0);
+        WrF(o + 8, 0);
+      }
+      for (uint32_t j = 0; j < 50; j++) {
+        Wr(values + 4 * j, g());
+        Wr(lights + 4 * j, g());
+      }
+      Wr(sun, g());
+      win.push_back(a.All());
+      Run({0x4AACB0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {o, values, sun, lights}}, win, g, s, "random");
+      break;
+    }
     default: {
       if (g_cache_nodes.empty()) return;
       const CacheNode& c = g_cache_nodes[g() % g_cache_nodes.size()];
       win.push_back(a.All());
       Run({0x4DA0F0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {kModelCache, c.entry, c.node, c.shift}}, win, g, s, "random");
+      break;
+    }
+  }
+}
+
+// ---- the vector helpers -----------------------------------------------------------
+
+// A float NaN of either sign, quiet or signalling, of any payload.
+float NaN(std::mt19937& g) {
+  const uint32_t quiet = g() % 2 ? 0x400000u : 0;
+  return std::bit_cast<float>(uint32_t((g() & 0x80000000u) | 0x7F800000u | quiet | ((g() & 0x3FFFFF) | (quiet ? 0 : 1))));
+}
+
+// A vector whose squares summed x + y + z and z + y + x round to different
+// floats (searched: x about 1; y^2 most of the way from x^2 to a float's
+// midpoint, z^2 the rest, z scanned over its neighbours).
+void Squares(std::mt19937& g, float* v) {
+  for (int t = 0; t < 64; t++) {
+    const float x = Uniform(g, 1, 2);
+    const double xx = double(x) * x, u = std::ldexp(1.0, std::ilogb(xx) - 23);
+    const double mid = (std::floor(xx / u) + 0.5) * u;
+    const float y = float(std::sqrt((mid - xx) * Uniform(g, 0.99f, 0.9999f)));
+    const double yy = double(y) * y;
+    if (!(mid - xx - yy > 0)) continue;
+    float z = float(std::sqrt(mid - xx - yy));
+    for (int k = 0; k < 256; k++, z = std::nextafter(z, k % 2 ? INFINITY : 0.0f)) {
+      const double zz = double(z) * z;
+      if (float((xx + yy) + zz) != float((zz + yy) + xx)) {
+        v[0] = x * (g() % 2 ? 1 : -1);
+        v[1] = y * (g() % 2 ? 1 : -1);
+        v[2] = z * (g() % 2 ? 1 : -1);
+        return;
+      }
+    }
+  }
+  v[0] = 1, v[1] = v[2] = 0;
+}
+
+// The fast normalisation 0x4268B0 of v, as the original computes it.
+void FastNormal(const float* v, float* out) {
+  const float sum = float((double(v[0]) * v[0] + double(v[1]) * v[1]) + double(v[2]) * v[2]);
+  const float half = float(double(sum) * 0.5);
+  const float i = std::bit_cast<float>(0x5F3759DFu - uint32_t(std::bit_cast<int32_t>(sum) >> 1));
+  const float r = float((1.5 - double(i) * i * half) * i);
+  for (int k = 0; k < 3; k++) out[k] = float(double(r) * v[k]);
+}
+
+// Heights whose fast normalisation is exactly 1 (scanned once).
+const std::vector<float>& UnitHeights() {
+  static std::vector<float> z;
+  if (z.empty())
+    for (float h = 1; h < 4 && z.size() < 64; h = std::nextafter(h, 4.0f)) {
+      const float v[3] = {0, 0, h};
+      float n[3];
+      FastNormal(v, n);
+      if (n[2] == 1.0f) z.push_back(h);
+    }
+  return z;
+}
+
+// The vector helpers alone (the whole game calls them): vectors, matrices,
+// bounds and planes of ordinary values, special ones now and then, NaNs of
+// every payload (where only the original's operand order picks the NaN),
+// wide ones whose sums show their order (squares that round apart,
+// products that cancel, nearly dependent rows), ties of magnitudes,
+// outputs on (or overlapping) their inputs, zero vectors and collinear
+// points; angles of every size (beyond FSINCOS's range too, and where the
+// order of deg x pi / 180 shows) and points nearly perpendicular to a
+// row of the rotation; BoxOnPlaneSide with its table of cases unfilled
+// now and then, sign bits for the normal or not, and corners whose
+// products cancel; planes through points whose distance cancels.
+void HelperCase(Arena& a, std::mt19937& g, Stats& s) {
+  a.Reset();
+  const uint32_t rnd[6] = {uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g())};
+  const uint32_t special = g() % 4 ? 0 : g() % 2 ? 32 : 512;
+  const bool nans = g() % 8 == 0;
+  auto floats = [&](uint32_t n, float lo, float hi) {
+    const uint32_t v = a.Alloc(4 * n + 4);
+    const uint32_t kind = g() % 4;
+    for (uint32_t k = 0; k < n; k++)
+      WrF(v + 4 * k, nans && g() % 2 ? NaN(g) : kind == 0 ? float(int(g() % 7) - 3) : kind == 1 ? Wide(g, -20, 20) : Value(g, lo, hi, special));
+    return v;
+  };
+  std::vector<Window> win;
+  switch (g() % 10) {
+    case 0:
+    case 1: {
+      const uint32_t v = floats(3, -64, 64);
+      if (g() % 3 == 0) {
+        float w[3];
+        Squares(g, w);
+        WrVec(v, w);
+      }
+      if (g() % 16 == 0)
+        for (uint32_t k = 0; k < 12; k += 4) WrF(v + k, g() % 2 ? 0.0f : -0.0f);
+      win.push_back(a.All());
+      if (g() % 2)
+        Run({0x4268B0, v, rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      else
+        Run({0x426710, rnd[0], rnd[1], rnd[2], rnd[3], v, rnd[5], {}}, win, g, s, "random");
+      break;
+    }
+    case 2: {
+      // A unit vector (its magnitudes tied now and then) or any.
+      uint32_t src = a.Alloc(12);
+      const uint32_t out = a.Alloc(12);
+      float n[3];
+      Normal(g, n);
+      if (g() % 4 == 0) {
+        const uint32_t i = g() % 3, j = g() % 3;
+        n[i] = g() % 2 ? n[j] : -n[j];
+      }
+      if (g() % 8 == 0) n[g() % 3] = Value(g, -1, 1, 1024);
+      WrVec(src, n);
+      if (g() % 4 == 0) src = floats(3, -4, 4);
+      win.push_back(a.All());
+      Run({0x4273C0, rnd[0], rnd[1], out, src, rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    }
+    case 3: {
+      const uint32_t dir = a.Alloc(12), p = floats(3, -128, 128);
+      float n[3];
+      Normal(g, n);
+      if (g() % 8 == 0) n[g() % 3] = Value(g, -1, 1, 1024);
+      if (nans || g() % 8 == 0)
+        for (float& x : n)
+          if (g() % 2) x = NaN(g);
+      WrVec(dir, n);
+      const uint32_t out = g() % 4 == 0 ? p : a.Alloc(12);
+      float deg = g() % 4 ? Uniform(g, -720, 720)
+                          : std::bit_cast<float>(uint32_t(Pick(g, {0, int32_t(0x80000000), 0x42B40000, 0x43340000, 0x7FC00000,
+                                                                    0x7F800000, 0x7E000000, 0x5F800000, 0x5E000000})));
+      const double pi = std::bit_cast<float>(0x40490FDBu);
+      if (g() % 4 == 0)
+        // Where (deg x pi) / 180 is a float's midpoint, which (deg / 180) x
+        // pi misses: 12 x j x 2^m for odd j of 21-37 (pi's float is 3 x 5 x
+        // 878453 x 2^-22), filtered.
+        for (int t = 0; t < 16; t++) {
+          const float d = float(12 * (21 + 2 * int(g() % 9))) * std::ldexp(1.0f, int(g() % 9) - 4) * (g() % 2 ? 1 : -1);
+          if (float(double(d) * pi / 180.0) != float(double(d) / 180.0 * pi)) {
+            deg = d;
+            break;
+          }
+        }
+      if (g() % 3 == 0 && std::isfinite(deg) && std::fabs(deg) < 1e6f) {
+        // The point along a row of the rotation, scaled, so that the
+        // others' products cancel: the frame as the original builds it
+        // (approximately) in doubles.
+        const double f[3] = {n[0], n[1], n[2]};
+        int pos = 0;
+        double least = 1;
+        for (int i = 0; i < 3; i++)
+          if (least > std::fabs(f[i])) least = std::fabs(f[pos = i]);
+        double r[3] = {0, 0, 0};
+        r[pos] = 1;
+        const double ff = f[0] * f[0] + f[1] * f[1] + f[2] * f[2], d = (r[0] * f[0] + r[1] * f[1] + r[2] * f[2]) / ff;
+        for (int i = 0; i < 3; i++) r[i] -= d * f[i];
+        const double rl = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+        for (double& x : r) x /= rl;
+        const double u[3] = {r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]};
+        const double ang = double(float(double(deg) * pi / 180.0)), c = std::cos(ang), sn = std::sin(ang);
+        const double* col[3] = {r, u, f};
+        // rot = m z m^T, z = [[c, s, 0], [-s, c, 0], [0, 0, 1]].
+        const double z[3][3] = {{c, sn, 0}, {-sn, c, 0}, {0, 0, 1}};
+        double rot[3][3];
+        for (int i = 0; i < 3; i++)
+          for (int j = 0; j < 3; j++) {
+            double v = 0;
+            for (int k = 0; k < 3; k++)
+              for (int l = 0; l < 3; l++) v += col[k][i] * z[k][l] * col[l][j];
+            rot[i][j] = v;
+          }
+        const int other = int(g() % 3);
+        const float scale = std::ldexp(1.0f, int(g() % 40));
+        for (int k = 0; k < 3; k++) WrF(p + 4 * uint32_t(k), float(rot[other][k]) * scale);
+      }
+      win.push_back(a.All());
+      Run({0x426AB0, dir, rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {out, p, std::bit_cast<uint32_t>(deg)}}, win, g, s, "random");
+      break;
+    }
+    case 4: {
+      // Rows nearly dependent now and then (one the sum of the others, an
+      // entry an ulp off); the out on the input or overlapping it.
+      const uint32_t m = floats(9, -4, 4);
+      if (g() % 4 == 0) {
+        const uint32_t r0 = g() % 3, r1 = (r0 + 1) % 3, r2 = (r0 + 2) % 3;
+        for (uint32_t k = 0; k < 3; k++)
+          WrF(m + 12 * r2 + 4 * k, g_mem.read<float>(m + 12 * r0 + 4 * k) + g_mem.read<float>(m + 12 * r1 + 4 * k));
+        const uint32_t k = 4 * (g() % 9);
+        if (g() % 2) WrF(m + k, std::nextafter(g_mem.read<float>(m + k), INFINITY));
+      }
+      a.Alloc(64);
+      const uint32_t out = g() % 4 == 0 ? m : g() % 3 == 0 ? m + 4 * (1 + g() % 8) : a.Alloc(36);
+      win.push_back(a.All());
+      Run({0x427CB0, m, out, rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    }
+    case 5: {
+      const uint32_t m = floats(16, -4, 4);
+      if (g() % 4 == 0) {
+        // Exactly singular: a row a copy of another, its cofactors pure
+        // rounding.
+        const uint32_t r0 = g() % 4, r1 = (r0 + 1 + g() % 3) % 4;
+        for (uint32_t k = 0; k < 4; k++) Wr(m + 16 * r1 + 4 * k, Rd(m + 16 * r0 + 4 * k));
+      } else if (g() % 4 == 0) {
+        const uint32_t dst = g() % 4, r0 = (dst + 1 + g() % 3) % 4;
+        uint32_t r1 = (dst + 1 + g() % 3) % 4;
+        if (r1 == r0) r1 = (r0 + 1) % 4 == dst ? (r0 + 2) % 4 : (r0 + 1) % 4;
+        for (uint32_t k = 0; k < 4; k++)
+          WrF(m + 16 * dst + 4 * k, g_mem.read<float>(m + 16 * r0 + 4 * k) - g_mem.read<float>(m + 16 * r1 + 4 * k));
+        const uint32_t k = 4 * (g() % 16);
+        if (g() % 2) WrF(m + k, std::nextafter(g_mem.read<float>(m + k), INFINITY));
+      }
+      const uint32_t out = g() % 4 == 0 ? m : a.Alloc(64);
+      win.push_back(a.All());
+      Run({0x427E80, out, m, rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    }
+    case 6:
+    case 7: {
+      // Bounds and a point (or other bounds) with equal coordinates, -0
+      // against 0 and NaNs now and then.
+      const uint32_t b = floats(6, -64, 64), p = floats(6, -64, 64);
+      for (uint32_t k = 0; k < 24; k += 4)
+        if (g() % 4 == 0) Wr(p + k, g() % 4 ? Rd(b + k) : Rd(b + k) ^ 0x80000000u);
+      win.push_back(a.All());
+      if (g() % 2)
+        Run({0x429070, rnd[0], p, b, rnd[3], b + 12, rnd[5], {}}, win, g, s, "random");
+      else
+        Run({0x4290E0, rnd[0], b, p, rnd[3], b + 12, p + 12, {}}, win, g, s, "random");
+      break;
+    }
+    case 8: {
+      // A plane (its sign bits for its normal, or any 0-7) and bounds; now
+      // and then a normal (c, -c, small) against corners equal in x and y,
+      // whose first two products cancel; the table of cases unfilled.
+      const uint32_t b = floats(6, -64, 64), plane = floats(5, -1, 1);
+      if (g() % 4 == 0) {
+        const float c = Wide(g, -4, 4), A = Wide(g, 0, 30);
+        WrF(plane, c);
+        WrF(plane + 4, -c);
+        WrF(plane + 8, std::ldexp(Uniform(g, 1, 2), int(g() % 40) - 30) * (g() % 2 ? 1 : -1));
+        for (uint32_t k = 0; k < 24; k += 12) {
+          WrF(b + k, A);
+          WrF(b + k + 4, A);
+        }
+        WrF(plane + 12, g() % 2 ? 0.0f : float(double(g_mem.read<float>(plane + 8)) * g_mem.read<float>(b + 8 + 12 * (g() % 2))));
+      }
+      uint8_t bits = 0;
+      for (uint32_t k = 0; k < 3; k++) bits |= uint8_t((Rd(plane + 4 * k) >> 31) << k);
+      g_mem.write<uint8_t>(plane + 0x11, g() % 8 ? bits : uint8_t(g() % 8));
+      if (g() % 8 == 0)
+        for (uint32_t k = 0; k < 0x24; k += 4) Wr(0x885E40 + k, g() % 2 ? 0 : g());
+      win.push_back(a.All());
+      win.push_back({0x885E40, 0x24});
+      Run({0x429800, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {b, b + 12, plane}}, win, g, s, "random");
+      break;
+    }
+    default: {
+      // Collinear points now and then; or a first point (A, A, z) far off
+      // (z small now and then) and a plane nearly along x = y, whose
+      // distance's first two products cancel.
+      const uint32_t p = floats(9, -64, 64), out = a.Alloc(0x14);
+      if (g() % 8 == 0)
+        for (uint32_t k = 0; k < 12; k += 4) WrF(p + 24 + k, 2 * g_mem.read<float>(p + 12 + k) - g_mem.read<float>(p + k));
+      if (g() % 4 == 0) {
+        const float A = Wide(g, 10, 30), sz = Uniform(g, 1, 64);
+        const float p0[3] = {A, A, g() % 2 ? Uniform(g, -64, 64) : Wide(g, -30, -10)};
+        // Exactly along x = y now and then (the first two products then
+        // cancel exactly).
+        const float t = g() % 2 ? 0 : std::ldexp(Uniform(g, 1, 2), -10 - int(g() % 10)), dz = g() % 2 ? 0 : Uniform(g, -1, 1);
+        const float p1[3] = {A + sz, A + sz * (1 + t), p0[2] + dz};
+        const float p2[3] = {A + Uniform(g, 1, 64), A, p0[2] + sz};
+        WrVec(p, p0);
+        WrVec(p + 12, p1);
+        WrVec(p + 24, p2);
+      }
+      win.push_back(a.All());
+      Run({0x429650, p + 24, p + 12, out, rnd[3], rnd[4], p, {}}, win, g, s, "random");
       break;
     }
   }
@@ -3982,6 +4491,9 @@ int main(int argc, char** argv) {
   Wr(kGlBindPtr, kGlBind);
   Wr(kGlSubDataPtr, kGlSubData);
   Wr(kGlUpdatePtr, kGlUpdate);
+  Wr(kGetLastErrorPtr, kGetLastError);
+  Wr(kTlsGetValuePtr, kTlsGetValue);
+  Wr(kSetLastErrorPtr, kSetLastError);
   // The reference: the x87 model's exact arithmetic throughout.
   recomp::x87::run::g_doubles = false;
 
@@ -4009,7 +4521,8 @@ int main(int argc, char** argv) {
   for (int i = 0; i < 40000; i++) WorldViewCase(a, g, s, i < 20000 ? 0 : i < 30000 ? 4 : 48);
   for (int i = 0; i < 40000; i++) PortalCase(a, g, s, i < 20000 ? 0 : 48);
   for (int i = 0; i < 40000; i++) EntityCase(a, g, s);
-  for (int i = 0; i < 30000; i++) LightCase(a, g, s);
+  for (int i = 0; i < 42000; i++) LightCase(a, g, s);
+  for (int i = 0; i < 40000; i++) HelperCase(a, g, s);
   const int random = s.cases;
   for (int i = 2; i < argc; i++)
     if (!RunCaptures(argv[i], g, s)) return 1;

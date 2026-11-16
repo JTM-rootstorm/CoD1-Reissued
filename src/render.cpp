@@ -13,11 +13,15 @@
 // and the world's without the cell walk; RE_AddRefEntityToScene, the
 // model surfaces' levels of detail, cache entries and entity surfaces and
 // the composite models' debug bone draws; the entity lighting: the dlights
-// on a brush model, an entity's lights from its own or the light grid, a
-// vertex's colour; the model cache's blocks, splits, eviction and frees);
-// the back end's sky clipping (ClipSkyPolygon, AddSkyPolygon), texture
-// coordinates (ComputeTexCoords); and the draw surface sort (qsortFast),
-// the 4x4 matrix product and the memcpy 0x42B0A0 under both. Replacements of lifted
+// on a brush model, an entity's lights from its own or the light grid (a
+// light's intensity, the grid's lights at a point, the lights beyond the
+// limit merged, their debug draw), a vertex's colour; the model cache's
+// blocks, splits, eviction and frees); the back end's sky clipping
+// (ClipSkyPolygon, AddSkyPolygon), texture coordinates (ComputeTexCoords);
+// the draw surface sort (qsortFast), the 4x4 matrix product and the memcpy
+// 0x42B0A0 under both; and the vector helpers the whole game calls (the
+// normalisations, a perpendicular, a rotation about a vector, the 3x3 and
+// 4x4 inverses, bounds, BoxOnPlaneSide, a plane from points). Replacements of lifted
 // functions named with `replace` in manifest/CoDSP.manifest; FINDINGS.md
 // "Renderer". Names and evidence are in the Ghidra plate comments.
 //
@@ -56,33 +60,35 @@ void f_004DEC10(Ctx& c);  // RE_AddRefEntityToScene (refentity, its +0x2B0), bel
 void f_004CAF00(Ctx& c);  // R_AddDrawSurf(surface, dlight, 0, 0; EAX, EDX shader)
 void f_0042B0A0_lifted(Ctx& c);  // the memcpy, for overlapping copies
 void f_004CAB80(Ctx& c);  // a portal or mirror surface's view (EBX draw surface, entity; EAX: drawn)
-void f_00427E80(Ctx& c);  // a 4x4 matrix's inverse (ECX in, EAX out)
-void f_00429070(Ctx& c);  // adds a point to bounds (ECX point, EDX mins, ESI maxs)
-void f_004290E0(Ctx& c);  // adds bounds to bounds (ECX/ESI mins/maxs, EDX/EDI the other's)
-void f_00429800(Ctx& c);  // BoxOnPlaneSide(mins, maxs, plane)
-void f_004268B0(Ctx& c);  // normalises a vector (EAX)
-void f_00426710(Ctx& c);  // VectorNormalize (ESI; the length in ST0)
+void f_00427E80(Ctx& c);  // a 4x4 matrix's inverse (ECX in, EAX out), below
+void f_00429070(Ctx& c);  // adds a point to bounds (ECX point, EDX mins, ESI maxs), below
+void f_004290E0(Ctx& c);  // adds bounds to bounds (ECX/ESI mins/maxs, EDX/EDI the other's), below
+void f_00429800(Ctx& c);  // BoxOnPlaneSide(mins, maxs, plane), below
+void f_004268B0(Ctx& c);  // normalises a vector (EAX), below
+void f_00426710(Ctx& c);  // VectorNormalize (ESI; the length in ST0), below
 void f_004AD630(Ctx& c);  // draws a debug polygon (EBX count, stack points; EAX colour)
 void f_004AD760(Ctx& c);  // draws a debug line (EBX from, EDI to; ESI colour)
 void f_004CA170(Ctx& c);  // a surface's plane (ECX surface, ESI out)
 void f_004C9580(Ctx& c);  // an entity's orientation (EAX out, EBX view, EDI entity)
 void f_004CA8D0(Ctx& c);  // whether a portal surface is off the screen (draw surface; EAX)
-void f_004273C0(Ctx& c);  // a vector across EBX into EDX
-void f_00426AB0(Ctx& c);  // rotates a point about EAX (out, point, degrees)
+void f_004273C0(Ctx& c);  // a vector across EBX into EDX, below
+void f_00426AB0(Ctx& c);  // rotates a point about EAX (out, point, degrees), below
+void f_00429710(Ctx& c);  // a point (ECX) projected onto the plane of the normal EAX into EDX
+void f_00427590(Ctx& c);  // a 3x3 matrix product (ECX by EAX into EDX)
 void f_0052E6D0(Ctx& c);  // the CRT's trigonometric function of ST0 called by the portal rotation
 void f_004CB270(Ctx& c);  // renders a view (view parms)
 void f_004C97D0(Ctx& c);  // the viewer's orientation (src/render_backend.cpp)
 void f_004AA490(Ctx& c);  // the dlights on a brush model (model), below
-void f_00427CB0(Ctx& c);  // a 3x3 matrix's inverse (EAX in, ECX out)
+void f_00427CB0(Ctx& c);  // a 3x3 matrix's inverse (EAX in, ECX out), below
 void f_004ABEF0(Ctx& c);  // an entity's lighting, once (EAX entity, ECX refdef), below
 void f_004ABDC0(Ctx& c);  // an entity's lighting from the grid, once (EDI entity, refdef), below
 void f_004ABD30(Ctx& c);  // an entity's lights from the grid (EAX entity, ESI origin; refdef, flag), below
 void f_004AB490(Ctx& c);  // an entity's lights (EDI entity; refdef, origin, count, scales, sun, lights, flag), below
 void f_004AA0F0(Ctx& c);  // the dlights into an orientation (EAX count, EDX dlights, ECX orientation)
-void f_004AA8D0(Ctx& c);  // a light's (EDX) intensity at a point (ESI; ST0)
-void f_004AA5C0(Ctx& c);  // a debug draw of an entity's lights (origin, entity)
-void f_004AA970(Ctx& c);  // the lights beyond the limit merged into one (EBX entity; origin, values, order)
-void f_004AACB0(Ctx& c);  // the light grid's lights at a point (origin, scales, &sun, lights; EAX count)
+void f_004AA8D0(Ctx& c);  // a light's (EDX) intensity at a point (ESI; ST0), below
+void f_004AA5C0(Ctx& c);  // a debug draw of an entity's lights (origin, entity), below
+void f_004AA970(Ctx& c);  // the lights beyond the limit merged into one (EBX entity; origin, values, order), below
+void f_004AACB0(Ctx& c);  // the light grid's lights at a point (origin, scales, &sun, lights; EAX count), below
 void f_00440940(Ctx& c);  // va(format, ...)
 void f_004AD8F0(Ctx& c);  // draws debug text (EAX origin, EDI colour, text)
 void f_00477290(Ctx& c);  // a model's surface count (EDX model, EDI levels; EAX)
@@ -100,6 +106,10 @@ void f_004DA0F0(Ctx& c);  // a model cache entry's blocks freed (cache, entry, n
 void f_004DA420(Ctx& c);  // a vertex's lighting (EBX the refentity; position, normal, colour out), below
 void f_004771B0(Ctx& c);  // a model's bones' bounds (EDX out, model)
 void f_0040F4E0(Ctx& c);  // draws a debug line (from, 0, 0, 0; ESI colour, EDI to)
+void f_005008B0(Ctx& c);  // the light grid's point at ESI (EAX)
+void f_004A9EC0(Ctx& c);  // a grid corner's lights (EAX, ECX; x, z, count, lights, origin, &byte; EAX bits)
+void f_00426610(Ctx& c);  // the squared distance between EAX and ECX (ST0)
+void f_004A99C0(Ctx& c);  // whether a trace from ECX to EAX is blocked (AL)
 // ComputeTexCoords' texture coordinate generators and modifiers.
 void f_0050A2B0(Ctx& c);
 void f_0050ABF0(Ctx& c);
@@ -4245,6 +4255,380 @@ void f_004AA490(Ctx& c) {
   c.esp = e + 4;
 }
 
+// A light's (EDX) intensity at a point (ESI), pushed on the x87 stack: its
+// intensity (+0x10) x 1 << 0x1536298 (FIMUL, not for the shift 0); for a
+// point (+0x50 not 0) over its attenuation +0x60, with +0x64 or +0x68 not
+// 0 plus d2 x +0x68 (d2 the squares of the unrounded differences summed
+// z + y + x), and with +0x64 not 0 plus sqrt(d2) x +0x64.
+void f_004AA8D0(Ctx& c) {
+  const uint32_t light = c.edx, p = c.esi, shift = U32(0x1536298);
+  St r = Ld(light + 0x10);
+  if (shift) r = r * FromInt(int32_t(1u << (shift & 31)));
+  if (!(St(Ld(light + 0x50)) == 0.0f)) {
+    const St a = Ld(light + 0x60);
+    if (St(Ld(light + 0x64)) == 0.0f && St(Ld(light + 0x68)) == 0.0f) {
+      r = r / a;
+    } else {
+      const St dx = St(Ld(light + 0x44)) - Ld(p), dy = St(Ld(light + 0x48)) - Ld(p + 4),
+               dz = St(Ld(light + 0x4C)) - Ld(p + 8);
+      const St d2 = (dz * dz + dy * dy) + dx * dx;
+      St att = a + d2 * Ld(light + 0x68);
+      if (!(St(Ld(light + 0x64)) == 0.0f)) att = att + Sqrt(d2) * Ld(light + 0x64);
+      r = r / att;
+    }
+  }
+  x87::LoadF64(c.fpu, std::bit_cast<uint64_t>(r.v));
+  c.esp += 4;
+}
+
+// The lights beyond the limit 0x15364BC merged into one (EBX the
+// refentity; stack the origin and 0x4AB490's values and order of the
+// lights kept, +0xCC of them at +0xD0): unless there are no more than the
+// limit, those kept from the first (the second when the first's value is
+// 1e19) while their values are above its value x the cvar 0x153440C, up
+// to the limit less one; the rest's directions (a direction's own, its
+// value less the sun's share 1 << 0x1536298 x the world's +0x108 x the
+// sun's value +0x110 for types 1 and 8; a point's from the origin,
+// normalised by 0x426710) summed by their values into a direction
+// (normalised). The merged light +0x114 (its type left) points along it,
+// each light adding its colour +4 x the scale 0x1536290 x its value x the
+// scale at +0x24 when its dot product with the direction is above 0 (that
+// x 0.8 but for a type 1 or the merged light's own type 8), and x 0.5 or
+// (1 - dot) / 2 at +0x14; it takes the first merged one's place, value 1.
+void f_004AA970(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, ent = c.ebx, s = e - 0x80, sum = e - 0x6C, dirs = e - 0x60;
+  const uint32_t origin = Arg(c, e, 1), values = Arg(c, e, 2), order = Arg(c, e, 3);
+  const int32_t n = I32(ent + 0xCC), limit = I32(0x15364BC);
+  if (n <= limit) {
+    c.esp = e + 4;
+    return;
+  }
+  auto value = [&](int32_t i) { return values + 4 * U32(order + 4 * uint32_t(i)); };
+  int32_t k = St(Ld(value(0))) == F32{0x5F0AC723u} ? 1 : 0;
+  const F32 least = Fst(St(Ld(value(k))) * Ld(U32(0x153440C) + 0x1C));
+  for (++k; k < limit - 1 && !(St(Ld(value(k))) <= least); ++k) {
+  }
+  for (uint32_t o = 0; o < 0xC; o += 4) Put(sum + o, 0u);
+  if (k < n) {
+    int32_t i = k;
+    do {
+      const uint32_t light = U32(ent + 0xD0 + 8 * uint32_t(i)), d = dirs + 12 * uint32_t(i);
+      if (St(Ld(light + 0x50)) == 0.0f) {
+        for (uint32_t o = 0; o < 0xC; o += 4) Put(d + o, U32(light + 0x44 + o));
+        if (U32(light) == 1 || U32(light) == 8) {
+          const uint32_t v = value(i);
+          Put(v, Fst(Ld(v) - FromInt(int32_t(1u << (U32(0x1536298) & 31))) * Ld(U32(0x1535A34) + 0x108) *
+                                 Ld(ent + 0x110)));
+        }
+      } else {
+        for (uint32_t o = 0; o < 0xC; o += 4) Put(d + o, Fst(St(Ld(light + 0x44 + o)) - Ld(origin + o)));
+        c.esp = s;
+        c.esi = d;
+        Call(c, f_00426710, 0x4AAAB2);
+        x87::Pop(c.fpu);
+      }
+      const St v = Ld(value(i));
+      for (uint32_t o = 0; o < 0xC; o += 4) Put(sum + o, Fst(v * Ld(d + o) + Ld(sum + o)));
+    } while (++i < I32(ent + 0xCC));
+  }
+  c.esp = s;
+  c.esi = sum;
+  Call(c, f_00426710, 0x4AAB12);
+  x87::Pop(c.fpu);
+  const uint32_t m = ent + 0x114;
+  for (uint32_t o = 0x14; o < 0x40; o += 0x10)
+    for (uint32_t j = 0; j < 0xC; j += 4) Put(m + o + j, 0u);
+  for (int32_t i = k; i < I32(ent + 0xCC); ++i) {
+    const uint32_t light = U32(ent + 0xD0 + 8 * uint32_t(i)), d = dirs + 12 * uint32_t(i);
+    St dot = (St(Ld(sum)) * Ld(d) + St(Ld(sum + 8)) * Ld(d + 8)) + St(Ld(sum + 4)) * Ld(d + 4);
+    St w(0.5f);
+    if (!(dot <= 0.0f)) {
+      if (U32(light) != 1 && U32(m) != 8) dot = dot * 0.8f;
+      const St t = St(Ld(0x1536290)) * Ld(value(i)) * dot;
+      for (uint32_t o = 0; o < 0xC; o += 4) Put(m + 0x24 + o, Fst(t * Ld(light + 4 + o) + Ld(m + 0x24 + o)));
+      w = (1.0f - dot) * 0.5f;
+    }
+    const St u = w * (St(Ld(0x1536290)) * Ld(value(i)));
+    for (uint32_t o = 0; o < 0xC; o += 4) Put(m + 0x14 + o, Fst(u * Ld(light + 4 + o) + Ld(m + 0x14 + o)));
+  }
+  for (uint32_t o = 0; o < 0xC; o += 4) Put(m + 0x44 + o, U32(sum + o));
+  Put(m + 0x64, 0u);
+  Put(m + 0x68, 0u);
+  for (uint32_t o : {0x20u, 0x30u, 0x40u, 0x60u}) Put(m + o, 0x3F800000u);
+  Put(m + 0x70, 0x43340000u);
+  Put(ent + 0xCC, uint32_t(k + 1));
+  Put(ent + 0xD0 + 8 * uint32_t(k), m);
+  Put(ent + 0xD4 + 8 * uint32_t(k), 0x3F800000u);
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// A debug draw of an entity's lights at an origin (stack the origin, the
+// refentity), with a world with a light grid (+0x98): not for the cvar
+// 0x15344CC at 3 when the direction from the view origin 0x1536330
+// (normalised by 0x4268B0) is less than 0.95 along the view's forward
+// axis 0x153633C, nor at 4 beyond 96 (0x426610's squared distance); a
+// line from the origin to each of the grid point's lights (0x5008B0: count
+// +0x18, the world's 16-bit indexes +0x11C from +0x14 into its lights
+// +0x110), a direction's 1024 along it, yellow or green when the entity
+// has it (+0xD0, +0xCC); with the cvar at 4 or more and the point's +0x10
+// a grid of traces (0x4A99C0) down from the origin's height + 0.1, 32768
+// long, the grid's step 32768 (16384 above 3 of 0x15364C4) over half the
+// step x (0x15364C4 - 1) each way: one blocked drawn to its end, a free one
+// to the original's uninitialised local at e - 0x2C.
+void f_004AA5C0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, s = e - 0x6C;
+  const uint32_t origin = Arg(c, e, 1), ent = Arg(c, e, 2), world = U32(0x1535A34);
+  [&] {
+    if (!world || !U32(world + 0x98)) return;
+    const int32_t mode = CvarInt(0x15344CC);
+    if (mode == 3) {
+      const uint32_t v = e - 0x48;
+      for (uint32_t o = 0; o < 0xC; o += 4) Put(v + o, Fst(St(Ld(origin + o)) - Ld(0x1536330 + o)));
+      c.esp = s;
+      c.eax = v;
+      Call(c, f_004268B0, 0x4AA623);
+      if ((St(Ld(0x1536344)) * Ld(v + 8) + St(Ld(0x1536340)) * Ld(v + 4)) + St(Ld(0x153633C)) * Ld(v) < 0.95f)
+        return;
+    }
+    if (mode == 4) {
+      c.esp = s;
+      c.eax = 0x1536330;
+      c.ecx = origin;
+      Call(c, f_00426610, 0x4AA667);
+      const St d(std::bit_cast<double>(x87::StoreF64(c.fpu)));
+      x87::Pop(c.fpu);
+      if (d > 9216.0f) return;
+    }
+    c.esp = s;
+    c.esi = origin;
+    Call(c, f_005008B0, 0x4AA67F);
+    const uint32_t point = c.eax;
+    if (!point) return;
+    for (int32_t i = 0; i < I32(point + 0x18); ++i) {
+      const uint32_t w = U32(0x1535A34);
+      const int16_t index = int16_t(U16(U32(w + 0x11C) + 2 * (U32(point + 0x14) + uint32_t(i))));
+      const uint32_t light = U32(w + 0x110) + uint32_t(index) * 0x88;
+      uint32_t colour = 0x537810, to = light + 0x44;
+      for (int32_t j = 0, n = I32(ent + 0xCC); j < n; ++j)
+        if (U32(ent + 0xD0 + 8 * uint32_t(j)) == light) {
+          colour = 0x537820;
+          break;
+        }
+      if (St(Ld(light + 0x50)) == 0.0f) {
+        colour = colour == 0x537820 ? 0x537850 : 0x537840;
+        to = e - 0x3C;
+        for (uint32_t o = 0; o < 0xC; o += 4) Put(to + o, Fst(St(Ld(light + 0x44 + o)) * 1024.0f + Ld(origin + o)));
+      }
+      c.esp = s;
+      c.ebx = origin;
+      c.edi = to;
+      c.esi = colour;
+      Call(c, f_004AD760, 0x4AA756);
+    }
+    if (CvarInt(0x15344CC) < 4 || !U32(point + 0x10)) return;
+    const int32_t size = I32(0x15364C4);
+    const F32 step{size > 3 ? 0x46800000u : 0x47000000u};
+    const F32 r = Fst(FromInt(size - 1) * (St(step) * 0.5f));
+    const uint32_t from = e - 0x48, to = e - 0x3C;
+    Put(from + 8, Fst(St(Ld(origin + 8)) + 0.1f));
+    Put(to + 8, Fst(St(Ld(origin + 8)) + 32768.0f));
+    const F32 low = Fst(-St(r));
+    if (!(St(r) >= low)) return;
+    F32 y = low;
+    do {
+      F32 x = low;
+      Put(from + 4, Fst(St(y) * Ld(0x55B894) + Ld(origin + 4)));
+      Put(to + 4, Fst(St(y) + Ld(origin + 4)));
+      if (St(x) <= r) do {
+          Put(from, Fst(St(x) * Ld(0x55B894) + Ld(origin)));
+          Put(to, Fst(St(x) + Ld(origin)));
+          c.esp = s;
+          c.eax = to;
+          c.ecx = from;
+          Call(c, f_004A99C0, 0x4AA869);
+          const bool blocked = c.eax & 0xFF;
+          c.ebx = from;
+          c.esi = blocked ? 0x537910 : 0x5378E0;
+          c.edi = blocked ? to : e - 0x2C;
+          Call(c, f_004AD760, 0x4AA88A);
+          x = Fst(St(x) + step);
+        } while (St(x) <= r);
+      y = Fst(St(y) + step);
+    } while (St(y) <= r);
+  }();
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The light grid's lights at a point (stack: the origin, the values, the
+// sun's value and the lights out; EAX their count). The sun's value 0;
+// with the world's grid (+0x98) the grid point (0x5008B0): a point outside
+// it (+0xC below 0) gives the world's default light +0x114 (if any) at 1
+// with the sun's value 1; one without lights (+0x18) nor sun (+0x10)
+// none. Else its lights (the world's 16-bit indexes +0x11C from +0x14 into
+// its lights +0x110) at 0, and for each of the eight corners of the grid
+// cell at the origin (32 x 32 x 64 units from -131072: FISTP of the
+// distance less 0.5 - 2^-30, shifted; the fractions' weights 1 - f and f
+// stored) the lights 0x4A9EC0 sees from it (a bit each; -1 none) take its
+// weight (the three weights' product stored, unrounded into the total)
+// and the sun's value its byte x the weight x 0x15364C8. With a total
+// below 0.98: none (0) sets them all and the sun to 1 off the grid; else
+// the sun and the lights / total but the default light, which takes
+// 1 - total more. A sun of +0x10 under 0.25 becomes 0.25. The cvar
+// 0x15344CC draws the cell (at 2 or below 0, at 3 when the view looks
+// along it) and below 0 each corner and its lines to its lights.
+void f_004AACB0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi, s = e - 0x8C;
+  const uint32_t origin = Arg(c, e, 1), values = Arg(c, e, 2), sun = Arg(c, e, 3), lights = Arg(c, e, 4);
+  c.eax = [&]() -> uint32_t {
+    Put(sun, 0u);
+    if (!U32(U32(0x1535A34) + 0x98)) return 0;
+    c.esp = s;
+    c.esi = origin;
+    Call(c, f_005008B0, 0x4AACDF);
+    const uint32_t point = c.eax;
+    if (I32(point + 0xC) < 0) {
+      const uint32_t l = U32(U32(0x1535A34) + 0x114);
+      if (!l) return 0;
+      Put(lights, l);
+      Put(values, 0x3F800000u);
+      Put(sun, 0x3F800000u);
+      return 1;
+    }
+    if (!U32(point + 0x18) && !U32(point + 0x10)) return 0;
+    int32_t n = 0;
+    for (; n < I32(point + 0x18); ++n) {
+      const uint32_t w = U32(0x1535A34);
+      const int16_t index = int16_t(U16(U32(w + 0x11C) + 2 * (U32(point + 0x14) + uint32_t(n))));
+      Put(lights + 4 * uint32_t(n), U32(w + 0x110) + uint32_t(index) * 0x88);
+      Put(values + 4 * uint32_t(n), 0u);
+    }
+    // The cell's index and the two weights 1 - f and f at weight.
+    const St half(std::bit_cast<double>(0x3FDFFFFFFF000000ull));
+    auto cell = [&](uint32_t o, int shift, float scale, uint32_t weight) {
+      const int32_t i = Fistp(St(Fst(St(Ld(origin + o)) - -131072.0f)) - half) >> shift;
+      const F32 f = Fst((St(Ld(origin + o)) - -131072.0f) * scale - FromInt(i));
+      Put(weight + 4, f);
+      Put(weight, Fst(St(1.0f) - f));
+      return i;
+    };
+    const int32_t ix = cell(0, 5, 0.03125f, e - 0x18), iy = cell(4, 5, 0.03125f, e - 0x10),
+                  iz = cell(8, 6, 0.015625f, e - 8);
+    const int32_t mode = CvarInt(0x15344CC);
+    bool draw = mode == 2 || mode < 0;
+    if (mode == 3) {
+      const uint32_t v = e - 0x48;
+      for (uint32_t o = 0; o < 0xC; o += 4) Put(v + o, Fst(St(Ld(origin + o)) - Ld(0x1536330 + o)));
+      c.esp = s;
+      c.eax = v;
+      Call(c, f_004268B0, 0x4AAF0A);
+      draw = !((St(Ld(0x1536344)) * Ld(v + 8) + St(Ld(0x1536340)) * Ld(v + 4)) + St(Ld(0x153633C)) * Ld(v) < 0.95f);
+    }
+    if (draw) {
+      const uint32_t mins = e - 0x48, maxs = e - 0x30;
+      Put(mins, Fst(FromInt(int32_t(uint32_t(ix - 0x1000) << 5))));
+      Put(mins + 4, Fst(FromInt(int32_t(uint32_t(iy - 0x1000) << 5))));
+      Put(mins + 8, Fst(FromInt(int32_t(uint32_t(iz - 0x800) << 6))));
+      Put(maxs, Fst(St(Ld(mins)) + 32.0f));
+      Put(maxs + 4, Fst(St(Ld(mins + 4)) + 32.0f));
+      Put(maxs + 8, Fst(St(Ld(mins + 8)) + 64.0f));
+      c.esp = s;
+      c.eax = 0x5378D0;
+      c.ecx = mins;
+      c.edx = maxs;
+      Call(c, f_004AD7E0, 0x4AAFB4);
+    }
+    const uint32_t total = e - 0x78, corner = e - 0x48, mins = e - 0x30, maxs = e - 0x3C, seen = e - 0x79;
+    Put(total, 0u);
+    for (int32_t k = 0; k < 8; ++k) {
+      const int32_t bx = k & 1, by = k >> 1 & 1, bz = k >> 2 & 1;
+      c.esp = s;
+      for (uint32_t v : {seen, origin, lights, uint32_t(n), uint32_t(iz + bz), uint32_t(ix + bx)}) Push(c, v);
+      c.eax = U32(point + 0xC);
+      c.ecx = uint32_t(iy + by);
+      c.edx = point;
+      c.ebx = uint32_t(bx);
+      c.esi = uint32_t(bz);
+      c.edi = uint32_t(by);
+      c.ebp = uint32_t(ix + bx);
+      Call(c, f_004A9EC0, 0x4AB01A);
+      const uint32_t bits = c.eax;
+      c.esp = s;
+      if (CvarInt(0x15344CC) < 0) {
+        Put(corner, Fst(FromInt(int32_t(uint32_t(ix + bx) << 5)) - 131072.0f));
+        Put(corner + 4, Fst(FromInt(int32_t(uint32_t(iy + by) << 5)) - 131072.0f));
+        Put(corner + 8, Fst(FromInt(int32_t(uint32_t(iz + bz) << 6)) - 131072.0f));
+        for (uint32_t o = 0; o < 0xC; o += 4) Put(mins + o, Fst(St(Ld(corner + o)) - 1.0f));
+        for (uint32_t o = 0; o < 0xC; o += 4) Put(maxs + o, Fst(St(Ld(corner + o)) + 1.0f));
+      }
+      auto box = [&](uint32_t colour, uint32_t ret) {
+        if (CvarInt(0x15344CC) >= 0) return;
+        c.eax = colour;
+        c.ecx = mins;
+        c.edx = maxs;
+        Call(c, f_004AD7E0, ret);
+      };
+      if (int32_t(bits) < 0) {
+        box(0x537810, 0x4AB100);
+        continue;
+      }
+      const St product = St(Ld(e - 0x10 + 4 * uint32_t(by))) * Ld(e - 8 + 4 * uint32_t(bz)) * Ld(e - 0x18 + 4 * uint32_t(bx));
+      const F32 weight = Fst(product);
+      Put(total, Fst(product + Ld(total)));
+      Put(sun, Fst(FromInt(U8(seen)) * weight * Ld(0x15364C8) + Ld(sun)));
+      if (!bits) {
+        box(0x537840, 0x4AB169);
+        continue;
+      }
+      for (int32_t i = 0; i < n; ++i) {
+        if (!(bits & 1u << (i & 31))) continue;
+        Put(values + 4 * uint32_t(i), Fst(St(weight) + Ld(values + 4 * uint32_t(i))));
+        if (CvarInt(0x15344CC) >= 0) continue;
+        const uint32_t light = U32(lights + 4 * uint32_t(i));
+        uint32_t to = light + 0x44, colour = 0x537820;
+        if (St(Ld(light + 0x50)) == 0.0f) {
+          to = e - 0x24;
+          colour = 0x537850;
+          for (uint32_t o = 0; o < 0xC; o += 4) Put(to + o, Fst(St(Ld(light + 0x44 + o)) * 32768.0f + Ld(corner + o)));
+        }
+        c.ebx = corner;
+        c.edi = to;
+        c.esi = colour;
+        Call(c, f_004AD760, 0x4AB224);
+      }
+    }
+    if (St(Ld(total)) < 0.98f) {
+      if (St(Ld(total)) == 0.0f) {
+        if (I32(point + 0xC) < 0) {
+          for (int32_t i = 0; i < n; ++i) Put(values + 4 * uint32_t(i), 0x3F800000u);
+          Put(sun, 0x3F800000u);
+        }
+      } else {
+        const F32 inv = Fst(St(1.0f) / Ld(total));
+        if (!(St(Ld(sun)) == 0.0f)) Put(sun, Fst(St(inv) * Ld(sun)));
+        for (int32_t i = 0; i < n; ++i) {
+          const uint32_t v = values + 4 * uint32_t(i);
+          if (St(Ld(v)) == 0.0f) continue;
+          if (U32(lights + 4 * uint32_t(i)) == U32(U32(0x1535A34) + 0x114))
+            Put(v, Fst((St(1.0f) - Ld(total)) + Ld(v)));
+          else
+            Put(v, Fst(St(inv) * Ld(v)));
+        }
+      }
+    }
+    if (U32(point + 0x10) && St(Ld(sun)) < 0.25f) Put(sun, 0x3E800000u);
+    return uint32_t(n);
+  }();
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
 // An entity's lights (EDI the refentity; stack: refdef, origin, count,
 // values, the sun's value, lights, flag; the count and the sun's value in
 // their slots change): +0xA0 cleared, then the refdef's dlights (+0x164,
@@ -4519,6 +4903,274 @@ void f_004DA420(Ctx& c) {
   for (uint32_t k = 0; k < 4; ++k) {
     const int32_t v = Fistp(St(Fst(St(colour[k]) * 255.0f)) + St(0x1p-30));
     Wr<uint8_t>(g_guest_base, out + k, uint8_t(v < 0 ? 0 : v > 0xFF ? 0xFF : v));
+  }
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// ---- the front end's vector helpers ----------------------------------------
+//
+// Called throughout the game (collision, game code, the back end), so
+// beyond the conventions above: the registers each original leaves
+// unchanged stay unchanged (no caller reads those it changes; each call
+// site checked), EAX and ST0 results are the original's, and the x87 stack
+// below is untouched.
+
+// VectorNormalize (ESI): the squares of the vector summed x + y + z and
+// stored, the CRT's square root of that stored as the length (pushed on
+// the x87 stack); unless it is 0 each component times 1 / length stored.
+void f_00426710(Ctx& c) {
+  const uint32_t e = c.esp, v = c.esi;
+  const F32 x = Ld(v), y = Ld(v + 4), z = Ld(v + 8);
+  const F32 sum = Fst((St(x) * x + St(y) * y) + St(z) * z);
+  x87::LoadF32(c.fpu, sum.bits);
+  c.esp = e - 0xC;
+  Call(c, f_0052E610, 0x426750);
+  const F32 len{PopF32(c)};
+  if (!(St(len) == 0.0f)) {
+    const F32 inv = Fst(St(1.0f) / St(len));
+    for (uint32_t k = 0; k < 0xC; k += 4) Put(v + k, Fst(St(inv) * Ld(v + k)));
+  }
+  x87::LoadF32(c.fpu, len.bits);
+  c.esp = e + 4;
+}
+
+// Normalises the vector at EAX (EAX unchanged): its squares summed x + y +
+// z and stored, the inverse square root by one Newton step from the bits
+// 0x5F3759DF less half the sum's (each value stored), times each component.
+void f_004268B0(Ctx& c) {
+  const uint32_t v = c.eax;
+  const F32 x = Ld(v), y = Ld(v + 4), z = Ld(v + 8);
+  const F32 sum = Fst((St(x) * x + St(y) * y) + St(z) * z);
+  const F32 half = Fst(St(sum) * 0.5f), i{0x5F3759DFu - uint32_t(int32_t(sum.bits) >> 1)};
+  const F32 r = Fst((1.5f - St(i) * i * half) * i);
+  for (uint32_t k = 0; k < 0xC; k += 4) Put(v + k, Fst(St(r) * Ld(v + k)));
+  c.esp += 4;
+}
+
+// A vector perpendicular to the unit vector at EBX into EDX: the axis of
+// its component of least magnitude (the first of equal ones; |x| compared
+// as a double against 1 and the least so far stored), projected onto the
+// plane of EBX (0x429710) and normalised (0x426710), in an 8-aligned frame.
+void f_004273C0(Ctx& c) {
+  const uint32_t e = c.esp, ebp = c.ebp, esi = c.esi, edi = c.edi, src = c.ebx;
+  const uint32_t a = (e - 4) & ~7u, s = a - 0x20, axis = a - 0x10;
+  F32 least{0x3F800000u};
+  uint32_t pos = 0;
+  for (uint32_t i = 0; i < 3; ++i) {
+    const St m = Abs(St(Ld(src + 4 * i)));
+    if (St(least) > m) {
+      pos = i;
+      least = Fst(m);
+    }
+  }
+  for (uint32_t k = 0; k < 0xC; k += 4) Put(axis + k, 0u);
+  Put(axis + 4 * pos, 0x3F800000u);
+  c.esp = s;
+  c.eax = src;
+  c.ecx = axis;
+  Call(c, f_00429710, 0x427427);
+  c.esi = c.edx;
+  Call(c, f_00426710, 0x42742E);
+  x87::Pop(c.fpu);
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// Rotates a point about the unit vector EAX by degrees (stack: out, the
+// point, the degrees): the frame (a perpendicular r (0x4273C0), the cross
+// product u of r and the vector f, f) as the columns of a matrix m, its
+// transpose im, and the rotation about z by the angle (deg x pi / 180,
+// stored, through FSINCOS on the x87 model): m x z (0x427590), then by im,
+// times the point (each row's sum (1, 2) + 0 or (1, 0) + 2).
+void f_00426AB0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi, s = e - 0xD0;
+  const uint32_t dir = c.eax, out = Arg(c, e, 1), p = Arg(c, e, 2);
+  const uint32_t f = s + 0x10, r = s + 0x1C, u = s + 0x28, m = s + 0x34, z = s + 0x64, im = s + 0x88, t = s + 0xAC;
+  for (uint32_t k = 0; k < 0xC; k += 4) Put(f + k, U32(dir + k));
+  c.esp = s;
+  c.ebx = dir;
+  c.edx = r;
+  Call(c, f_004273C0, 0x426AE0);
+  Put(u, Fst(St(Ld(r + 4)) * Ld(f + 8) - St(Ld(r + 8)) * Ld(f + 4)));
+  Put(u + 4, Fst(St(Ld(r + 8)) * Ld(f) - St(Ld(r)) * Ld(f + 8)));
+  Put(u + 8, Fst(St(Ld(r)) * Ld(f + 4) - St(Ld(r + 4)) * Ld(f)));
+  for (uint32_t row = 0; row < 3; ++row)
+    for (uint32_t col = 0; col < 3; ++col) {
+      const uint32_t v = U32((col == 0 ? r : col == 1 ? u : f) + 4 * row);
+      Put(m + 0xC * row + 4 * col, v);
+      Put(im + 0xC * col + 4 * row, v);
+    }
+  const F32 angle = Fst(St(Ld(e + 0xC)) * Ld(0x55B700) / 180.0f);
+  for (uint32_t k = 0; k < 0x24; k += 4) Put(z + k, 0u);
+  x87::LoadF32(c.fpu, angle.bits);
+  x87::SinCos(c.fpu);
+  Put(z, PopF32(c));
+  Put(z + 4, PopF32(c));
+  Put(z + 0xC, Fst(-St(Ld(z + 4))));
+  Put(z + 0x10, U32(z));
+  Put(z + 0x20, 0x3F800000u);
+  c.esp = s;
+  c.edx = t;
+  c.eax = z;
+  c.ecx = m;
+  Call(c, f_00427590, 0x426C2E);
+  c.edx = m;
+  c.eax = im;
+  c.ecx = t;
+  Call(c, f_00427590, 0x426C45);
+  Put(out, Fst((St(Ld(m + 8)) * Ld(p + 8) + St(Ld(m + 4)) * Ld(p + 4)) + St(Ld(m)) * Ld(p)));
+  Put(out + 4, Fst((St(Ld(m + 0x10)) * Ld(p + 4) + St(Ld(m + 0xC)) * Ld(p)) + St(Ld(m + 0x14)) * Ld(p + 8)));
+  Put(out + 8, Fst((St(Ld(m + 0x1C)) * Ld(p + 4) + St(Ld(m + 0x18)) * Ld(p)) + St(Ld(m + 0x20)) * Ld(p + 8)));
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// A 3x3 matrix's inverse (EAX in, ECX out; no register changed): the
+// adjugate over the determinant (its first cofactor stored, the
+// determinant expanded down the first column and stored, its inverse
+// stored), each element read when the original reads it.
+void f_00427CB0(Ctx& c) {
+  const uint32_t a = c.eax, o = c.ecx;
+  auto minor = [&](uint32_t i, uint32_t j, uint32_t k, uint32_t l) {
+    return St(Ld(a + i)) * Ld(a + j) - St(Ld(a + k)) * Ld(a + l);
+  };
+  const F32 c0 = Fst(minor(0x10, 0x20, 0x1C, 0x14));
+  const F32 det = Fst((St(c0) * Ld(a) - minor(4, 0x20, 0x1C, 8) * Ld(a + 0xC)) + minor(4, 0x14, 8, 0x10) * Ld(a + 0x18));
+  const F32 inv = Fst(St(1.0f) / det);
+  Put(o, Fst(St(c0) * inv));
+  Put(o + 4, Fst(-(minor(4, 0x20, 0x1C, 8) * inv)));
+  Put(o + 8, Fst(minor(4, 0x14, 8, 0x10) * inv));
+  Put(o + 0xC, Fst(-(minor(0xC, 0x20, 0x18, 0x14) * inv)));
+  Put(o + 0x10, Fst(minor(0, 0x20, 8, 0x18) * inv));
+  Put(o + 0x14, Fst(-(minor(0, 0x14, 8, 0xC) * inv)));
+  Put(o + 0x18, Fst(minor(0x1C, 0xC, 0x18, 0x10) * inv));
+  Put(o + 0x1C, Fst(-(minor(0x1C, 0, 4, 0x18) * inv)));
+  Put(o + 0x20, Fst(minor(0x10, 0, 4, 0xC) * inv));
+  c.esp += 4;
+}
+
+// A 4x4 matrix's inverse (ECX in, EAX out; EAX unchanged) by cofactors:
+// the input transposed into s first (the bits copied), the products of
+// pairs of its last two rows (stored), the first two rows' cofactors,
+// then those of the first two rows' pairs for the last two, each a
+// difference of two sums of three products in the original's operand
+// order; the determinant (s's first row by the out's first, its sum
+// ((2, 3) + 0) + 1) stored, its inverse stored, times each of the 16.
+void f_00427E80(Ctx& c) {
+  const uint32_t in = c.ecx, o = c.eax;
+  F32 s[16], t[12];
+  for (uint32_t i = 0; i < 4; ++i)
+    for (uint32_t j = 0; j < 4; ++j) s[4 * i + j] = Ld(in + 16 * j + 4 * i);
+  // (a x b + c x d) + e x f, a, c and e on the stack.
+  auto sum = [](F32 a, F32 b, F32 c, F32 d, F32 e, F32 f) { return (St(a) * b + St(c) * d) + St(e) * f; };
+  auto put = [&](uint32_t k, St v) { Put(o + 4 * k, Fst(v)); };
+  const int kPairs[12][2] = {{15, 10}, {14, 11}, {9, 15}, {13, 11}, {9, 14}, {13, 10},
+                             {8, 15},  {12, 11}, {8, 14}, {12, 10}, {8, 13}, {12, 9}};
+  for (int k = 0; k < 12; ++k) t[k] = Fst(St(s[kPairs[k][0]]) * s[kPairs[k][1]]);
+  put(0, sum(s[7], t[4], s[6], t[3], s[5], t[0]) - sum(s[7], t[5], s[6], t[2], s[5], t[1]));
+  put(1, sum(s[7], t[9], s[6], t[6], s[4], t[1]) - sum(s[7], t[8], s[6], t[7], s[4], t[0]));
+  put(2, sum(s[7], t[10], s[5], t[7], s[4], t[2]) - sum(s[7], t[11], s[5], t[6], s[4], t[3]));
+  put(3, sum(s[6], t[11], s[5], t[8], s[4], t[5]) - sum(s[6], t[10], s[5], t[9], s[4], t[4]));
+  put(4, sum(s[3], t[5], s[2], t[2], s[1], t[1]) - sum(s[3], t[4], s[2], t[3], s[1], t[0]));
+  put(5, sum(s[3], t[8], s[0], t[0], s[2], t[7]) - sum(s[3], t[9], s[0], t[1], s[2], t[6]));
+  put(6, sum(s[3], t[11], s[0], t[3], s[1], t[6]) - sum(s[3], t[10], s[0], t[2], s[1], t[7]));
+  put(7, sum(s[0], t[4], s[2], t[10], s[1], t[9]) - sum(s[0], t[5], s[2], t[11], s[1], t[8]));
+  const int kPairs2[12][2] = {{2, 7}, {3, 6}, {1, 7}, {3, 5}, {1, 6}, {2, 5},
+                              {0, 7}, {3, 4}, {0, 6}, {2, 4}, {0, 5}, {1, 4}};
+  for (int k = 0; k < 12; ++k) t[k] = Fst(St(s[kPairs2[k][0]]) * s[kPairs2[k][1]]);
+  put(8, sum(t[3], s[14], s[13], t[0], t[4], s[15]) - sum(s[13], t[1], t[2], s[14], t[5], s[15]));
+  put(9, sum(s[12], t[1], t[6], s[14], t[9], s[15]) - sum(t[7], s[14], s[12], t[0], t[8], s[15]));
+  put(10, sum(t[7], s[13], s[12], t[2], t[10], s[15]) - sum(s[12], t[3], t[6], s[13], t[11], s[15]));
+  put(11, sum(s[12], t[5], t[8], s[13], t[11], s[14]) - sum(s[12], t[4], t[9], s[13], t[10], s[14]));
+  put(12, sum(t[5], s[11], s[9], t[1], t[2], s[10]) - sum(t[4], s[11], s[9], t[0], t[3], s[10]));
+  put(13, sum(t[8], s[11], s[8], t[0], t[7], s[10]) - sum(t[9], s[11], s[8], t[1], t[6], s[10]));
+  put(14, sum(s[8], t[3], t[6], s[9], t[11], s[11]) - sum(t[7], s[9], s[8], t[2], t[10], s[11]));
+  put(15, sum(s[8], t[4], t[9], s[9], t[10], s[10]) - sum(s[8], t[5], t[8], s[9], t[11], s[10]));
+  const F32 det = Fst(((St(s[2]) * Ld(o + 8) + St(s[3]) * Ld(o + 0xC)) + St(s[0]) * Ld(o)) + St(s[1]) * Ld(o + 4));
+  const F32 inv = Fst(St(1.0f) / det);
+  for (uint32_t k = 0; k < 0x40; k += 4) Put(o + k, Fst(St(inv) * Ld(o + k)));
+  c.esp += 4;
+}
+
+// Adds the point ECX to the bounds EDX (mins) and ESI (maxs; EDX
+// unchanged): per axis a coordinate below the min or above the max (not
+// for NaN) replaces it.
+void f_00429070(Ctx& c) {
+  const uint32_t p = c.ecx, mins = c.edx, maxs = c.esi;
+  for (uint32_t k = 0; k < 0xC; k += 4) {
+    if (St(Ld(p + k)) < Ld(mins + k)) Put(mins + k, U32(p + k));
+    if (St(Ld(p + k)) > Ld(maxs + k)) Put(maxs + k, U32(p + k));
+  }
+  c.esp += 4;
+}
+
+// Adds the bounds EDX/EDI to the bounds ECX/ESI (ECX unchanged): per axis
+// a min of the other's below or a max above (not for NaN) replaces it.
+void f_004290E0(Ctx& c) {
+  const uint32_t mins = c.ecx, maxs = c.esi, mins2 = c.edx, maxs2 = c.edi;
+  for (uint32_t k = 0; k < 0xC; k += 4) {
+    if (St(Ld(mins + k)) > Ld(mins2 + k)) Put(mins + k, U32(mins2 + k));
+    if (St(Ld(maxs + k)) < Ld(maxs2 + k)) Put(maxs + k, U32(maxs2 + k));
+  }
+  c.esp += 4;
+}
+
+// BoxOnPlaneSide (stack: mins, maxs, the plane; EAX the sides): the
+// self-filling table of the original's cases (0x885E40 set, its eight
+// addresses after) written as it writes it; the corners nearest and
+// farthest along the normal by its sign bits (+0x11; 8 and above trap,
+// int3), their distances (x + y) + z against +0xC: 1 for a far corner not
+// behind, plus 2 for a near one behind (or unordered).
+void f_00429800(Ctx& c) {
+  const uint32_t e = c.esp, mins = Arg(c, e, 1), maxs = Arg(c, e, 2), p = Arg(c, e, 3);
+  if (U32(0x885E40) != 1) {
+    Put(0x885E40, 1u);
+    const uint32_t kCases[8] = {0x429888, 0x4298BB, 0x4298EE, 0x429921, 0x429954, 0x429987, 0x4299B7, 0x4299E7};
+    for (uint32_t i = 0; i < 8; ++i) Put(0x885E44 + 4 * i, kCases[i]);
+  }
+  const uint32_t bits = U8(p + 0x11);
+  if (bits >= 8) {
+    c.esp = e - 4;
+    Put(c.esp, c.ebx);
+    Trap(c, 0x429A36u);
+    return;
+  }
+  auto dist = [&](bool near) {
+    auto corner = [&](uint32_t k) { return (bits >> k & 1) != near ? mins + 4 * k : maxs + 4 * k; };
+    return (St(Ld(p)) * Ld(corner(0)) + St(Ld(p + 4)) * Ld(corner(1))) + St(Ld(p + 8)) * Ld(corner(2));
+  };
+  const St far = dist(false), near = dist(true);
+  c.eax = (far >= Ld(p + 0xC) ? 1u : 0u) + (near >= Ld(p + 0xC) ? 0u : 2u);
+  c.esp = e + 4;
+}
+
+// A plane through three points (EDI, ECX, EAX) into EDX: the normal the
+// cross product of the third's and the second's differences from the
+// first (stored), normalised by 0x426710; EAX 0 for a zero length, else 1
+// with the distance (n.x p.x + p.y n.y) + n.z p.z at +0xC.
+void f_00429650(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, p0 = c.edi, p1 = c.ecx, p2 = c.eax, n = c.edx, s = e - 0x1C;
+  F32 u[3], v[3];
+  for (uint32_t k = 0; k < 3; ++k) u[k] = Fst(St(Ld(p1 + 4 * k)) - Ld(p0 + 4 * k));
+  for (uint32_t k = 0; k < 3; ++k) v[k] = Fst(St(Ld(p2 + 4 * k)) - Ld(p0 + 4 * k));
+  Put(n, Fst(St(v[1]) * u[2] - St(v[2]) * u[1]));
+  Put(n + 4, Fst(St(v[2]) * u[0] - St(v[0]) * u[2]));
+  Put(n + 8, Fst(St(v[0]) * u[1] - St(v[1]) * u[0]));
+  c.esp = s;
+  c.esi = n;
+  Call(c, f_00426710, 0x4296D1);
+  const St len(std::bit_cast<double>(x87::StoreF64(c.fpu)));
+  x87::Pop(c.fpu);
+  c.eax = 0;
+  if (!(len == 0.0f)) {
+    Put(n + 0xC, Fst((St(Ld(n)) * Ld(p0) + St(Ld(p0 + 4)) * Ld(n + 4)) + St(Ld(n + 8)) * Ld(p0 + 8)));
+    c.eax = 1;
   }
   c.esi = esi;
   c.esp = e + 4;

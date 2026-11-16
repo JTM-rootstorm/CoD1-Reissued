@@ -173,6 +173,11 @@ speed.
   With layer 9: 13 of 13 shared, 47 of 1640 in-level identical (47
   between two runs of main); mean 1.799-1.892 ms (main) and 1.735-1.739
   ms, p95 2.4-2.6 and 2.4, p99 2.6-2.7 and 2.6; errors 3.
+  With layer 10: 13 of 13 shared, 46 of 1640 in-level identical (a
+  second run of this build: 47 against both runs of main, 46 against the
+  first of its own; the two runs of main 107, more than ever before);
+  mean 1.881-2.071 ms (main) and 1.847-1.883 ms, p95 2.6-2.9 and 2.6,
+  p99 2.7-3.6 and 2.8-2.9; errors 3.
 - Layer 4, the cell walk (2026-11-09): a polygon's clip 0x4D7F30 (ECX
   plane; stack points, &count, out: distances z + x + y less the plane's,
   behind below -0.001, in front above 0.001; none in front: count 0, EAX
@@ -663,6 +668,163 @@ speed.
   spot (until the ties, NaN table entries and spot axes, and the
   overflowing attenuations); logs mut15_round1-4.log and mut15_final.log
   in the session's scratchpad.
+- Layer 10, the rest of the entity lighting and the vector helpers
+  (2026-11-15): a light's intensity at a point 0x4AA8D0 (EDX the light,
+  ESI the point; ST0: the intensity +0x10 x 1 << 0x1536298 by FIMUL, not
+  for the shift 0; a point light (+0x50 not 0, NaN too) over +0x60, with
+  +0x64 or +0x68 not 0 plus d2 x +0x68 (d2 the squares of the unrounded
+  differences summed z + y + x) and with +0x64 not 0 plus sqrt(d2) x
+  +0x64, all unrounded; its seven registers overflow the x87 stack under
+  more than one), the lights beyond the limit merged 0x4AA970 (EBX the
+  refentity; stack origin, values, order as 0x4AB490 leaves them: none
+  unless +0xCC is above 0x15364BC; the first kept, or the second when the
+  first's value is 1e19, and those after it above its value x the cvar
+  0x153440C (stored), up to the limit less one; the rest's directions (a
+  direction's own, its value first less the sun's 1 << 0x1536298 x the
+  world's +0x108 x +0x110 for types 1 and 8; a point's from the origin,
+  normalised by 0x426710; in the frame at e - 0x60 + 12 x index) summed by
+  value into a stored direction, normalised; the merged light +0x114 (its
+  type not written) +0x14 and +0x24 zeroed, then per light its dot
+  product (x + z) + y with the direction: above 0 (NaN too) its colour +4
+  x the scale 0x1536290 x its value x the dot (x 0.8 unless the light is
+  of type 1 or the merged light's own type is 8) into +0x24 and (1 - dot)
+  / 2 of the colour x scale x value into +0x14, else half of it into
+  +0x14; the direction +0x44, +0x20/+0x30/+0x40/+0x60 1, +0x64/+0x68 0,
+  +0x70 180; it takes the first merged one's place, value 1, +0xCC that
+  index + 1; a limit below 1 reads the order past the lights kept), the
+  light grid's lights at a point 0x4AACB0 (stack origin, values, &sun,
+  lights; EAX the count: the sun 0; none without the world's grid +0x98;
+  the grid point 0x5008B0 (ESI): outside the grid (+0xC below 0) the
+  world's default light +0x114 (none without one) at 1 and the sun 1;
+  none for a point without lights (+0x18) or sun (+0x10); its lights (the
+  world's 16-bit indexes +0x11C from +0x14 into its lights +0x110) at 0;
+  the cell (32 x 32 x 64 from -131072: FISTP of the stored distance less
+  0.5 - 2^-30, shifted by 5, 5 and 6; the fractions from the unrounded
+  distance, weights 1 - f and f stored); for each of the eight corners
+  0x4A9EC0 (EAX the point's +0xC, ECX y; x, z, count, lights, origin,
+  &byte) gives the 16-bit set of the lights it sees or -1: nothing for
+  -1, else the three weights' product (stored, unrounded into the total),
+  the byte x it x 0x15364C8 into the sun and it into each light seen; a
+  total below 0.98 divides the sun (unless 0) and the lights (unless 0)
+  by itself but the default light, which takes 1 - total more (a total of
+  0 sets all to 1 only off the grid, which returned before); a sun under
+  0.25 with the point's +0x10 becomes 0.25; debug draws by the cvar
+  0x15344CC: the cell's box at 2 or below 0, at 3 when the view looks
+  along it (0x4268B0, 0.95), below 0 each corner's box and lines to its
+  lights) and the lights' debug draw 0x4AA5C0 (stack origin, refentity;
+  with the world's grid; at the cvar 0x15344CC 3 only when the view looks
+  along it, at 4 within 96 (0x426610's squared distance); a line to each
+  of the grid point's lights, yellow when the entity has it, a
+  direction's 1024 along it; from 4 and with the point's +0x10 a grid of
+  traces (0x4A99C0) 32768 down from 0.1 above the origin, the step 32768
+  (16384 above 3 of 0x15364C4), (0x15364C4 - 1) half steps each way, a
+  blocked one drawn to its end, a free one to the original's
+  uninitialised local at e - 0x2C). 0x4AA0F0 (the dlights into an
+  orientation) is native in the back end (`replace 004AA0F0`, its
+  section of the manifest), as are 0x4CA170 and 0x4C9580: left there,
+  0x4AA0F0 a stub in this oracle as before. The vector helpers, called
+  throughout the game (collision, game code, the back end; every call
+  site checked: none reads the EAX, ECX or EDX they change or their
+  flags, the registers they leave stay): VectorNormalize 0x426710 (ESI;
+  ST0 the length: the squares x + y + z stored, the CRT's square root
+  stored, unless 0 each component x 1 / length stored), the fast
+  normalisation 0x4268B0 (EAX unchanged: 0x5F3759DF less half the stored
+  sum's bits (arithmetic shift), one Newton step, stored), a perpendicular
+  0x4273C0 (EBX into EDX; 8-aligned frame: the axis of the least magnitude
+  (|x| as a double against the least so far, stored; of equal ones the
+  first) projected onto the plane (0x429710) and normalised), a point
+  rotated about a vector 0x426AB0 (EAX; out, point, degrees: 0x4273C0's
+  r, u = r x f and f as columns, the transpose, the rotation about z by
+  deg x pi / 180 stored through FSINCOS on the x87 model, both products
+  by 0x427590 in the original's frame, the rows (2 + 1) + 0 and (1 + 0) +
+  2), the 3x3 inverse 0x427CB0 (EAX in, ECX out, no register changed: the
+  first cofactor, the determinant down the first column and its inverse
+  stored, each element read when the original reads it), the 4x4 inverse
+  0x427E80 (ECX in, EAX out and unchanged: the input transposed first,
+  two sets of twelve pair products stored, each cofactor a difference of
+  two sums (a + b) + c with the original's stack and memory operands, the
+  determinant ((2 + 3) + 0) + 1 from the out, stored, its inverse stored),
+  a point added to bounds 0x429070 (EDX unchanged) and bounds to bounds
+  0x4290E0 (ECX unchanged; per axis min then max, a NaN never replacing),
+  BoxOnPlaneSide 0x429800 (its self-filling table at 0x885E40 written as
+  it writes it; the far and near corners by the sign bits, (x + y) + z; 1
+  for the far one not behind, 2 for the near one behind or unordered;
+  sign bits of 8 and above trap at the original's int3 0x429A36) and a
+  plane through three points 0x429650 (EDI, ECX, EAX into EDX: the cross
+  product of the differences stored, 0x426710, EAX 0 for a zero length,
+  else 1 and the distance (n.x p.x + p.y n.y) + n.z p.z). Still lifted
+  under them: 0x5008B0, 0x4A9EC0 (the grid's visibility cache), 0x426610,
+  0x4A99C0 (a trace through 0x41CD60), 0x429710, 0x427590, the CRT's
+  square root and the debug draws.
+- Layer 10 oracle and mutations: the old stubs of 0x4AA8D0, 0x4AA5C0,
+  0x4AA970, 0x4AACB0, 0x427CB0 and 0x427E80 gone (the scenes and the
+  lighting now reach the originals: real inverses, intensities, merges,
+  grid lights); new stubs 0x5008B0 (one of the case's grid points, none
+  now and then for the debug draw), 0x4A9EC0 (EAX, ECX and its six
+  arguments; its byte, the bits -1, 0 or any of 16), 0x426610 (squared
+  distances about 96^2, NaN too) and 0x4A99C0 (a hash of its points, AL 0,
+  2 or 0x80); the debug box 0x4AD7E0 now records a hash of its bounds, and
+  the debug line's end is not hashed for the lights' unblocked traces (the
+  original's uninitialised local). The CRT's math errors (its square root
+  of a NaN under 0x426710, now reached with NaNs) go to fakes of
+  GetLastError, TlsGetValue and SetLastError, recorded, as
+  render_backend_oracle has them. The lifted 0x4AA8D0 holds the x87
+  registers below aside: its seven overflow the stack under the two a case
+  may start with (the game calls it on an empty one), which showed as the
+  indefinite from the lifted side. Changed fixtures: Lighting gives the
+  world the light grid (+0x110 the case's lights, +0x114 a default light or
+  none (it was random bits), 16-bit indexes +0x11C, grid points of up to 20
+  lights: more overrun 0x4ABD30's 50 with the refdef's 20), 0x15364C8,
+  0x1536290, 0x15364C4, the cvar 0x153440C, the debug cvar 0x15344CC now
+  2-5 too, and the light limit 0x15364BC now 1-8 (0 and -1 made the merge
+  read the order past the lights kept, garbage on the stack). Each new
+  entry reached alone (about 3000 lighting and 4000 helper cases each;
+  LightCase went from 30000 to 42000 cases to keep the layer 9 entries' 3000,
+  HelperCase is new): intensities with zero, denormal, huge or NaN
+  attenuations and differences whose squares' order shows; merges with
+  ties against the least kept, 1e19 first, a pair of opposite colours that
+  leaves only the products' rounding; grid points on the cells' edges and
+  at weights 0.98 and 0.02; the debug draw in each mode, looking along at
+  exactly 0.95 (heights the fast normalisation takes to 1, scanned); the
+  helpers on NaNs of every payload, squares searched to round apart by
+  their order, exactly singular and nearly dependent matrices, outputs on
+  and overlapping their inputs, angles where (deg x pi) / 180 is a float's
+  midpoint (12 x 33 x 2^m), points along a row of the rotation, planes
+  whose distance cancels exactly, BoxOnPlaneSide's table unfilled. The run
+  compares EAX for 0x4AACB0, 0x4268B0, 0x427CB0, 0x427E80, 0x429800 and
+  0x429650, ECX and EDX where the helpers leave them (0x427CB0 both,
+  0x4290E0 ECX, 0x429070 EDX), ST0 for 0x4AA8D0 and 0x426710. 838501
+  random cases, 3.09M calls out, 0 mismatched, 29 s, peak 109 MB; ctest 68
+  of 68 (cm_trace_oracle reaches 0x429800, skinning_oracle 0x426710 and
+  0x427E80, render_backend_oracle 0x426710, 0x4268B0, 0x4273C0, 0x426AB0,
+  0x427E80 and 0x429650: the originals on both sides there, through
+  wrappers as for the other natives). 134 mutants: 118 caught (3 by
+  crashing the oracle); 16 survive, all equivalent: the return addresses
+  of calls into callees that are not stubs (0x426710 from the merge and
+  0x429650, the CRT's square root, 0x429710, 0x427590: five); the merge's
+  count read once (no callee changes it); the cell's FISTP of t - 0.5
+  against t - (0.5 - 2^-30) (they differ only at odd integers, whose two
+  roundings share t >> 5 and t >> 6); three-float products grouped
+  otherwise (the grid's weights, the Newton step's i x i x half: the first
+  product of two floats is exact in a double); a sun of exactly 0.25 below
+  0.25 or not (the same bits written); `!(v != 0)` for `v == 0`; the fast
+  normalisation's logical shift (the sum's sign bit is set only for a NaN,
+  which makes the result NaN whatever the guess); the operand order of
+  four products where only a NaN's payload changes and cannot show
+  (VectorNormalize's 1 / length by each component: the length's NaN is
+  the vector's own of the largest fraction; the rotation's cross product:
+  the perpendicular's NaN carries the vector's largest; BoxOnPlaneSide's,
+  whose distances only reach the sides; the plane's normal from stored,
+  quiet differences). The first runs missed the squares' orders (until
+  sums searched within 2^-53 of a float's midpoint), the merge's grouping
+  of the scale (until two lights of opposite colours that leave only its
+  rounding), the exact 0.95 and 0.98 thresholds, ties of the
+  perpendicular's 1.0 start, the angle's operation order (until
+  midpoints), the rotation's and the plane's sum orders (until points
+  along a row and planes along x = y), the inverses' operand orders and
+  aliasing (until NaN payloads and overlapping outputs) and the 4x4
+  cofactors' order (until exactly singular matrices); logs
+  mut17_round1-5.log and mut17_final.log in the session's scratchpad.
 - The oracle's time (2026-11-15): three quarters of a run went to the
   harness, not the code under test: each case's compared windows saved
   three times into newly grown vectors and compared a byte at a time.
