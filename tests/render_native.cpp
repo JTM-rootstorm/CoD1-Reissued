@@ -103,4 +103,12 @@
 #define f_0040F4E0 n_0040F4E0
 #define f_004AC890 n_004AC890
 #define f_005068B0 n_005068B0
+#define f_004A9880 n_004A9880
+#define f_004AC7E0 n_004AC7E0
+#define f_004AC780 n_004AC780
+#define f_004A9C30 n_004A9C30
+#define f_004A9A30 n_004A9A30
+#define f_004A9A90 n_004A9A90
+#define f_004AD860 n_004AD860
+#define f_00447CA0 n_00447CA0
 #include "../src/render.cpp"

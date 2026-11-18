@@ -6,14 +6,20 @@
 // not replace are stubs (tests/render_stubs.manifest) that record each
 // call: its address, return address, ESP, the registers the callee reads
 // and its stack arguments, which must be the same on both sides; they
-// leave EAX, ECX and EDX changed; a trace, a grid corner's fill, queued
-// text and an added entity also record a hash of what they are handed (on
-// the caller's stack). ri.Milliseconds' time grows with the calls. The refimport's
+// leave EAX, ECX and EDX changed; a trace, a grid corner's trace to the
+// origin (0x41E960) and an added entity also record a hash of what they
+// are handed (on the caller's stack). ri.Milliseconds' and timeGetTime's
+// time grows with the calls; the client's image registration (refexport
+// 0x1426D74) answers a handle or 0; va answers a text of up to 120
+// characters. The refimport's
 // temporary allocation and the zeroed allocation 0x42A480 hand out blocks
-// of a heap that starts again for each side. The debug draws' queues and
-// the grid corners' cache and records are set for every case (DebugQueues);
+// of a heap that starts again for each side. The debug draws' queues (text
+// too), the grid corners' cache, records and sorted list are set for every
+// case (DebugQueues);
 // what the lifted side's calls write there, outside the case's windows, is
-// compared too (Touch). The CRT's math errors (its square root of a NaN, under
+// compared too (Touch; of the sorted list's entries the first six bytes:
+// the last two are the caller's stale stack, compared in the list's own
+// cases), as are the warning icons' globals. The CRT's math errors (its square root of a NaN, under
 // 0x426710) reach GetLastError, TlsGetValue and SetLastError, recorded and
 // answering with the thread's data at the end of the heap (the fixtures
 // kept finite for want of them, below, stay finite). The lifted light
@@ -62,8 +68,10 @@
 // over a model cache in states the game reaches; the light grid and the
 // merge of the lights beyond the limit, R_PointInLeaf over a node tree of
 // the grid's points (the walks' BSP leaves carry lights too), the grid
-// corners' cache and whether a light reaches a point; the debug draws; the
-// vector helpers alone. Values are now and then
+// corners' cache (its bits reversed, sorted list and insertion, a corner's
+// lights found, a point light's reach, the sun's traces) and whether a
+// light reaches a point; the debug draws, the text queue and the warning
+// icons (StatMon_UpdateEntry); the vector helpers alone. Values are now and then
 // zeros, denormals, infinities, NaNs or huge. Captures
 // (tests/render_capture.h) add the game's own calls.
 
@@ -130,6 +138,11 @@ constexpr uint32_t kGetLastErrorPtr = 0x5331D4, kGetLastError = 0x7FFE00A0;
 constexpr uint32_t kTlsGetValuePtr = 0x5330F4, kTlsGetValue = 0x7FFE00B0;
 constexpr uint32_t kSetLastErrorPtr = 0x533100, kSetLastError = 0x7FFE00C0;
 constexpr uint32_t kThreadData = 0x6FEFF000;
+// StatMon_UpdateEntry's timeGetTime (its import 0x53331C, stdcall, a time
+// that grows with the calls) and the client's refexport 0x1426D74 (an
+// image registered: name, 1; a handle, now and then 0).
+constexpr uint32_t kTimeGetTimePtr = 0x53331C, kTimeGetTime = 0x7FFE00D0;
+constexpr uint32_t kRegisterPtr = 0x1426D74, kRegister = 0x7FFE00E0;
 uint32_t g_heap_top = kHeap;
 
 enum Reg { kEax = 1, kEcx = 2, kEdx = 4, kEbx = 8, kEsi = 16, kEdi = 32, kEbp = 64 };
@@ -164,17 +177,26 @@ uint32_t g_grid_points = 0;
 // own, set for every case from a generator of their own (the cases'
 // streams stay as they were): polygons and their points, lines, the
 // client's lines with their bytes and dwords, and the grid corners'
-// records (0xC952B0). Text goes to the stub 0x4AD860.
-// The client's lines and the records start at one of their first 64
-// entries and have room for 0x1000 more (their limits are the game's).
+// records (0xC952B0), the grid corners' sorted list (0xC952B4) and the
+// text queue. The client's lines and the records start at one of their
+// first 64 entries and have room for 0x1000 more (their limits are the
+// game's), the text at one of its first 32 with room for 0x220 more (the
+// grid corners' draw queues 147 at most).
 constexpr uint32_t kDebug = 0x6F000000, kDebugSize = 0x70000;
 constexpr uint32_t kLines = kDebug, kMaxLines = 512;                 // 0x2C each
 constexpr uint32_t kPoints = kDebug + 0x6000, kMaxPoints = 1024;     // 12 each
 constexpr uint32_t kPolys = kDebug + 0x9000, kMaxPolys = 256;        // 24 each
 constexpr uint32_t kDebugCvar = kDebug + 0xB000;                     // 0x15346E4's
+constexpr uint32_t kVaText = kDebug + 0xB100;                        // va's result
 constexpr uint32_t kClientBytes = kDebug + 0xC000, kClientDwords = kDebug + 0xE000;
 constexpr uint32_t kRecords = kDebug + 0x13000, kMaxRecords = 64;    // 24 each
 constexpr uint32_t kClientLines = kDebug + 0x40000, kMaxClient = 64;  // 0x2C, 1, 4 each
+constexpr uint32_t kList = kDebug + 0x2C000, kMaxList = 0x400;       // 8 each
+constexpr uint32_t kTexts = kDebug + 0x2E000, kMaxTexts = 0x240;     // 128 each
+// The sorted list's own cases at its limit: 0x400000 entries, all zero but
+// those its cases write at the end (lazily committed: the searches read
+// the same few pages).
+constexpr uint32_t kBigList = 0x60000000, kBigListSize = 0x2001000;
 std::mt19937 g_debug(20261118);
 // A case's salt for the trace stub's answers (a case with one call sees
 // them all).
@@ -210,6 +232,39 @@ uint32_t ReverseBytes(uint32_t v) {
 uint32_t CornerBucket(uint32_t x, uint32_t y, uint32_t z) {
   return 0xC952C8 + ((ReverseBytes(z) + (y * 0xC41 - x * 0xC3D)) & 0x1FFF) * 0x100;
 }
+// The grid corners' sorted list (0xC952B4, count 0xC952BC): where a corner
+// (x and y as 16 bits, z as 16 bits) is or goes, as 0x4AC7E0 searches;
+// and a corner added as the game adds it (the entry's last two bytes
+// tail), or also when there (dup: before the one found, as an add of 2
+// does).
+uint32_t ListFind(uint32_t x, uint32_t y, uint32_t z, bool& found) {
+  const uint32_t list = Rd(0xC952B4), key = (x & 0xFFFF) | y << 16;
+  int32_t lo = 0, hi = int32_t(Rd(0xC952BC)) - 1;
+  found = false;
+  while (lo <= hi) {
+    const int32_t mid = int32_t(uint32_t(lo) + uint32_t(hi)) >> 1;
+    int32_t d = int32_t(key - Rd(list + 8 * uint32_t(mid)));
+    if (!d) d = int32_t((z & 0xFFFF) - g_mem.read<uint16_t>(list + 8 * uint32_t(mid) + 4));
+    if (!d) {
+      found = true;
+      return uint32_t(mid);
+    }
+    if (d < 0)
+      hi = mid - 1;
+    else
+      lo = mid + 1;
+  }
+  return uint32_t(lo);
+}
+void ListAdd(uint32_t x, uint32_t y, uint32_t z, uint32_t tail, bool dup = false) {
+  bool found;
+  const uint32_t at = ListFind(x, y, z, found), list = Rd(0xC952B4), n = Rd(0xC952BC);
+  if (found && !dup) return;
+  std::memmove(g_mem.ptr<uint8_t>(list + 8 * at + 8), g_mem.ptr<uint8_t>(list + 8 * at), (n - at) * 8);
+  Wr(list + 8 * at, (x & 0xFFFF) | y << 16);
+  Wr(list + 8 * at + 4, (z & 0xFFFF) | tail << 16);
+  Wr(0xC952BC, n + 1);
+}
 
 // What each stub compares: the registers its callee reads (and for the
 // texture coordinate callees the callee-saved ones, which ComputeTexCoords
@@ -224,14 +279,12 @@ constexpr StubInfo kStubs[] = {
     {0x477290, kEdx | kEdi, 0},                 // a composite model's surfaces
     {0x477340, kEsi, 3},
     {0x476510, 0, 2},
-    {0x447CA0, kEax | kEcx, 1},                 // a warning icon
     {0x4771B0, kEdx, 1},                        // the bones' bounds
     {0x4AA0F0, kEax | kEcx | kEdx, 0},          // the dlights into an orientation
     {0x41CD60, kEax | kEcx | kEdx, 7},          // CM_Trace
-    {0x4A9C30, kEax, 4},                        // a grid corner's lights found
-    {0x4AC7E0, kEax, 3},                        // a grid corner in the sorted list
+    {0x41E960, kEax | kEcx | kEdx, 7},          // a grid corner's trace to the origin
     {0x42A480, 0, 1},                           // a zeroed allocation
-    {0x4AD860, kEbx | kEdi, 2},                 // debug text queued
+    {0x42E660, 0, 3},                           // the error routine (code, format, entry)
     {0x52AB6F, 0, 2},                           // _stricmp
     {0x431CF0, kEax, 2},                        // Cvar_Set
     {0x42E300, 0, 1},                           // a print
@@ -288,10 +341,9 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
     return h;
   };
   // A trace's points and the fraction it is handed to beat; a grid
-  // corner's point; queued text's point and colour.
+  // corner's trace's start (EDX) and end.
   if (va == 0x41CD60) r.args[7] = hash(r.args[1], 0xC) ^ hash(r.args[2], 0xC) * 3 ^ hash(r.args[0], 4) * 5;
-  if (va == 0x4A9C30) r.args[4] = hash(c.eax, 0xC);
-  if (va == 0x4AD860) r.args[2] = hash(c.ebx, 0xC) ^ hash(c.edi, 0x10) * 3;
+  if (va == 0x41E960) r.args[7] = hash(c.edx, 0xC) ^ hash(r.args[1], 0xC) * 3;
   g_calls.push_back(r);
   const uint32_t k = uint32_t(g_calls.size());
   // What an entity's callees do: now and then change the current entity's
@@ -320,13 +372,6 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
     if (Rd(r.args[0] + 0x30) == 0x4AA869)
       for (uint32_t i = 0; i < 0xC; i += 4) Wr(r.args[2] + 0x10 + i, k * 0x27D4EB2Fu + i);
   }
-  // A grid corner's lights found: its entry's state (1 mostly), byte and
-  // the bits of the lights it sees.
-  if (va == 0x4A9C30) {
-    g_mem.write<uint8_t>(r.args[0] + 4, uint8_t(k % 6 ? 1 : k % 4));
-    g_mem.write<uint8_t>(r.args[0] + 5, uint8_t(k * 37));
-    g_mem.write<uint16_t>(r.args[0] + 6, uint16_t(k % 7 ? (k * 0x9E3779B9u) >> 16 : 0));
-  }
   if (va == 0x4771B0)
     for (uint32_t i = 0; i < g_mem.read<uint8_t>(r.args[0] + 0x17); i++) Wr(c.edx + 4 * i, g_bone_bounds + 24 * ((k + i) % 8));
   // A composite model's surfaces: none without submodels, now and then
@@ -352,12 +397,17 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
     }
   }
   const uint32_t junk = 0xC0DE0000u + k;
-  // A portal surface now and then off the screen (EAX 1).
-  // A grid corner in the sorted list now and then (an index) or not.
+  // A portal surface now and then off the screen (EAX 1); a grid corner's
+  // trace to the origin now and then not 0 (from the case's salt, so that
+  // a single call sees both; 0x100 now and then).
   c.eax = va == 0x4CA8D0   ? k % 4 == 0
           : va == 0x477290 ? g_pairs
-          : va == 0x4AC7E0 ? (k % 3 ? 0xFFFFFFFFu - k % 5 : k % 64)
+          : va == 0x41E960 ? ((k + g_salt) * 0x9E3779B9u >> 28) % 4 == 0 ? (k % 2 ? junk : 0x100) : 0
+          : va == 0x440940 ? kVaText
                            : junk;
+  // va's text (the debug text queue copies it): up to 120 characters.
+  if (va == 0x440940)
+    for (uint32_t i = 0; i <= 120; i++) g_mem.write<uint8_t>(kVaText + i, i < k * 37 % 121 ? uint8_t('!' + (k + i) % 90) : 0);
   c.ecx = junk ^ 1;
   c.edx = junk ^ 2;
   c.esp += 4;
@@ -476,6 +526,14 @@ void f_004AD8F0_lifted(Ctx& c);
 void f_0040F4E0_lifted(Ctx& c);
 void f_004AC890_lifted(Ctx& c);
 void f_005068B0_lifted(Ctx& c);
+void f_004A9880_lifted(Ctx& c);
+void f_004AC7E0_lifted(Ctx& c);
+void f_004AC780_lifted(Ctx& c);
+void f_004A9C30_lifted(Ctx& c);
+void f_004A9A30_lifted(Ctx& c);
+void f_004A9A90_lifted(Ctx& c);
+void f_004AD860_lifted(Ctx& c);
+void f_00447CA0_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_native.cpp renames
 // its entries).
 void f_004D68E0(Ctx& c) { f_004D68E0_lifted(c); }
@@ -592,6 +650,11 @@ void f_004AD7E0(Ctx& c) { f_004AD7E0_lifted(c); }
 void f_004AD8F0(Ctx& c) { f_004AD8F0_lifted(c); }
 void f_004AC890(Ctx& c) { f_004AC890_lifted(c); }
 void f_005068B0(Ctx& c) { f_005068B0_lifted(c); }
+void f_004A9880(Ctx& c) { f_004A9880_lifted(c); }
+void f_004AC780(Ctx& c) { f_004AC780_lifted(c); }
+void f_004A9C30(Ctx& c) { f_004A9C30_lifted(c); }
+void f_004A9A30(Ctx& c) { f_004A9A30_lifted(c); }
+void f_004A9A90(Ctx& c) { f_004A9A90_lifted(c); }
 // The writes the lifted side's callers have these make outside the
 // windows (Touch, above): the bucket and the record of a grid corner, a
 // queued polygon and its points, a line, a client's line.
@@ -620,6 +683,26 @@ void f_0040F4E0(Ctx& c) {
     Touch(Rd(0x1439470) + n * 4, 4);
   }
   f_0040F4E0_lifted(c);
+}
+// A grid corner added to the sorted list: its entries' first six bytes
+// (the last two are the caller's stale stack, never read: the native
+// callers' frames leave other bytes there; the list's own cases compare
+// them); queued text; the warning icons' globals.
+void f_004AC7E0(Ctx& c) {
+  const uint32_t list = Rd(0xC952B4), n = Rd(0xC952BC);
+  if (Rd(c.esp + 0xC) && n < 0x1000)
+    for (uint32_t i = 0; i <= n; i++) Touch(list + 8 * i, 6);
+  f_004AC7E0_lifted(c);
+}
+void f_004AD860(Ctx& c) {
+  const uint32_t n = Rd(0x1549590);
+  if (int32_t(n + 1) <= int32_t(Rd(0x154958C))) Touch((Rd(0x1549594) ? Rd(0x1549594) : g_heap_top) + n * 128, 128);
+  f_004AD860_lifted(c);
+}
+void f_00447CA0(Ctx& c) {
+  Touch(0x8D5898 + c.ecx * 8, 8);
+  for (uint32_t va : {0x8D5A98u, 0x15342A0u, 0x13F9DB0u}) Touch(va, 4);
+  f_00447CA0_lifted(c);
 }
 // unzCloseCurrentFile and tolower, native in the game (src/unzip.cpp,
 // src/crt.cpp): here only lifted code the stubs stand for reaches them.
@@ -752,6 +835,14 @@ void n_004AD8F0(Ctx& c);
 void n_0040F4E0(Ctx& c);
 void n_004AC890(Ctx& c);
 void n_005068B0(Ctx& c);
+void n_004A9880(Ctx& c);
+void n_004AC7E0(Ctx& c);
+void n_004AC780(Ctx& c);
+void n_004A9C30(Ctx& c);
+void n_004A9A30(Ctx& c);
+void n_004A9A90(Ctx& c);
+void n_004AD860(Ctx& c);
+void n_00447CA0(Ctx& c);
 // The stubs.
 #define COD1_STUB(va) \
   void f_##va(Ctx& c) { StubFor(c, 0x##va); }
@@ -760,13 +851,11 @@ COD1_STUB(00440940)
 COD1_STUB(00477290)
 COD1_STUB(00477340)
 COD1_STUB(00476510)
-COD1_STUB(00447CA0)
 COD1_STUB(004771B0)
 COD1_STUB(004AA0F0)
 COD1_STUB(0041CD60)
-COD1_STUB(004A9C30)
-COD1_STUB(004AC7E0)
-COD1_STUB(004AD860)
+COD1_STUB(0041E960)
+COD1_STUB(0042E660)
 COD1_STUB(00431CF0)
 COD1_STUB(0042E300)
 COD1_STUB(0051D45A)
@@ -821,6 +910,16 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
       c.eax = g_heap_top;
       g_heap_top += (size + 15) & ~15u;
     }
+    return;
+  }
+  if (target == kTimeGetTime) {
+    Stub(c, kTimeGetTimePtr, 0, 0);
+    c.eax = 5000 + 13 * uint32_t(g_calls.size());
+    return;
+  }
+  if (target == kRegister) {
+    Stub(c, kRegisterPtr, 0, 2);
+    c.eax = g_calls.size() % 3 ? 0x100 + uint32_t(g_calls.size()) : 0;
     return;
   }
   if (target == kMilliseconds) {
@@ -978,6 +1077,10 @@ const Entry kEntries[] = {
     COD1_ENTRY(004AD7E0, "debug box"),           COD1_ENTRY(004AD8F0, "debug text"),
     COD1_ENTRY(0040F4E0, "client debug line"),   COD1_ENTRY(004AC890, "grid corners draw"),
     COD1_ENTRY(005068B0, "r_xdebug"),
+    COD1_ENTRY(004A9880, "bits reversed"),       COD1_ENTRY(004AC7E0, "corner list"),
+    COD1_ENTRY(004AC780, "corner list insertion"), COD1_ENTRY(004A9C30, "corner's lights found"),
+    COD1_ENTRY(004A9A30, "point light reaches"), COD1_ENTRY(004A9A90, "sun's traces"),
+    COD1_ENTRY(004AD860, "debug text queued"),   COD1_ENTRY(00447CA0, "StatMon_UpdateEntry"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -1038,6 +1141,7 @@ uint32_t ScrubDepth(uint32_t fn) {
     case 0x4CA240: return 0x400;
     case 0x4CAB80: return 0x4000;
     case 0x4CB210: case 0x4CB270: case 0x4DEEC0: return 0x90000;
+    case 0x4AC7E0: return 0x40;  // the key's last two bytes
     default: return 0;
   }
 }
@@ -1068,7 +1172,20 @@ void DebugQueues() {
   };
   queue(0x1549574, kMaxPoints, kPoints, 12);
   queue(0x1549580, kMaxPolys, kPolys, 24);
-  queue(0x154958C, 0x1000, g(), 0);
+  // The text queue: its limit mostly 0x1000, its next entry the j-th of
+  // its region, now and then its block missing (made on the heap at the
+  // limit's size: a smaller limit then).
+  {
+    static const uint32_t kLimit[] = {0, 1, 16, 0xFFFFFFFF};
+    const bool missing = g() % 8 == 0;
+    const uint32_t max = missing ? 1 + g() % 256 : g() % 4 ? 0x1000 : kLimit[g() % 4];
+    const uint32_t n = max == 0xFFFFFFFF ? g() % 4 : g() % 4 ? g() % (max + 1) : max - std::min(max, uint32_t(g() % 3));
+    const uint32_t j = g() % 32;
+    Wr(0x154958C, max);
+    Wr(0x1549590, n);
+    Wr(0x1549594, missing ? 0 : kTexts + (j - n) * 128);
+    next(kTexts + j * 128, 128);
+  }
   queue(0x15495A4, kMaxLines, kLines, 0x2C);
   static const uint32_t kClientCount[] = {0xFFF, 0x1000, 0x1001, 0xFFFFFFFF, 0x80000000, 0x7FFFFFFF};
   const uint32_t n = g() % 4 ? g() % 0x1001 : kClientCount[g() % 6], j = g() % kMaxClient;
@@ -1088,6 +1205,18 @@ void DebugQueues() {
   next(kRecords + k * 24, 24);
   Wr(0xC952B8, r);
   for (uint32_t va : {0xC952C0u, 0xC952C4u, 0xC951A8u}) Wr(va, g());
+  // The sorted list: corners about the grid's middle (where the cases'
+  // are) added as the game adds them, now and then up to 0x100; now and
+  // then with y anywhere (keys apart by 2^31 or more: the search's
+  // wrapping difference then orders nothing, and its probes show) and
+  // duplicates (as an add of 2 makes); the entry after the last random.
+  Wr(0xC952B4, kList);
+  Wr(0xC952BC, 0);
+  const bool wide = g() % 4 == 0, dups = g() % 4 == 0;
+  for (uint32_t i = g() % 4 ? g() % 64 : g() % 0x100; i; i--)
+    ListAdd(4088 + g() % 16, wide && g() % 2 ? g() : 4088 + g() % 16, g() % 8 ? 2044 + g() % 8 : g(), g(),
+            dups && g() % 4 == 0);
+  next(kList + 8 * Rd(0xC952BC), 8);
   Wr(0xC951A4, g() % 4 ? g() % 0x22 : g());
   if (g() % 8 == 0) Wr(0x564A20, 1);
   Wr(0x15346E4, kDebugCvar);
@@ -1176,7 +1305,8 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
                    k.fn == 0x4DA9F0 || k.fn == 0x4DA330 || k.fn == 0x4DA220 || k.fn == 0x4DA1B0 ||
                    k.fn == 0x4AACB0 || k.fn == 0x4268B0 || k.fn == 0x427CB0 || k.fn == 0x427E80 ||
                    k.fn == 0x429800 || k.fn == 0x429650 || k.fn == 0x5008B0 || k.fn == 0x4A9EC0 ||
-                   k.fn == 0x426610 || k.fn == 0x429710 || k.fn == 0x427590;
+                   k.fn == 0x426610 || k.fn == 0x429710 || k.fn == 0x427590 || k.fn == 0x4A9880 ||
+                   k.fn == 0x4AC7E0 || k.fn == 0x4AC780 || k.fn == 0x4A9C30 || k.fn == 0x4A9A30;
   // The vector helpers' ECX and EDX where the originals leave them (and
   // R_PointInLeaf's leaf in ECX).
   const bool ecx = k.fn == 0x427CB0 || k.fn == 0x4290E0 || k.fn == 0x5008B0 || k.fn == 0x426610 ||
@@ -4104,7 +4234,13 @@ void LightCase(Arena& a, std::mt19937& g, Stats& s) {
       if (!std::isfinite(g_mem.read<float>(v + k))) return false;
     return true;
   };
-  switch (g() % 17) {
+  // A world with R_PointInLeaf's tree over the grid's points, for a grid
+  // corner's lights.
+  auto tree = [&] {
+    const uint32_t w = Rd(kWorld);
+    if (!Rd(w + 0x98)) Wr(w + 0x98, GridTree(a, g, 0, kNumGridPoints));
+  };
+  switch (g() % 21) {
     case 0: {
       const uint32_t model = Rd(Rd(kXModels + 4 * Rd(e + 8)) + 0x4C), n = g() % 4 ? g() % 41 : uint32_t(Pick(g, {-1, 0}));
       const uint32_t dl = a.Alloc(0x88 * 40);
@@ -4451,9 +4587,11 @@ void LightCase(Arena& a, std::mt19937& g, Stats& s) {
     case 16: {
       // A grid corner alone: cells about the origin's (or any), the bucket
       // empty, partly in use (the key at any place or not) or full (the key
-      // last or missing: the shift down); its record and the counters
-      // (DebugQueues), the lights and the origin.
+      // last or missing: the shift down); its record, the sorted list and
+      // the counters (DebugQueues), the case's lights (directions and
+      // points) and the origin; the leaves of R_PointInLeaf's tree.
       DebugQueues();
+      tree();
       const uint32_t x = g() % 4 ? 4088 + g() % 16 : g(), y = g() % 4 ? 4088 + g() % 16 : g(),
                      z = g() % 4 ? 2044 + g() % 8 : g(), leaf = g() % 4 ? g() % 64 : g();
       const uint32_t key = ((x & 0x3FF) | y << 10) << 12 | (leaf & 0xFFF), bucket = CornerBucket(x, y, z);
@@ -4465,12 +4603,54 @@ void LightCase(Arena& a, std::mt19937& g, Stats& s) {
       }
       if (used && g() % 2) Wr(bucket + 8 * (g() % 2 ? used - 1 : g() % used), key);
       const uint32_t lights = a.Alloc(4 * 20), origin = vec(-128, 128, 32), out = a.Alloc(4);
+      for (uint32_t i = 0; i < 20; i++) Wr(lights + 4 * i, PickLight(g, g() % 2));
       win.push_back({bucket, 0x108});
       if (Rd(0xC952B0) && int32_t(Rd(0xC952B8)) < 0x400000) win.push_back({Rd(0xC952B0) + Rd(0xC952B8) * 24, 24});
       win.push_back(a.All());
       g_debug_ready = true;
       Run({0x4A9EC0, leaf, y, rnd[2], rnd[3], rnd[4], rnd[5], {x, z, uint32_t(g() % 21), lights, origin, out}}, win, g,
           s, "random");
+      break;
+    }
+    case 17: {
+      // A grid corner's lights found alone: corners about the origin (its
+      // leaf with bit 0 or off the grid now and then), the entry's bytes
+      // random, up to 20 of the case's lights (directions and points; the
+      // count -1 or 0 now and then), the origin; the trace to it and the
+      // lights' traces answering from the stubs.
+      tree();
+      const uint32_t corner = vec(-128, 128, 32), entry = a.Alloc(8), lights = a.Alloc(4 * 20), origin = vec(-128, 128, 32);
+      Wr(entry, g());
+      Wr(entry + 4, g());
+      for (uint32_t i = 0; i < 20; i++) Wr(lights + 4 * i, PickLight(g, g() % 2));
+      const uint32_t n = g() % 8 ? g() % 21 : uint32_t(Pick(g, {-1, 0}));
+      win.push_back(a.All());
+      Run({0x4A9C30, corner, rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {entry, n, lights, origin}}, win, g, s, "random");
+      break;
+    }
+    case 18: {
+      // Whether a point light reaches a point (the trace's results from its
+      // stub).
+      const uint32_t from = vec(-128, 128, 32), to = vec(-128, 128, 32);
+      win.push_back(a.All());
+      Run({0x4A9A30, to, from, rnd[2], rnd[3], rnd[4], rnd[5], {rnd[0]}}, win, g, s, "random");
+      break;
+    }
+    case 19: {
+      // The sun's traces alone: a leaf with sun or not, a corner about the
+      // origin (special values now and then), the entry's bytes random (its
+      // byte near 0xFF now and then: the count wraps), the grid's size
+      // 0x15364C4 (Lighting's, or up to 8); the traces' answers from their
+      // stub.
+      const uint32_t leaf = a.Alloc(0x1C), corner = vec(-256, 256, 16), entry = a.Alloc(8);
+      for (uint32_t k = 0; k < 0x1C; k += 4) Wr(leaf + k, g());
+      Wr(leaf + 0x10, g() % 4 ? 1 + g() % 2 * g() : 0);
+      Wr(entry, g());
+      Wr(entry + 4, g());
+      if (g() % 4 == 0) g_mem.write<uint8_t>(entry + 5, uint8_t(0xF8 + g() % 8));
+      if (g() % 4 == 0) Wr(0x15364C4, uint32_t(Pick(g, {6, 7, 8, -5, 3, 4})));
+      win.push_back(a.All());
+      Run({0x4A9A90, leaf, rnd[1], rnd[2], rnd[3], entry, corner, {uint32_t(g())}}, win, g, s, "random");
       break;
     }
     default: {
@@ -4511,7 +4691,7 @@ void DebugCase(Arena& a, std::mt19937& g, Stats& s) {
     Wr(limit + 8, 0);
     win.push_back({kHeap, ((Rd(limit) * size + 15) & ~15u) + 0x400});
   };
-  switch (g() % 7) {
+  switch (g() % 12) {
     case 0: {
       const uint32_t n = g() % 4 ? g() % 9 : g() % 2 ? 0 : g() % 0x400, points = vec(3 * std::max(n, 1u), -64, 64, 16),
                      colour = vec(4, 0, 1, 0);
@@ -4633,12 +4813,133 @@ void DebugCase(Arena& a, std::mt19937& g, Stats& s) {
         WrF(p + 0xC, in ? -1e9f : Value(g, -256, 256, 16));
       }
       if (int32_t(Rd(kDebugCvar + 0x20)) > 3) Wr(kDebugCvar + 0x20, 3);
+      // Some of the corners about the view in the sorted list (no "."
+      // there).
+      if (g() % 2) {
+        float v[3];
+        RdVec(0x1536030, v);
+        if (std::fabs(v[0]) < 4e5f && std::fabs(v[1]) < 4e5f && std::fabs(v[2]) < 4e5f) {
+          const int32_t cx = int32_t(std::floor((v[0] + 131072.0f) / 32)), cy = int32_t(std::floor((v[1] + 131072.0f) / 32)),
+                        cz = int32_t(std::floor((v[2] + 131072.0f) / 64));
+          for (uint32_t i = 1 + g() % 16; i; i--)
+            ListAdd(uint32_t(cx + int32_t(g() % 7) - 3), uint32_t(cy + int32_t(g() % 7) - 3),
+                    uint32_t(cz + int32_t(g() % 3) - 1), g());
+        }
+      }
       win.push_back({0x1536030, 0xC});
       win.push_back({0x15361F8, 0x50});
       win.push_back({0x15344F4, 4});
       win.push_back(a.All());
       g_debug_ready = true;
       Run({0x4AC890, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    }
+    case 6: {
+      // Each byte's bits reversed: any dword; the table made again
+      // (0x564A20, DebugQueues) or now and then random (the lookups read it;
+      // made right again after the case, for the corner cache's buckets).
+      const bool scramble = g() % 4 == 0;
+      if (scramble)
+        for (uint32_t i = 0; i < 0x100; i += 4) Wr(0xC951B0 + i, g());
+      win.push_back(a.All());
+      g_debug_ready = true;
+      Run({0x4A9880, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {uint32_t(g())}}, win, g, s, "random");
+      if (scramble)
+        for (uint32_t i = 0; i < 0x100; i++) g_mem.write<uint8_t>(0xC951B0 + i, uint8_t(ReverseBytes(i)));
+      break;
+    }
+    case 7: {
+      // A grid corner in the sorted list: one of the list's (x, y and z, or
+      // one of them off by one) or any about the grid's middle; added or
+      // not (0, 1, 2 and others); the key's last two bytes from the stack's
+      // pattern. Now and then at the list's limit: a list of 0x3FFFFE to
+      // 0x400000 entries, the corner past its last.
+      const uint32_t add = uint32_t(Pick(g, {0, 1, 2, 1, 2, 3, -1}));
+      uint32_t x = 4088 + g() % 16, y = 4088 + g() % 16, z = g() % 8 ? 2044 + g() % 8 : g();
+      if (g() % 8 == 0) {
+        const uint32_t n = 0x3FFFFE + g() % 3;
+        for (uint32_t i = 0; i < 0x100; i += 4) Wr(kBigList + 0x3FFFF0 * 8 + i, 0);
+        Wr(0xC952B4, kBigList);
+        Wr(0xC952BC, n);
+        x = 1 + g() % 0xFFFF;
+        y = g() % 0x8000;
+        win.push_back({kBigList + 0x3FFFF0 * 8, 0x100});
+      } else {
+        if (const uint32_t n = Rd(0xC952BC); n && g() % 2) {
+          const uint32_t at = kList + 8 * (g() % n);
+          x = Rd(at) & 0xFFFF;
+          y = Rd(at) >> 16;
+          z = Rd(at + 4) & 0xFFFF;
+          if (g() % 4 == 0) (g() % 3 == 0 ? x : g() % 2 ? y : z) += g() % 2 ? 1 : -1;
+        }
+        if (g() % 4 == 0) x |= g() & 0xFFFF0000u;
+        win.push_back({kList, kMaxList * 8});
+      }
+      win.push_back(a.All());
+      g_debug_ready = true;
+      Run({0x4AC7E0, z, rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {x, y, add}}, win, g, s, "random");
+      break;
+    }
+    case 8: {
+      // An entry inserted into the sorted list: at any place up to its end;
+      // now and then at a count about the limit (0x3FFFF8 to 0x400001, or
+      // negative), the list placed so that the place is the region's.
+      const uint32_t entry = a.Alloc(8);
+      Wr(entry, g());
+      Wr(entry + 4, g());
+      uint32_t at = g() % (Rd(0xC952BC) + 1);
+      if (g() % 4 == 0) {
+        const uint32_t n = uint32_t(Pick(g, {0x3FFFF8, 0x3FFFFF, 0x400000, 0x400001, int32_t(0x80000000), 0x3FFFFE}));
+        at = n - g() % 8;
+        Wr(0xC952BC, n);
+        Wr(0xC952B4, kList - at * 8);
+      }
+      win.push_back({kList, kMaxList * 8});
+      win.push_back(a.All());
+      g_debug_ready = true;
+      Run({0x4AC780, rnd[0], rnd[1], rnd[2], rnd[3], at, entry, {}}, win, g, s, "random");
+      break;
+    }
+    case 9: {
+      // Text queued: a point and a colour, a scale, a text of up to 120
+      // characters (past strncpy's 0x5F) or the corners' "."; the queue's
+      // block missing now and then (DebugQueues).
+      const uint32_t p = vec(3, -256, 256, 32), colour = vec(4, 0, 1, 0), text = a.Alloc(128);
+      const uint32_t len = g() % 4 ? g() % 24 : g() % 121;
+      for (uint32_t i = 0; i < 128; i++) g_mem.write<uint8_t>(text + i, i < len ? uint8_t(1 + g() % 255) : 0);
+      win.push_back({kTexts, kMaxTexts * 128});
+      if (!Rd(0x1549594)) win.push_back({kHeap, ((Rd(0x154958C) * 128 + 15) & ~15u) + 0x400});
+      win.push_back(a.All());
+      g_debug_ready = true;
+      Run({0x4AD860, rnd[0], rnd[1], rnd[2], p, rnd[4], colour,
+           {std::bit_cast<uint32_t>(Value(g, 0, 4, 16)), g() % 8 ? text : 0x55504Cu}},
+          win, g, s, "random");
+      break;
+    }
+    case 10: {
+      // StatMon_UpdateEntry: entries 0-63, now and then just outside (64,
+      // 65, -1, -2: the error, then the original's writes about the table);
+      // the cvar on or off, the time base taken or not, images registered
+      // or not, the count of entries any up to 70.
+      const uint32_t cvar = a.Alloc(0x24), name = a.Alloc(16);
+      Wr(0x14E43EC, cvar);
+      Wr(cvar + 0x20, g() % 8 ? 1 : g() % 2 ? 0 : g());
+      Wr(0x13F9DB0, g() % 4 == 0 ? 0 : g() % 2 ? 1 : g() % 2 ? 0x100 : g());
+      Wr(0x15342A0, g());
+      for (uint32_t i = 0; i < 0x230; i += 8) {
+        Wr(0x8D5888 + i, g());
+        Wr(0x8D588C + i, g() % 2 ? 0 : g());
+      }
+      Wr(0x8D5A98, g() % 71);
+      for (uint32_t i = 0; i < 16; i++) g_mem.write<uint8_t>(name + i, i < 15 ? uint8_t('a' + g() % 26) : 0);
+      const uint32_t n = g() % 8 ? g() % 64 : uint32_t(Pick(g, {64, 65, -1, -2}));
+      win.push_back({0x8D5888, 0x230});
+      win.push_back({0x13F9DB0, 4});
+      win.push_back({0x15342A0, 4});
+      win.push_back({0x14E43EC, 4});
+      win.push_back(a.All());
+      g_debug_ready = true;
+      Run({0x447CA0, uint32_t(g() % 4 ? 0xBB8 : g()), n, rnd[2], rnd[3], rnd[4], rnd[5], {name}}, win, g, s, "random");
       break;
     }
     default: {
@@ -5070,6 +5371,7 @@ int main(int argc, char** argv) {
   g_mem.Commit(kStack, kStackSize, recomp::Prot::RW);
   g_mem.Commit(kHeap, kHeapSize, recomp::Prot::RW);
   g_mem.Commit(kDebug, kDebugSize, recomp::Prot::RW);
+  g_mem.Commit(kBigList, kBigListSize, recomp::Prot::RW);
   g_mem.Commit(kVertexBuffer, (kVertexBufferSize + 0xFFF) & ~0xFFFu, recomp::Prot::RW);
   // R_CellForCamera reads its node through a null world (after ri.Error).
   g_mem.Commit(0, 0x1000, recomp::Prot::RW);
@@ -5086,6 +5388,8 @@ int main(int argc, char** argv) {
   Wr(kGetLastErrorPtr, kGetLastError);
   Wr(kTlsGetValuePtr, kTlsGetValue);
   Wr(kSetLastErrorPtr, kSetLastError);
+  Wr(kTimeGetTimePtr, kTimeGetTime);
+  Wr(kRegisterPtr, kRegister);
   // The reference: the x87 model's exact arithmetic throughout.
   recomp::x87::run::g_doubles = false;
 
@@ -5113,9 +5417,9 @@ int main(int argc, char** argv) {
   for (int i = 0; i < 40000; i++) WorldViewCase(a, g, s, i < 20000 ? 0 : i < 30000 ? 4 : 48);
   for (int i = 0; i < 40000; i++) PortalCase(a, g, s, i < 20000 ? 0 : 48);
   for (int i = 0; i < 40000; i++) EntityCase(a, g, s);
-  for (int i = 0; i < 51000; i++) LightCase(a, g, s);
+  for (int i = 0; i < 63000; i++) LightCase(a, g, s);
   for (int i = 0; i < 52000; i++) HelperCase(a, g, s);
-  for (int i = 0; i < 21000; i++) DebugCase(a, g, s);
+  for (int i = 0; i < 36000; i++) DebugCase(a, g, s);
   const int random = s.cases;
   for (int i = 2; i < argc; i++)
     if (!RunCaptures(argv[i], g, s)) return 1;

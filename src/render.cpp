@@ -16,10 +16,13 @@
 // on a brush model, an entity's lights from its own or the light grid (a
 // light's intensity, the grid's lights at a point, the lights beyond the
 // limit merged, their debug draw; R_PointInLeaf, a grid corner's lights
-// and their cache, whether a light reaches a point), a vertex's colour; the
-// model cache's blocks, splits, eviction and frees; the debug draws (a
-// polygon, a line, a box, text, the client's line, the light grid's
-// corners, r_xdebug's)); the back end's sky clipping (ClipSkyPolygon,
+// and their cache (the bits reversed, the corners' sorted list and an
+// insertion into it, the lights found by traces, whether a point light
+// reaches a corner, the sun's traces), whether a light reaches a point), a
+// vertex's colour; the model cache's blocks, splits, eviction and frees;
+// the debug draws (a polygon, a line, a box, text and its queue, the
+// client's line, the light grid's corners, r_xdebug's) and the client's
+// warning icon (StatMon_UpdateEntry)); the back end's sky clipping (ClipSkyPolygon,
 // AddSkyPolygon), texture coordinates (ComputeTexCoords); the draw surface
 // sort (qsortFast), the 4x4 matrix product and the memcpy 0x42B0A0 under
 // both; and the vector helpers the whole game calls (the normalisations, a
@@ -95,32 +98,38 @@ void f_004AA970(Ctx& c);  // the lights beyond the limit merged into one (EBX en
 void f_004AACB0(Ctx& c);  // the light grid's lights at a point (origin, scales, &sun, lights; EAX count), below
 void f_00440940(Ctx& c);  // va(format, ...)
 void f_004AD8F0(Ctx& c);  // draws debug text (EAX origin, EDI colour, text), below
-void f_00477290(Ctx& c);  // a model's surface count (EDX model, EDI levels; EAX)
-void f_00477340(Ctx& c);  // a model's surfaces (model, list, levels; ESI out)
-void f_00476510(Ctx& c);  // (model, the surfaces' out)
+void f_00477290(Ctx& c);  // a DObj's surface count (EDX the DObj, EDI levels; EAX; src/xanim.cpp)
+void f_00477340(Ctx& c);  // a DObj's surfaces and their bones (DObj, list, levels; ESI bits; src/xanim.cpp)
+void f_00476510(Ctx& c);  // a DObj's bones' parents added to a set of its bones (DObj, bits; src/xanim.cpp)
 void f_005068B0(Ctx& c);  // the composite models' debug draws by r_xdebug (EBX entity, EDI), below
 void f_004AC890(Ctx& c);  // a debug draw of the light grid's corners near the view, below
 void f_0051D45A(Ctx& c);  // the CRT's fprintf
 void f_0052E610(Ctx& c);  // the CRT's square root (ST0)
-void f_00447CA0(Ctx& c);  // a warning icon (stack its image's name; EAX, ECX)
+void f_00447CA0(Ctx& c);  // StatMon_UpdateEntry: a warning icon (ECX entry, EAX time; its image's name), below
 void f_004DA330(Ctx& c);  // a model cache entry of a size class (EBX the cache, class; EAX), below
 void f_004DA220(Ctx& c);  // a free block of a level in the model cache (cache, level; EAX), below
 void f_004DA1B0(Ctx& c);  // the model cache's oldest entry freed (EDI the cache; EAX), below
 void f_004DA0F0(Ctx& c);  // a model cache entry's blocks freed (cache, entry, node, shift), below
 void f_004DA420(Ctx& c);  // a vertex's lighting (EBX the refentity; position, normal, colour out), below
-void f_004771B0(Ctx& c);  // a model's bones' bounds (EDX out, model)
+void f_004771B0(Ctx& c);  // a DObj's bones' bounds (EDX out, DObj; src/xanim.cpp)
 void f_0040F4E0(Ctx& c);  // the client's debug line (from, value, dword, flag; ESI colour, EDI to), below
 void f_005008B0(Ctx& c);  // R_PointInLeaf: the world's leaf at ESI (EAX), below
 void f_004A9EC0(Ctx& c);  // a grid corner's lights (EAX, ECX; x, z, count, lights, origin, &byte; EAX bits), below
 void f_00426610(Ctx& c);  // the squared distance between EAX and ECX (ST0), below
 void f_004A99C0(Ctx& c);  // whether the light at EAX reaches ECX (AL 2), below
 void f_0041CD60(Ctx& c);  // CM_Trace (src/cm_trace.cpp)
-void f_004A9880(Ctx& c);  // each byte of a dword's bits reversed (EAX)
-void f_004AC7E0(Ctx& c);  // a grid corner in the sorted list 0xC952B4 (EAX z; x, y, add; EAX index)
-void f_004A9C30(Ctx& c);  // a grid corner's lights found (EAX corner; entry, count, lights, origin)
+void f_004A9880(Ctx& c);  // each byte of a dword's bits reversed (EAX), below
+void f_004AC7E0(Ctx& c);  // a grid corner in the sorted list 0xC952B4 (EAX z; x, y, add; EAX index), below
+void f_004AC780(Ctx& c);  // an entry inserted into the sorted list (ESI index, EDI entry; EAX), below
+void f_004A9C30(Ctx& c);  // a grid corner's lights found (EAX corner; entry, count, lights, origin; EAX leaf), below
+void f_004A9A30(Ctx& c);  // whether the point light at EAX reaches ECX (EAX 1), below
+void f_004A9A90(Ctx& c);  // the sun's traces about a grid corner (EAX leaf, EDI corner, ESI entry), below
+void f_0041E960(Ctx& c);  // a collision trace (EAX, ECX the box, EDX the start; stack ..., the end; EAX)
 void f_0051ACF0(Ctx& c);  // the CRT's memmove
 void f_0042A480(Ctx& c);  // a zeroed allocation (size; EAX)
-void f_004AD860(Ctx& c);  // queues debug text (EBX point, EDI colour; scale, text)
+void f_004AD860(Ctx& c);  // queues debug text (EBX point, EDI colour; scale, text), below
+void f_0051AA00(Ctx& c);  // the CRT's strncpy
+void f_0042E660(Ctx& c);  // the error routine (code, format, ...; longjmps for a drop)
 void f_0052AB6F(Ctx& c);  // _stricmp
 void f_00431CF0(Ctx& c);  // sets a cvar (name, value; EAX force)
 void f_0042E300(Ctx& c);  // prints (format, ...)
@@ -4609,6 +4618,167 @@ void f_004A9EC0(Ctx& c) {
   c.esp = e + 4;
 }
 
+// Each byte of the dword on the stack with its bits reversed (EAX), by the
+// table at 0xC951B0, which is made (and 0x564A20 cleared) while 0x564A20
+// is set; the lookups read the table as it is.
+void f_004A9880(Ctx& c) {
+  const uint32_t e = c.esp;
+  if (U32(0x564A20)) {
+    Put(0x564A20, 0u);
+    for (uint32_t i = 0; i < 0x100; i++) {
+      uint8_t r = 0;
+      for (uint32_t b = 0; b < 8; b++)
+        if (i >> b & 1) r |= uint8_t(0x80 >> b);
+      Wr<uint8_t>(g_guest_base, 0xC951B0 + i, r);
+    }
+  }
+  const uint32_t v = Arg(c, e, 1);
+  c.eax = 0;
+  for (uint32_t k = 0; k < 32; k += 8) c.eax |= uint32_t(U8(0xC951B0 + (v >> k & 0xFF))) << k;
+  c.esp = e + 4;
+}
+
+// A grid corner's lights found (EAX the corner; stack the cache entry, the
+// count, the lights and the origin; EAX the corner's leaf): the entry's
+// byte (+5) and bits (+6) cleared, the leaf R_PointInLeaf 0x5008B0. A leaf
+// with bit 0 of its +0 or off the grid (+0xC below 0) is not used: state
+// (+4) 2. Else the trace 0x41E960 (EAX and ECX the zero vector 0x537E54,
+// EDX the corner moved 0.01 along the direction to the origin (0x4268B0)
+// stored in the frame; stack 0, the origin, 0, 0x537E54, 0x2001, 0, 0):
+// nonzero is state 2 as well. Else state 1, each light's bit (1 << its
+// index, 16 bits) for a directional one (+0x50 0) that 0x4A99C0 sees reach
+// from 0.1 along its direction (+0x44) to 32768 along it, and for a point
+// one (+0x50 not 0, NaN too) that 0x4A9A30 sees reach 0.1 along the
+// direction to its origin (+0x44; 0x4268B0) from there; then the sun's
+// traces 0x4A9A90. The entry's argument slot ends 0, or 1 for state 2, as
+// the original leaves it.
+void f_004A9C30(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi;
+  const uint32_t corner = c.eax, entry = Arg(c, e, 1), a = e - 0x18, b = e - 0xC;
+  Wr<uint16_t>(g_guest_base, entry + 6, 0);
+  Wr<uint8_t>(g_guest_base, entry + 5, 0);
+  c.esp = e - 0x2C;
+  c.esi = corner;
+  Call(c, f_005008B0, 0x4A9C4B);
+  const uint32_t leaf = c.eax;
+  [&] {
+    if (U8(leaf) & 1 || I32(leaf + 0xC) < 0) return Put(e + 4, 1u);
+    Put(e + 4, 0u);
+    const uint32_t origin = Arg(c, e, 4);
+    for (uint32_t o = 0; o < 0xC; o += 4) Put(a + o, Fst(St(Ld(origin + o)) - Ld(corner + o)));
+    c.eax = a;
+    Call(c, f_004268B0, 0x4A9C90);
+    for (uint32_t o = 0; o < 0xC; o += 4) Put(a + o, Fst(St(Ld(a + o)) * 0.01f + Ld(corner + o)));
+    for (uint32_t v : {0u, 0u, 0x2001u, 0x537E54u, 0u, origin, 0u}) Push(c, v);
+    c.eax = c.ecx = 0x537E54;
+    c.edx = a;
+    Call(c, f_0041E960, 0x4A9CE5);
+    c.esp = e - 0x2C;
+    if (c.eax) return Put(e + 4, 1u);
+    for (uint32_t i = 0; int32_t(i) < I32(e + 8); i++) {
+      const uint32_t l = U32(Arg(c, e, 3) + 4 * i), bit = 1u << (i & 31);
+      if (St(Ld(l + 0x50)) == 0.0f) {
+        for (uint32_t o = 0; o < 0xC; o += 4) Put(a + o, Fst(St(Ld(l + 0x44 + o)) * 0.1f + Ld(corner + o)));
+        for (uint32_t o = 0; o < 0xC; o += 4) Put(b + o, Fst(St(Ld(l + 0x44 + o)) * 32768.0f + Ld(corner + o)));
+        c.eax = b;
+        c.ecx = a;
+        Call(c, f_004A99C0, 0x4A9D96);
+        if ((c.eax & 0xFF) == 2) Wr<uint16_t>(g_guest_base, entry + 6, uint16_t(U16(entry + 6) | bit));
+      } else {
+        for (uint32_t o = 0; o < 0xC; o += 4) Put(a + o, Fst(St(Ld(l + 0x44 + o)) - Ld(corner + o)));
+        c.eax = a;
+        Call(c, f_004268B0, 0x4A9DD6);
+        for (uint32_t o = 0; o < 0xC; o += 4) Put(a + o, Fst(St(Ld(a + o)) * 0.1f + Ld(corner + o)));
+        c.eax = l + 0x44;
+        c.ecx = a;
+        Call(c, f_004A9A30, 0x4A9E13);
+        if (c.eax) Wr<uint16_t>(g_guest_base, entry + 6, uint16_t(U16(entry + 6) | bit));
+      }
+    }
+    c.eax = leaf;
+    c.edi = corner;
+    Push(c, origin);
+    c.esi = entry;
+    Call(c, f_004A9A90, 0x4A9E43);
+  }();
+  Wr<uint8_t>(g_guest_base, entry + 4, U32(e + 4) ? 2 : 1);
+  c.eax = leaf;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// Whether the point light at EAX reaches the point ECX (EAX 1) or not (0):
+// the collision trace 0x41CD60 from ECX to EAX as 0x4A99C0 makes it; not
+// from inside a solid (+0x2F) and with a fraction not below 1 (NaN too).
+void f_004A9A30(Ctx& c) {
+  const uint32_t e = c.esp, from = c.ecx, to = c.eax, results = e - 0x30;
+  c.esp = results;
+  for (uint32_t v : {0u, 0x2001u, 0x537E54u, 0u, to, from, results}) Push(c, v);
+  Put(results, 0x3F800000u);
+  c.eax = 0;
+  c.ecx = c.edx = 0x537E54;
+  Call(c, f_0041CD60, 0x4A9A5E);
+  c.eax = !U8(results + 0x2F) && !(St(Ld(results)) < 1.0f);
+  c.esp = e + 4;
+}
+
+// The sun's traces about a grid corner (EAX the leaf, EDI the corner, ESI
+// the cache entry; an unused stack argument), for a leaf with sun (+0x10):
+// the grid of 0x4AA5C0's lights' debug draw (the step 32768, 16384 above 3
+// of 0x15364C4, (0x15364C4 - 1) half steps each way, x and y from -r,
+// compared unrounded with r) of traces 0x41CD60 from the corner + 0.1 up
+// (x and y by 2^-21 x the offset) to the corner + 32768 up (x and y by the
+// offset); each that reaches (0x4A99C0's test) adds 2 to the entry's byte
+// (+5) and sets its bit 0x8000.
+void f_004A9A90(Ctx& c) {
+  const uint32_t e = c.esp, corner = c.edi, entry = c.esi, t = e - 0x64;
+  const uint32_t to = e - 0x48, from = e - 0x3C, results = e - 0x30;
+  [&] {
+    if (!U32(c.eax + 0x10)) return;
+    const int32_t size = I32(0x15364C4);
+    const F32 step{size > 3 ? 0x46800000u : 0x47000000u};
+    const F32 r = Fst(FromInt(size - 1) * (St(step) * 0.5f));
+    Put(from + 8, Fst(St(Ld(corner + 8)) + 0.1f));
+    Put(to + 8, Fst(St(Ld(corner + 8)) + 32768.0f));
+    const F32 low = Fst(-St(r));
+    if (!(St(r) >= low)) return;
+    F32 y = low;
+    St ny;
+    do {
+      F32 x = low;
+      Put(from + 4, Fst(St(y) * Ld(0x55B894) + Ld(corner + 4)));
+      Put(to + 4, Fst(St(y) + Ld(corner + 4)));
+      if (St(x) <= r) {
+        St nx;
+        do {
+          Put(from, Fst(St(x) * Ld(0x55B894) + Ld(corner)));
+          Put(to, Fst(St(x) + Ld(corner)));
+          c.esp = t;
+          for (uint32_t v : {0u, 0x2001u, 0x537E54u, 0u, to, from, results}) Push(c, v);
+          Put(results, 0x3F800000u);
+          c.eax = 0;
+          c.ecx = c.edx = 0x537E54;
+          Call(c, f_0041CD60, 0x4A9BAD);
+          c.esp = t;
+          const bool reaches = U8(results + 0x2F) ? U32(results + 0x20) >> 11 & 1
+                                                  : St(Ld(results)) == 1.0f || U8(results + 0x1C) & 4;
+          if (reaches) {
+            const uint8_t n = U8(entry + 5);
+            Wr<uint16_t>(g_guest_base, entry + 6, uint16_t(U16(entry + 6) | 0x8000));
+            Wr<uint8_t>(g_guest_base, entry + 5, uint8_t(n + 2));
+          }
+          nx = St(x) + step;
+          x = Fst(nx);
+        } while (nx <= r);
+      }
+      ny = St(y) + step;
+      y = Fst(ny);
+    } while (ny <= r);
+  }();
+  c.esp = e + 4;
+}
+
 // The light grid's lights at a point (stack: the origin, the values, the
 // sun's value and the lights out; EAX their count). The sun's value 0;
 // with the world's node tree (+0x98) the leaf at the origin (R_PointInLeaf
@@ -5170,6 +5340,39 @@ void f_004AD8F0(Ctx& c) {
   c.esp = e + 4;
 }
 
+// Queues debug text (EBX the point, EDI the colour; stack the scale and
+// the text) unless the count 0x1549590 would pass the limit 0x154958C: the
+// block 0x1549594 made when missing (0x42A480, the limit x 128 bytes), the
+// entry (128 bytes: the point, the colour, the scale, then the text by
+// strncpy, 0x5F characters at most, and a 0 at +0x7F) and the count.
+void f_004AD860(Ctx& c) {
+  const uint32_t e = c.esp, limit = U32(0x154958C);
+  uint32_t n = U32(0x1549590);
+  if (int32_t(n + 1) <= int32_t(limit)) {
+    uint32_t block = U32(0x1549594);
+    if (!block) {
+      c.esp = e - 4;
+      Push(c, limit << 7);
+      Call(c, f_0042A480, 0x4AD886);
+      n = U32(0x1549590);
+      Put(0x1549594, block = c.eax);
+    }
+    const uint32_t q = (n << 7) + block;
+    for (uint32_t o = 0; o < 0xC; o += 4) Put(q + o, U32(c.ebx + o));
+    for (uint32_t o = 0; o < 0x10; o += 4) Put(q + 0xC + o, U32(c.edi + o));
+    const uint32_t scale = Arg(c, e, 1), text = Arg(c, e, 2);
+    c.esp = e - 4;
+    Push(c, 0x5F);
+    Push(c, text);
+    Push(c, q + 0x20);
+    Put(q + 0x1C, scale);
+    Call(c, f_0051AA00, 0x4AD8D7);
+    Wr<uint8_t>(g_guest_base, q + 0x7F, 0);
+    Put(0x1549590, U32(0x1549590) + 1);
+  }
+  c.esp = e + 4;
+}
+
 // The client's debug line (stack from, a value kept with it, a dword and a
 // flag; ESI the colour, EDI to): with 0x1439370 set, the limit 0x1439460
 // set to 0x1000 and unless the count 0x1439464 would pass it: the blocks
@@ -5206,6 +5409,49 @@ void f_0040F4E0(Ctx& c) {
     Wr<uint8_t>(g_guest_base, U32(0x143946C) + U32(0x1439464), flag);
     Put(U32(0x1439470) + 4 * U32(0x1439464), Arg(c, e, 3));
     Put(0x1439464, U32(0x1439464) + 1);
+  }();
+  c.esp = e + 4;
+}
+
+// StatMon_UpdateEntry (its error "StatMon_UpdateEntry: invalid entry '%i'"),
+// the client's warning icons (ECX the entry, EAX how long in ms; stack its
+// image's name), with the cvar 0x14E43EC on: an entry outside 0-63 raises
+// the error routine 0x42E660 (code 1: it longjmps in game, and the rest
+// runs on here after a stub); the time base 0x15342A0 taken from
+// timeGetTime the first time (0x13F9DB0 then set); the entry's end
+// timeGetTime + EAX - base at 0x8D5898 + 8 x entry; its image (+4)
+// registered through the client's refexport 0x1426D74 (name, 1) when
+// missing and 0x1439370 is set; the entries in use 0x8D5A98 at least the
+// entry + 1.
+void f_00447CA0(Ctx& c) {
+  const uint32_t e = c.esp, n = c.ecx, time = c.eax;
+  [&] {
+    if (!CvarInt(0x14E43EC)) return;
+    if (n >= 0x40) {
+      c.esp = e - 8;
+      Push(c, n);
+      Push(c, 0x553464);
+      Push(c, 1);
+      Call(c, f_0042E660, 0x447CCC);
+    }
+    const uint32_t clock = U32(0x53331C);
+    c.esp = e - 0xC;
+    if (!U32(0x13F9DB0)) {
+      CallPtr(c, clock, 0x447CE1, 0x447CDF);
+      Put(0x15342A0, c.eax);
+      Put(0x13F9DB0, 1u);
+    }
+    c.esp = e - 0xC;
+    CallPtr(c, clock, 0x447CF2, 0x447CF0);
+    Put(0x8D5898 + n * 8, c.eax + (time - U32(0x15342A0)));
+    if (!U32(0x8D589C + n * 8) && U32(0x1439370)) {
+      c.esp = e - 8;
+      Push(c, 1);
+      Push(c, Arg(c, e, 1));
+      CallPtr(c, U32(0x1426D74), 0x447D23, 0x447D1D);
+      Put(0x8D589C + n * 8, c.eax);
+    }
+    if (int32_t(n) >= I32(0x8D5A98)) Put(0x8D5A98, n + 1);
   }();
   c.esp = e + 4;
 }
@@ -5273,6 +5519,77 @@ void f_004AC890(Ctx& c) {
   c.ebp = ebp;
   c.esi = esi;
   c.edi = edi;
+  c.esp = e + 4;
+}
+
+// A grid corner in the sorted list 0xC952B4 (count 0xC952BC) of 8-byte
+// entries (x and y as 16 bits, z as 16 bits and two bytes the caller's
+// stack held, never read): EAX z; stack x, y and whether to add it (0 no,
+// 1 when missing, 2 also when found, before the one found); EAX its index,
+// or -1 (missing and not added, or the list full). The key is made in the
+// frame (x and y at e - 8, z at e - 4; e - 2 untouched) and searched for
+// by halves (lo + hi) >> 1 from 0 to the count less 1: the dword's
+// difference (wrapping), when 0 z's, its sign deciding. An addition is
+// 0x4AC780 at lo (or at the one found).
+void f_004AC7E0(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi, key = e - 8, z = c.eax;
+  Wr<uint16_t>(g_guest_base, e - 6, uint16_t(Arg(c, e, 2)));
+  int32_t hi = int32_t(U32(0xC952BC) - 1), lo = 0;
+  Wr<uint16_t>(g_guest_base, key, uint16_t(Arg(c, e, 1)));
+  Wr<uint16_t>(g_guest_base, e - 4, uint16_t(z));
+  c.esp = e - 0x18;
+  c.edi = key;
+  c.eax = [&]() -> uint32_t {
+    if (hi >= 0) {
+      const uint32_t list = U32(0xC952B4);
+      do {
+        const uint32_t mid = uint32_t(int32_t(uint32_t(lo) + uint32_t(hi)) >> 1);
+        int32_t d = int32_t(U32(key) - U32(list + mid * 8));
+        if (!d && !(d = int32_t((z & 0xFFFF) - U16(list + mid * 8 + 4)))) {
+          if (Arg(c, e, 3) == 2) {
+            c.esi = mid;
+            Call(c, f_004AC780, 0x4AC870);
+          }
+          return mid;
+        }
+        if (d < 0)
+          hi = int32_t(mid) - 1;
+        else
+          lo = int32_t(mid) + 1;
+      } while (lo <= hi);
+    }
+    if (!Arg(c, e, 3)) return 0xFFFFFFFFu;
+    c.esi = uint32_t(lo);
+    Call(c, f_004AC780, 0x4AC852);
+    return c.eax ? uint32_t(lo) : 0xFFFFFFFFu;
+  }();
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// An entry (EDI, 8 bytes) inserted into the sorted list at ESI unless the
+// count 0xC952BC is 0x400000 or more (EAX 0): the entries from ESI moved up
+// one (memmove 0x51ACF0, (count - ESI) x 8 bytes), the entry copied, the
+// count incremented (EAX 1).
+void f_004AC780(Ctx& c) {
+  const uint32_t e = c.esp, at = c.esi, entry = c.edi, n = U32(0xC952BC);
+  c.eax = 0;
+  if (int32_t(n) < 0x400000) {
+    const uint32_t from = U32(0xC952B4) + at * 8;
+    Push(c, (n - at) << 3);
+    Push(c, from);
+    Push(c, from + 8);
+    Call(c, f_0051ACF0, 0x4AC7A8);
+    const uint32_t lo = U32(entry);
+    Put(U32(0xC952B4) + at * 8, lo);
+    const uint32_t hi = U32(entry + 4);
+    Put(U32(0xC952B4) + at * 8 + 4, hi);
+    Put(0xC952BC, U32(0xC952BC) + 1);
+    c.eax = 1;
+  }
+  c.esi = at;
+  c.edi = entry;
   c.esp = e + 4;
 }
 

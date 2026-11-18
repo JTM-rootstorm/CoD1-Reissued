@@ -186,6 +186,13 @@ speed.
   2.005-3.071 ms (this build better in two of the three pairs), p95
   2.7-6.5 and 2.9-4.5, p99 2.9-9.4 and 3.5-5.4: no difference
   measurable; errors 3; the walks end at (4343-4346, -4852).
+  With layer 12 (out/fe12): 13 of 13 shared, 47 of 1640 in-level
+  identical against both runs of main (a second run of this build 46
+  against both; the two runs of main 47, this build's two 46); with other
+  sessions loading the machine (load about 10) throughout, mean
+  2.043-2.214 ms (main) and 1.965-2.148 ms, p95 2.8-3.1 and 2.7-3.1, p99
+  3.2-3.7 and 3.1-3.6: not worse; errors 3; the walks end at (4346,
+  -4852).
 - Layer 4, the cell walk (2026-11-09): a polygon's clip 0x4D7F30 (ECX
   plane; stack points, &count, out: distances z + x + y less the plane's,
   behind below -0.001, in front above 0.001; none in front: count 0, EAX
@@ -991,6 +998,167 @@ speed.
   corners' draw (z a hair below a layer's edge, which the store rounds
   onto it, now made on purpose); logs mut18_round1-4.log and
   mut18_final.log in the session's scratchpad.
+- Layer 12, the rest of the renderer's own code under the front end and
+  the DObj accessors it calls (2026-11-18): each byte's bits reversed
+  0x4A9880 (stack the dword, EAX: the table 0xC951B0 made, and 0x564A20
+  cleared, while 0x564A20 is set; the lookups read the table as it is;
+  the original also leaves the result in ECX (its pushed ECX's slot) and
+  byte 3's in EDX, which none of its callers 0x4A9E70, 0x4A9EC0, 0x4AC370
+  reads); a grid corner in the sorted list 0x4AC7E0 (EAX z; stack x, y,
+  add; the list 0xC952B4 of 8-byte entries, count 0xC952BC: x and y as 16
+  bits each in a dword, z as 16 bits, then two bytes of the caller's
+  stale stack (its key at e - 8 and e - 4 leaves e - 2 unwritten; nothing
+  reads them); searched by halves (lo + hi) >> 1 with the dword's wrapping
+  difference, when 0 z's, deciding by sign; EAX the index, or -1 when
+  missing and add is 0 or the list is full; add 1 inserts when missing, 2
+  also before a match, at lo or the match through 0x4AC780) and the
+  insertion 0x4AC780 (ESI index, EDI entry: unless the count is 0x400000 or
+  more (signed; EAX 0), memmove 0x51ACF0 of (count - ESI) x 8 bytes up
+  one, the entry, the count, EAX 1); a grid corner's lights found 0x4A9C30
+  (EAX the corner; stack the entry, count, lights, origin; EAX the leaf,
+  which 0x4AC370 reads and hands to 0x4A9A90): the entry's byte and bits
+  cleared, the leaf R_PointInLeaf; a leaf with bit 0 of its +0 or +0xC below
+  0 is not used (state 2), nor is one whose trace 0x41E960 (a collision
+  trace left lifted: EAX and ECX the zero vector, EDX the corner moved 0.01
+  along its fast-normalised direction to the origin, stack 0, origin, 0,
+  0x537E54, 0x2001, 0, 0) answers nonzero; else state 1, a bit per light
+  (1 << (index & 31), 16 bits: the 17th to 32nd give none) for a directional
+  one (+0x50 == 0) 0x4A99C0 sees reach from 0.1 to 32768 along its
+  direction, and a point one (+0x50 not 0, NaN too) 0x4A9A30 sees reach
+  from 0.1 along the normalised direction to its origin; then the sun's
+  traces 0x4A9A90. EBX at the lights' calls is the origin until a point
+  light's +0x44 takes its place; the entry's argument slot ends 0, or 1 for
+  state 2 (the state is 1 + (slot != 0)). Whether a point light reaches
+  0x4A9A30 (EAX the light, ECX the point; EAX 1 or 0: CM_Trace as 0x4A99C0
+  makes it; not from inside a solid and a fraction not below 1, NaN too);
+  the sun's traces 0x4A9A90 (EAX leaf, EDI corner, ESI entry, an unused
+  stack argument; for a leaf with sun +0x10): 0x4AA5C0's grid of traces
+  (step 32768, 16384 above 3 of 0x15364C4, (n - 1) half steps each way, x
+  and y compared unrounded after FST), from the corner + 0.1 up (x and y
+  by 2^-21 x the offset) to the corner + 32768 up; each that reaches (from
+  a solid the contents' 0x800, else a fraction of exactly 1 or surface flag
+  4) adds 2 to the byte and sets bit 0x8000. Debug text queued 0x4AD860
+  (EBX point, EDI colour; stack scale, text; while count + 1 is not above
+  the limit 0x154958C (signed): the block 0x1549594 made at the limit x 128
+  bytes (0x42A480) when missing, the 128-byte entry: point, colour, scale,
+  strncpy of 0x5F characters at +0x20, 0 at +0x7F). StatMon_UpdateEntry
+  0x447CA0 (named by its own error string "StatMon_UpdateEntry: invalid
+  entry '%i'"; client code: ECX the entry, EAX the time to show in ms, stack
+  the image's name; with the cvar 0x14E43EC on: outside 0-63 the error
+  routine 0x42E660 (code 1, which longjmps in game); the time base
+  0x15342A0 from timeGetTime (the import 0x53331C, read once, called once
+  or twice) the first time (0x13F9DB0 then 1); the end time timeGetTime +
+  EAX - base at 0x8D5898 + 8 x entry, the image +4 registered through the
+  client's refexport 0x1426D74 (name, 1) when 0 and 0x1439370 is set; the
+  count 0x8D5A98 at least entry + 1, signed). The DObj accessors (in
+  src/xanim.cpp; a model's +4 holds its parts' holder at +0 and from +0x14
+  an entry of 0x14 bytes per level whose +0 points to the level's surfaces
+  (S+4: count int16 +4, pointers +8; a surface's bone bits from +8, a dword
+  per 32 of the model's bones); the DObj's +0x50 a first bone per model):
+  the surface count 0x477290 (EDX DObj, EDI a level per model; models last
+  first, a level below 0 or without surfaces skipped; EAX, read by
+  0x4F7F00, 0x4F9C80 and 0x506980; ECX ends -1 and EDX the last value read,
+  which none reads), the surfaces and their bones 0x477340 (stack DObj,
+  list, levels; ESI 128 bits cleared by the memset 0x42B1D0, then per
+  surface a pair (model, surface) into the list, whose argument slot ends
+  past the last, and its bits ORed in at the model's first bone: shifted
+  across dwords when that is not a multiple of 32, then into one dword
+  more; a model whose bones reach past bone 127 writes past the 16
+  bytes), the parents
+  0x476510 (stack DObj, set: the part duplicates 0x4761F0 first when
+  missing; from the last bone down, model by model, each bone that passes
+  sets its parent's bit: a duplicated bone's source, a non-root bone's
+  parent byte, a model's root its hang bone +0x48 (none for 0xFF); the
+  test is the source's `!byte & bit`: a bone is skipped only when it is
+  bit 0 of a zero byte, so nearly every bone marks its parent) and the
+  bones' bounds 0x4771B0 (EDX out, stack DObj: a pointer per bone to its
+  0x28 bytes from the parts' +8; EDX ends past the last, as the native's).
+  Every call site checked (0x447CA0's seven: the syscall exits do `xor
+  eax,eax`, the others write EAX, ECX and EDX before reading them; 0x4AD860's
+  0x4AD480; 0x477340's four; 0x4771B0's two): none reads the EAX, ECX or EDX
+  the natives leave, but 0x477290's and 0x4A9C30's EAX; no code or data
+  pointer to any of the twelve exists in CoDSP.exe or the game DLLs. Still
+  lifted under them: the collision trace 0x41E960, va 0x440940, the zeroed
+  allocation 0x42A480, the cvar set 0x431CF0, the print 0x42E300, the error
+  routine 0x42E660, the part duplicates 0x4761F0 and the CRT (memmove,
+  memset, strncpy, _stricmp, fprintf, square root, trigonometry). Not
+  ported: 0x4A9E70 (a corner's key and bucket, which nothing calls) and
+  0x4AC370 (a corner's lights into a table of 12-byte entries, under
+  0x4AC550 from 0x4D39B0), not under the front end.
+- Layer 12 oracle and mutations: the old stubs of 0x447CA0, 0x4A9C30,
+  0x4AC7E0 and 0x4AD860 gone (the corner cache, the corners' draw, the
+  text draws and RE_AddRefEntityToScene now reach the originals; the
+  stubs' hashes of a corner and of queued text's point and colour gone:
+  the queue's entry is compared instead); new stubs the corners' trace
+  0x41E960 (a hash of its start and end; 0 or not from the case's salt,
+  0x100 now and then) and the error routine 0x42E660 (lifted before, never
+  reached); timeGetTime (its import 0x53331C) and the client's image
+  registration (refexport 0x1426D74) faked in Dispatch, recorded; va's
+  stub now answers a text of up to 120 characters (the text queue copies
+  it; it answered junk). The model accessors stay stubs here and are
+  checked in xanim_oracle (below). The debug queues' generator now sets
+  the text queue (its block was random bits; now its region with room for
+  0x220 more, or missing: made on the heap at a limit up to 256) and the
+  corners' sorted list (0xC952B4 was whatever .bss held: corners about the
+  grid's middle added as the game adds them, up to 0x100; a quarter with y
+  anywhere, keys 2^31 apart that the search's wrapping difference does not
+  order, and a quarter with duplicates). What lifted callers write
+  outside the windows is compared (Touch): a list entry's first six bytes
+  (its last two are the caller's stale stack: the native callers' frames
+  differ below ESP, so those bytes are compared only in the list's own
+  cases, whose stack below is refilled with the case's pattern), a queued
+  text, the warning icons' globals. Changed fixtures: LightCase's grid
+  corner case now hands real lights (they were null pointers) and makes
+  sure of the node tree; the corners' draw seeds the list with some of the
+  view's corners half the time (the stub found one a third of the time).
+  New cases (about 3000 each): the bits reversed (any dword; the table
+  made again, or random and made right after), the list (a corner of the
+  list's or one off by one, add 0, 1, 2 or other; at its limit a lazily
+  committed list of 0x3FFFFE-0x400000 zero entries at 0x60000000), the
+  insertion (any place; counts about the limit and negative, the list
+  placed so the place is in the region), a corner's lights found
+  (corners, leaves of bit 0 or off the grid, counts 0-20, -1), a point
+  light's reach, the sun's traces (sizes up to 8 and negative, a byte
+  near 0xFF), text (texts past 0x5F, the "." string, blocks missing) and
+  StatMon_UpdateEntry (entries 0-63 and 64, 65, -1, -2: their writes land
+  about the table; the cvar, the base flag 0, 1, 0x100 or any, images 0
+  or not). LightCase went from 51000 to 63000 cases, DebugCase from 21000
+  to 36000. xanim_oracle: the accessors' cases (12000, after the
+  evaluation's, whose counts are unchanged) on NewWorld's DObjs given
+  levels of detail (surfaces up to 8, a negative int16 count now and then,
+  random bone bits), first bones the models' sums or any byte, levels 0-3
+  or negative, the part duplicates' bits only for bones in their pairs
+  (the parents' search walks the pairs until it meets its bone; now and
+  then moved to the handle 0x1F00, whose low byte is 0) or none yet (the
+  stub's), a model of 0 or a negative bone count, a parent byte past its
+  bone (a negative parent); compared as the evaluation's, EAX for 0x477290
+  and the part duplicates calls' return address and ESP (recorded apart
+  from the captured calls' events). Results: render_oracle 907478 random
+  cases, 3.57M calls out, 0 mismatched, 34 s (other sessions loading the
+  machine, load 9-12), peak 118 MB; xanim_oracle 32000 cases, 0
+  mismatched, 28 s, peak 17 MB; ctest 68 of 68. 233 mutants (177 in
+  src/render.cpp, 56 in src/xanim.cpp): 212 caught (11 by crashing or
+  hanging an oracle; one, the text's count, rerun alone after its text
+  went stale in the final run); 21 survive, all equivalent: the return addresses of
+  calls into callees that are not stubs (R_PointInLeaf, 0x4268B0 twice,
+  0x4A99C0, 0x4A9A30, 0x4A9A90, 0x4AC780 twice, the memmove, strncpy and
+  memset: eleven), whose slots are below ESP and unread; 0x4A9A90's
+  stack argument (it never reads it); the text's count read again after
+  the allocation (nothing changes it); strncpy's count 0x60 (its last byte
+  is +0x7F, which the 0 after it overwrites); `!(v != 0)` for `v == 0`;
+  0x4A99C0's AL tested for not 0 rather than 2 (it is 2 or 0); the sun's
+  grid compared stored rather than unrounded (every x and y is a multiple
+  of 8192 far inside a float's exact range for any grid that ends); the
+  list's `(lo + hi) >> 1` unsigned (lo + hi stays below 2^23), `d <= 0`
+  for `d < 0` (d is never 0 there) and its call of 0x4AC780 at an ESP 4
+  higher (nothing reads that frame); 0x477340's `last >= 0` for
+  `last > 0` before the middle dwords (with last 0 the loop does not run).
+  The first round missed the list's halves (until keys the wrapping
+  difference does not order), 0x477290's and 0x477340's int16 counts and
+  bone counts (until negative ones), the duplicates' u16 handle (until
+  0x1F00) and a negative parent's byte; round 2 added strncpy's count
+  0x5E, caught; logs mut19_round1-2.log and mut19_final.log in the
+  session's scratchpad.
 - The oracle's time (2026-11-15): three quarters of a run went to the
   harness, not the code under test: each case's compared windows saved
   three times into newly grown vectors and compared a byte at a time.

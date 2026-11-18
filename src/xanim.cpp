@@ -3,7 +3,9 @@
 // tree's times and weights with the notes it passes (0x47CC90) and the
 // game's update of its times, which passes its notes to script (0x47CCD0),
 // read in place from the anim tree, the xanims and the xmodels in guest
-// memory.
+// memory; and the DObj accessors the renderer calls: its surface count
+// (0x477290), its surfaces with their bones (0x477340), its bones' parents
+// added to a set (0x476510) and its bones' bounds (0x4771B0).
 // Replacements of lifted functions named with `replace` in
 // manifest/CoDSP.manifest; FINDINGS.md "XAnim evaluation". Names and
 // evidence are in the Ghidra plate comments.
@@ -18,13 +20,15 @@
 // memory; the lifted functions called from here (the part-to-bone map and
 // its release, the part duplicates, an info's name release, the script
 // calls of the game's notes) get the original's register and stack
-// arguments. Not reproduced: EAX (but 0x47CCD0's result), ECX, EDX and
-// EFLAGS on return (every call site overwrites them or returns to code that
-// does: the cgame and game syscall exits do `xor eax,eax`), the x87 status
-// word, and the dead stack below ESP (where the updates' originals also
-// rewrite their own argument slots).
+// arguments. Not reproduced: EAX (but 0x47CCD0's and 0x477290's results),
+// ECX, EDX and EFLAGS on return (every call site overwrites them or returns
+// to code that does: the cgame and game syscall exits do `xor eax,eax`),
+// the x87 status word, and the dead stack below ESP (where the updates'
+// originals also rewrite their own argument slots; 0x477340's list slot
+// is rewritten as the original does).
 
 #include <cstdint>
+#include <vector>
 
 #include "x86/lifted.h"
 #include "x87_value.h"
@@ -38,6 +42,7 @@ void f_0045D530(Ctx& c);  // releases string-table entry (u16 entry)
 void f_0046A7A0(Ctx& c);  // pushes string-table entry (u16 entry) on the script stack
 void f_004683B0(Ctx& c);  // script call (target, name, argument count)
 void f_0047B390(Ctx& c);  // 0x4683B0 (target, name, 1) with string SI pushed
+void f_0042B1D0(Ctx& c);  // the memset (destination, byte, count)
 
 namespace {
 
@@ -118,6 +123,8 @@ bool Bit(const uint32_t* bits, int32_t i) {
 uint32_t ModelParts(uint32_t model) {
   return At<uint32_t>(At<uint32_t>(At<uint32_t>(model + 4)) + 4);
 }
+// The bone count of a model's parts.
+int32_t NumBones(uint32_t parts) { return At<int16_t>(At<uint32_t>(At<uint32_t>(parts))); }
 
 void Push(Ctx& c, uint32_t v) {
   c.esp -= 4;
@@ -1388,6 +1395,157 @@ void f_0047CCD0(Ctx& c) {
   }
   c.eax = cut;
   c.esi = esi;
+  c.esp += 4;
+}
+
+// ---- the DObj accessors the renderer calls --------------------------------------
+//
+// A model's +4 holds the pointer to its parts' holder (+0, ModelParts) and
+// from +0x14 an entry of 0x14 bytes per level of detail, whose +0 points to
+// the level's surfaces S, or is 0: S+4 points to their count (int16, +4)
+// and the surfaces (pointers, +8); a surface's bones are bits from its +8,
+// a dword per 32 bones of the model. A model's bone count is the int16 its
+// bone names (*parts) point to; the DObj's +0x50 holds the first bone of
+// each model (a byte per model).
+
+// A DObj's surface count (EDX the DObj, EDI a level per model; EAX): the
+// surfaces of each model, last first, at its level when that is not below
+// 0 and has surfaces.
+void f_00477290(Ctx& c) {
+  const uint32_t dobj = c.edx, levels = c.edi;
+  uint32_t n = 0;
+  for (int32_t k = int32_t(At<uint8_t>(dobj + 0x16)) - 1; k >= 0; k--) {
+    const int32_t level = At<int32_t>(levels + 4 * uint32_t(k));
+    if (level < 0) continue;
+    const uint32_t x = At<uint32_t>(At<uint32_t>(dobj + 0x18 + 4 * uint32_t(k)) + 4);
+    if (const uint32_t s = At<uint32_t>(x + 0x14 + 0x14 * uint32_t(level)))
+      n += uint32_t(int32_t(At<int16_t>(At<uint32_t>(s + 4) + 4)));
+  }
+  c.eax = n;
+  c.esp += 4;
+}
+
+// A DObj's surfaces and their bones (stack the DObj, the list out and a
+// level per model; ESI 128 bits of bones out, cleared first by the memset
+// 0x42B1D0): for each model with a level not below 0 that has surfaces, a
+// pair (model, surface; 16 bits each) per surface into the list, whose
+// argument slot ends past the last, and the surface's bone bits ORed into
+// ESI's at the model's first bone (+0x50): a dword per 32 of the model's
+// bones, shifted across dwords when the first bone is not a multiple of 32
+// (then one dword further, as the original writes it).
+void f_00477340(Ctx& c) {
+  const uint32_t e = c.esp, out = c.esi, levels = At<uint32_t>(e + 0xC);
+  c.esp = e - 0x34;
+  Push(c, 0x10);
+  Push(c, 0);
+  Push(c, out);
+  Call(c, f_0042B1D0, 0x477353);
+  c.esp = e - 0x34;
+  const uint32_t dobj = At<uint32_t>(e + 4), numModels = At<uint8_t>(dobj + 0x16);
+  auto OrInto = [&](uint32_t w, uint32_t v) { At<uint32_t>(out + w * 4) |= v; };
+  for (uint32_t i = 0; i < numModels; i++) {
+    const int32_t level = At<int32_t>(levels + 4 * i);
+    if (level < 0) continue;
+    const uint32_t x = At<uint32_t>(At<uint32_t>(dobj + 0x18 + 4 * i) + 4);
+    const uint32_t s = At<uint32_t>(x + 0x14 + 0x14 * uint32_t(level));
+    if (!s) continue;
+    const int32_t last = (NumBones(At<uint32_t>(At<uint32_t>(x) + 4)) - 1) >> 5;
+    const int32_t numSurfs = At<int16_t>(At<uint32_t>(s + 4) + 4);
+    const uint32_t first = At<uint8_t>(dobj + 0x50 + i), word = first >> 5, shift = first & 31;
+    uint32_t surf = At<uint32_t>(At<uint32_t>(s + 4) + 8);
+    for (int32_t j = 0; j < numSurfs; j++, surf += 4) {
+      const uint32_t list = At<uint32_t>(e + 8);
+      At<uint16_t>(list + 2) = uint16_t(j);
+      At<uint16_t>(list) = uint16_t(i);
+      auto bits = [&](uint32_t k) { return At<uint32_t>(At<uint32_t>(surf) + 8 + 4 * k); };
+      if (shift) {
+        OrInto(word, bits(0) << shift);
+        uint32_t w = word + 1, k = 0;
+        if (last > 0)
+          for (k = 1; k <= uint32_t(last); k++, w++) OrInto(w, bits(k - 1) >> (32 - shift) | bits(k) << shift);
+        OrInto(w, bits(last > 0 ? uint32_t(last) : 0) >> (32 - shift));
+      } else if (last >= 0) {
+        for (uint32_t k = 0; k <= uint32_t(last); k++) OrInto(word + k, bits(k));
+      }
+      At<uint32_t>(e + 8) = list + 4;
+    }
+  }
+  c.esp = e + 4;
+}
+
+// A DObj's bones' parents added to a set of its bones (stack the DObj and
+// the set, a bit per bone): the part duplicates made first when missing
+// (0x4761F0); then from the last bone down, model by model (each model's
+// first bone the sum of the counts before it), each bone the test passes
+// sets its parent's bit: a duplicated bone's source (its pair after the
+// duplicates' 128 bits), a non-root bone's parent (its byte after the bone
+// names), a model's root the bone the model hangs from (+0x48; none for
+// 0xFF). The test skips a bone only when its bit is the first of its byte
+// and the byte is 0: the original's `!byte & bit`.
+void f_00476510(Ctx& c) {
+  const uint32_t e = c.esp, dobj = At<uint32_t>(e + 4), set = At<uint32_t>(e + 8);
+  int32_t bone = int32_t(At<uint8_t>(dobj + 0x17)) - 1;
+  if (!At<uint16_t>(dobj + 0x14)) {
+    c.esp = e - 0x40;
+    Push(c, dobj);
+    Call(c, f_004761F0, 0x47652E);
+  }
+  const uint16_t handle = At<uint16_t>(dobj + 0x14);
+  const uint32_t dup = handle ? Global(kStrings) + handle * 8u + 4 : 0;
+  // The model holding the last bone, and the first bones of the models
+  // up to it.
+  int32_t k = 0;
+  std::vector<int32_t> start{0};
+  uint32_t parts = ModelParts(At<uint32_t>(dobj + 0x18));
+  for (int32_t total = NumBones(parts); total <= bone;) {
+    start.push_back(total);
+    k++;
+    parts = ModelParts(At<uint32_t>(dobj + 0x18 + 4 * uint32_t(k)));
+    total = NumBones(parts) + start[k];
+  }
+  uint32_t parents = At<uint32_t>(parts) + 4;
+  for (;;) {
+    const int32_t local = int32_t(uint32_t(bone) - uint32_t(start[k]));
+    if (local < 0) {
+      if (--k < 0) break;
+      parts = ModelParts(At<uint32_t>(dobj + 0x18 + 4 * uint32_t(k)));
+      parents = At<uint32_t>(parts) + 4;
+      continue;
+    }
+    const uint32_t bit = 1u << (bone & 7), at = uint32_t(bone >> 3);
+    if (bit & uint32_t(At<uint8_t>(set + at) == 0)) {
+      bone--;
+      continue;
+    }
+    int32_t parent;
+    if (At<uint8_t>(dup + at) & bit) {
+      uint32_t p = dup + 0x10;
+      while (bone != int32_t(At<uint8_t>(p)) - 1) p += 2;
+      parent = int32_t(At<uint8_t>(p + 1)) - 1;
+    } else if (const int32_t i = int32_t(uint32_t(local) - uint32_t(int32_t(At<int16_t>(parts + 4)))); i >= 0) {
+      parent = int32_t(uint32_t(bone) - At<uint8_t>(parents + uint32_t(i)));
+    } else {
+      parent = At<uint8_t>(dobj + 0x48 + uint32_t(k));
+      if (parent == 0xFF) {
+        bone--;
+        continue;
+      }
+    }
+    At<uint8_t>(set + uint32_t(parent >> 3)) |= uint8_t(1u << (parent & 7));
+    bone--;
+  }
+  c.esp = e + 4;
+}
+
+// A DObj's bones' bounds (EDX the pointers out, stack the DObj): for each
+// bone of each model a pointer to its 0x28 bytes from the parts' +8.
+void f_004771B0(Ctx& c) {
+  const uint32_t dobj = At<uint32_t>(c.esp + 4);
+  for (uint32_t i = 0; i < At<uint8_t>(dobj + 0x16); i++) {
+    const uint32_t parts = ModelParts(At<uint32_t>(dobj + 0x18 + 4 * i));
+    for (int32_t j = 0, n = NumBones(parts); j < n; j++, c.edx += 4)
+      At<uint32_t>(c.edx) = At<uint32_t>(parts + 8) + 0x28 * uint32_t(j);
+  }
   c.esp += 4;
 }
 

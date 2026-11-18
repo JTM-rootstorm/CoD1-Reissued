@@ -326,6 +326,10 @@ void f_00429710_lifted(Ctx& c);
 void f_00429710(Ctx& c) { f_00429710_lifted(c); }
 void f_00427590_lifted(Ctx& c);
 void f_00427590(Ctx& c) { f_00427590_lifted(c); }
+// The debug text queue, native in the game (src/render.cpp): here only
+// lifted bodies reach it.
+void f_004AD860_lifted(Ctx& c);
+void f_004AD860(Ctx& c) { f_004AD860_lifted(c); }
 // The originals...
 void f_004C89D0_lifted(Ctx& c);
 void f_004C8A20_lifted(Ctx& c);

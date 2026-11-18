@@ -39,12 +39,18 @@ replace 0041A730
 replace 0041A820
 
 # XAnim evaluation: a DObj's bone poses from its anim tree and its bone
-# matrices, and cgame's and the game's updates of its anim tree's times
-# (src/xanim.cpp).
+# matrices, and cgame's and the game's updates of its anim tree's times;
+# the DObj accessors the renderer calls: its surface count, its surfaces
+# with their bones, its bones' parents added to a set and its bones'
+# bounds (src/xanim.cpp).
 replace 0047CD80
 replace 004766E0
 replace 0047CC90
 replace 0047CCD0
+replace 00477290
+replace 00477340
+replace 00476510
+replace 004771B0
 
 # pk3 reads on the host's zlib: unzOpenCurrentFile, unzReadCurrentFile and
 # unzCloseCurrentFile (src/unzip.cpp).
@@ -93,9 +99,12 @@ replace 00519140
 # cache's blocks of a size class, splits, eviction and frees; a light's
 # intensity at a point, the lights beyond the limit merged, the light
 # grid's lights at a point and the lights' debug draw; R_PointInLeaf, a
-# grid corner's lights (cached) and whether a light reaches a point; the
-# debug draws: a polygon, a line, a box, text, the client's line, the light
-# grid's corners and the composite models' r_xdebug draws; the vector
+# grid corner's lights (cached: the bits reversed, the corners' sorted
+# list and an insertion into it, the lights found, whether a point light
+# reaches it, the sun's traces) and whether a light reaches a point; the
+# debug draws: a polygon, a line, a box, text and its queue, the client's
+# line, the light grid's corners and the composite models' r_xdebug draws;
+# the client's warning icon StatMon_UpdateEntry; the vector
 # helpers the whole game calls: the two normalisations, a perpendicular
 # vector, a point rotated about a vector, the 3x3 and 4x4 inverses, a
 # point and bounds added to bounds, BoxOnPlaneSide, a plane through three
@@ -207,6 +216,14 @@ replace 005068B0
 replace 00426610
 replace 00429710
 replace 00427590
+replace 004A9880
+replace 004AC7E0
+replace 004AC780
+replace 004A9C30
+replace 004A9A30
+replace 004A9A90
+replace 004AD860
+replace 00447CA0
 
 # The renderer back end (src/render_backend.cpp): GL_Bind, the cull face,
 # the texture environment, the state bits and the client arrays, fog on

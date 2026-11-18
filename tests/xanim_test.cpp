@@ -17,7 +17,11 @@
 // (0x4761F0), an info's name release (0x45D530) and the game's notes to
 // script (0x47B390, 0x46A7A0, 0x4683B0), which are stubs here
 // (tests/xanim_stubs.manifest) that log their register and stack
-// arguments and make deterministic maps. Not compared: EAX otherwise, ECX,
+// arguments and make deterministic maps. The DObj accessors the renderer
+// calls (0x477290, 0x477340, 0x476510, 0x4771B0) run alone on such DObjs
+// given levels of detail (AccessorCase), compared the same way (EAX for
+// 0x477290), with the part duplicates calls' return address and ESP. Not
+// compared: EAX otherwise, ECX,
 // EDX, EFLAGS, the x87 status word and the stack below the return address
 // (src/xanim.cpp).
 //
@@ -69,16 +73,28 @@ void f_0047CD80_lifted(Ctx& c);
 void f_004766E0_lifted(Ctx& c);
 void f_0047CC90_lifted(Ctx& c);
 void f_0047CCD0_lifted(Ctx& c);
+void f_00477290_lifted(Ctx& c);
+void f_00477340_lifted(Ctx& c);
+void f_00476510_lifted(Ctx& c);
+void f_004771B0_lifted(Ctx& c);
 // The native code (tests/xanim_native.cpp renames its entries)...
 void n_0047CD80(Ctx& c);
 void n_004766E0(Ctx& c);
 void n_0047CC90(Ctx& c);
 void n_0047CCD0(Ctx& c);
+void n_00477290(Ctx& c);
+void n_00477340(Ctx& c);
+void n_00476510(Ctx& c);
+void n_004771B0(Ctx& c);
 // ...and the lifted originals call each other, not it.
 void f_0047CD80(Ctx& c) { f_0047CD80_lifted(c); }
 void f_004766E0(Ctx& c) { f_004766E0_lifted(c); }
 void f_0047CC90(Ctx& c) { f_0047CC90_lifted(c); }
 void f_0047CCD0(Ctx& c) { f_0047CCD0_lifted(c); }
+void f_00477290(Ctx& c) { f_00477290_lifted(c); }
+void f_00477340(Ctx& c) { f_00477340_lifted(c); }
+void f_00476510(Ctx& c) { f_00476510_lifted(c); }
+void f_004771B0(Ctx& c) { f_004771B0_lifted(c); }
 // unzCloseCurrentFile, tolower and the memcpy 0x42B0A0, native in the game
 // (src/unzip.cpp, src/crt.cpp, src/render.cpp): here only the stubbed
 // functions' lifted bodies reach them.
@@ -174,6 +190,8 @@ struct Stats {
   // What the captured 0x47CD80 calls evaluate: anims of nonzero weight
   // blended, leaves (interpolated or not), the most bones.
   int blends = 0, leaves = 0, interpolated = 0, bones = 0;
+  // The DObj accessors' cases: surface count, surfaces, parents, bounds.
+  int accessors[4] = {};
 };
 
 // ---- the stubs --------------------------------------------------------------------
@@ -197,6 +215,9 @@ struct Stubs {
   std::deque<Served> served;  // a captured call's events, in order
   bool capture = false;
   bool failed = false;  // a captured call called differently from the game
+  // The accessors' cases: each part duplicates call's return address and
+  // ESP.
+  std::vector<std::pair<uint32_t, uint32_t>> frames;
 } g_stubs;
 
 uint32_t Arg(const Ctx& c, int n) { return Rd(c.esp + 4 + 4 * n); }
@@ -262,6 +283,7 @@ void Duplicates(Ctx& c) {
   const uint32_t dobj = Arg(c, 0);
   const Event e{kDuplicates, 0, 0, 0, dobj, 0, 0};
   g_stubs.log.push_back(e);
+  g_stubs.frames.push_back({Rd(c.esp), c.esp});
   if (Serve(c, e)) return;
   std::mt19937 g(g_stubs.seed ^ 0xD0B1u);
   const uint32_t numBones = g_mem.read<uint8_t>(dobj + 0x17);
@@ -925,6 +947,181 @@ void RandomCase(std::mt19937& g, uint32_t special, Stats& s) {
   Run(calls, win, g, s, "random");
 }
 
+// ---- the DObj accessors -------------------------------------------------------------
+
+// One call of an accessor the renderer calls (0x477290 surface count,
+// 0x477340 surfaces, 0x476510 parents, 0x4771B0 bounds) through the lifted
+// original and the native code from the same memory: the same bytes in
+// w and the stack arguments, the same ESP, EBX, ESI, EDI, EBP and x87
+// stack, EAX for 0x477290, the same part duplicates calls (with their
+// return address and ESP).
+void RunAccessor(int which, uint32_t edx, uint32_t esi, uint32_t edi, const std::vector<uint32_t>& args,
+                 std::vector<Window> w, std::mt19937& g, Stats& s) {
+  using Fn = void (*)(Ctx&);
+  static constexpr Fn lifted[] = {recomp::gen::f_00477290_lifted, recomp::gen::f_00477340_lifted,
+                                  recomp::gen::f_00476510_lifted, recomp::gen::f_004771B0_lifted};
+  static constexpr Fn natives[] = {recomp::gen::n_00477290, recomp::gen::n_00477340, recomp::gen::n_00476510,
+                                   recomp::gen::n_004771B0};
+  static const char* const kNames[] = {"0x477290", "0x477340", "0x476510", "0x4771B0"};
+  const uint32_t esp = kStack + kStackSize - 0x100;
+  w.push_back({esp, 4 + 4 * uint32_t(args.size())});
+  Ctx c0 = NewCtx(g, esp);
+  c0.edx = edx;
+  c0.esi = esi;
+  c0.edi = edi;
+  for (uint32_t i = g() % 3; i; i--) recomp::x87::LoadF32(c0.fpu, g());
+  const std::vector<uint8_t> before = Save(w);
+  const uint32_t seed = g(), next = g_stubs.next;
+  auto run = [&](Fn fn) {
+    g_stubs.seed = seed;
+    g_stubs.next = next;
+    g_stubs.log.clear();
+    g_stubs.frames.clear();
+    g_stubs.capture = false;
+    g_stubs.failed = false;
+    Wr(esp, 0xDEAD0000);
+    for (size_t i = 0; i < args.size(); i++) Wr(esp + 4 + 4 * uint32_t(i), args[i]);
+    Ctx c = c0;
+    fn(c);
+    return c;
+  };
+  const Ctx l = run(lifted[which]);
+  const std::vector<Event> log = g_stubs.log;
+  const auto frames = g_stubs.frames;
+  const std::vector<uint8_t> after = Save(w);
+  Load(w, before);
+  const Ctx n = run(natives[which]);
+  const std::vector<uint8_t> got = Save(w);
+  s.cases++;
+  s.accessors[which]++;
+  s.dups += int(log.size());
+  bool ok = true;
+  auto fail = [&](const char* fmt, auto... a) {
+    if (s.failures < 20) {
+      std::printf("accessor %s: ", kNames[which]);
+      std::printf(fmt, a...);
+      std::printf("\n");
+    }
+    ok = false;
+  };
+  if (!(g_stubs.log == log) || g_stubs.frames != frames)
+    fail("calls differ (%zu lifted, %zu native)", log.size(), g_stubs.log.size());
+  if (n.esp != l.esp || n.ebp != l.ebp || n.ebx != l.ebx || n.esi != l.esi || n.edi != l.edi ||
+      n.fpu.top != l.fpu.top || n.fpu.empty != l.fpu.empty || n.fpu.cw != l.fpu.cw || (which == 0 && n.eax != l.eax))
+    fail("registers differ (esp %08X/%08X ebx %08X/%08X esi %08X/%08X edi %08X/%08X ebp %08X/%08X eax %08X/%08X)",
+         l.esp, n.esp, l.ebx, n.ebx, l.esi, n.esi, l.edi, n.edi, l.ebp, n.ebp, l.eax, n.eax);
+  if (got != after) {
+    size_t at = 0;
+    for (const Window& x : w) {
+      for (uint32_t i = 0; i < x.size; i++)
+        if (got[at + i] != after[at + i]) {
+          fail("%08X lifted %02X native %02X", x.va + i, after[at + i], got[at + i]);
+          break;
+        }
+      at += x.size;
+    }
+  }
+  if (!ok) s.failures++;
+  Load(w, after);
+}
+
+// The accessors on a DObj of NewWorld's models, each given levels of
+// detail: the model's +4 a new block (the parts' holder at +0, as before,
+// then 0x14 bytes per level from +0x14: none now and then, else surfaces,
+// up to 8, now and then 0 or more, whose bone bits (a dword per 32 bones)
+// are random); the DObj's first bone per model (+0x50) the models' sums,
+// now and then any byte (its bits then land past the 16 bytes, as the
+// original writes them); a level per model 0-3, -1 now and then; the part
+// duplicates NewWorld's with their bits only for bones in their pairs (the
+// parents' search walks the pairs until it meets the bone), or none yet
+// (the stub's); the parents' set random, with zero bytes now and then (the
+// original's `!byte & bit` skips a byte's first bone only when the byte is
+// 0).
+void AccessorCase(std::mt19937& g, uint32_t special, Stats& s) {
+  World w = NewWorld(g, special, false);
+  const uint32_t dobj = w.dobj, numModels = g_mem.read<uint8_t>(dobj + 0x16);
+  uint32_t first = 0;
+  for (uint32_t k = 0; k < numModels; k++) {
+    const uint32_t model = Rd(dobj + 0x18 + 4 * k), x = w.a.Alloc(0x14 * 5);
+    for (uint32_t i = 0; i < 0x14 * 5; i += 4) Wr(x + i, g());
+    Wr(x, Rd(Rd(model + 4)));
+    const uint32_t parts = Rd(Rd(x) + 4), nb = uint32_t(g_mem.read<int16_t>(Rd(Rd(parts))));
+    const uint32_t words = ((nb - 1) >> 5) + 1;
+    for (uint32_t level = 0; level < 4; level++) {
+      if (g() % 5 == 0) {
+        Wr(x + 0x14 + 0x14 * level, 0);
+        continue;
+      }
+      const uint32_t numSurfs = g() % 8 ? 1 + g() % 4 : g() % 9, holder = w.a.Alloc(8), t = w.a.Alloc(12),
+                     surfs = w.a.Alloc(4 * std::max(numSurfs, 1u));
+      // A negative count now and then (int16).
+      const uint32_t count = g() % 32 ? numSurfs : 0x8000u | g() % 0x8000;
+      Wr(x + 0x14 + 0x14 * level, holder);
+      Wr(holder, g());
+      Wr(holder + 4, t);
+      Wr(t, g());
+      Wr(t + 4, g() & 0xFFFF0000u | count);
+      Wr(t + 8, surfs);
+      for (uint32_t j = 0; j < numSurfs; j++) {
+        const uint32_t surf = w.a.Alloc(8 + 4 * words);
+        Wr(surfs + 4 * j, surf);
+        Wr(surf, g());
+        Wr(surf + 4, g());
+        for (uint32_t i = 0; i < words; i++) Wr(surf + 8 + 4 * i, g() % 4 ? g() : g() % 2 ? 0 : 0xFFFFFFFFu);
+      }
+    }
+    Wr(model + 4, x);
+    g_mem.write<uint8_t>(dobj + 0x50 + k, uint8_t(g() % 16 ? first : g()));
+    first += nb;
+  }
+  // The duplicates' bits only for bones in their pairs; now and then moved
+  // to the entry 0x1F00 (a handle whose low byte is 0).
+  if (uint16_t h = g_mem.read<uint16_t>(dobj + 0x14); h && g() % 2) {
+    if (g() % 4 == 0) {
+      std::memmove(g_mem.ptr(kStringTable + 0x1F00 * 8), g_mem.ptr(kStringTable + h * 8u), 0x800);
+      Wr16(dobj + 0x14, h = 0x1F00);
+    }
+    const uint32_t d = kStringTable + h * 8u + 4;
+    uint32_t bits[4] = {};
+    for (uint32_t p = d + 16; g_mem.read<uint8_t>(p); p += 2) {
+      const uint32_t b = g_mem.read<uint8_t>(p) - 1u;
+      if (g() % 4) bits[b >> 5] |= 1u << (b & 31);
+    }
+    for (int i = 0; i < 4; i++) Wr(d + 4 * i, bits[i]);
+  } else {
+    Wr16(dobj + 0x14, 0);
+  }
+  const uint32_t levels = w.a.Alloc(4 * 8), list = w.a.Alloc(4 * 256), bits = w.a.Alloc(64), out = w.a.Alloc(4 * 128);
+  for (uint32_t k = 0; k < 8; k++) Wr(levels + 4 * k, g() % 8 ? g() % 4 : g() % 2 ? 0xFFFFFFFFu : 0x80000000u);
+  for (uint32_t i = 0; i < 4 * 256; i += 4) Wr(list + i, g());
+  for (uint32_t i = 0; i < 64; i += 4) Wr(bits + i, g() % 4 ? g() : g() % 2 ? 0 : g() & g() & 0x01010101u);
+  for (uint32_t i = 0; i < 4 * 128; i += 4) Wr(out + i, g());
+  const std::vector<Window> win{{kArena, w.a.top - kArena}};
+  switch (g() % 4) {
+    case 0: RunAccessor(0, dobj, uint32_t(g()), levels, {}, win, g, s); break;
+    case 1:
+      // A model of 0 or a negative count of bones now and then (the
+      // surfaces' bits then a dword or none).
+      if (g() % 8 == 0) {
+        const uint32_t model = Rd(dobj + 0x18 + 4 * (g() % numModels));
+        Wr16(Rd(Rd(Rd(Rd(Rd(model + 4)) + 4))), uint16_t(g() % 2 ? 0 : 0x8000 | g()));
+      }
+      RunAccessor(1, uint32_t(g()), bits, uint32_t(g()), {dobj, list, levels}, win, g, s);
+      break;
+    case 2:
+      // A parent byte past its bone now and then (a negative parent: the
+      // bit lands before the set).
+      if (g() % 8 == 0) {
+        const uint32_t model = Rd(dobj + 0x18 + 4 * (g() % numModels)), parts = Rd(Rd(Rd(model + 4)) + 4);
+        const int32_t nb = g_mem.read<int16_t>(Rd(Rd(parts))), numRoot = g_mem.read<int16_t>(parts + 4);
+        if (nb > numRoot) Wr8(Rd(parts) + 4 + g() % uint32_t(nb - numRoot), 0xFF);
+      }
+      RunAccessor(2, uint32_t(g()), uint32_t(g()), uint32_t(g()), {dobj, bits}, win, g, s);
+      break;
+    default: RunAccessor(3, out, uint32_t(g()), uint32_t(g()), {dobj}, win, g, s); break;
+  }
+}
+
 // ---- captures -----------------------------------------------------------------------
 
 bool ReadRegions(FILE* f, std::vector<Window>* out, std::vector<std::vector<uint8_t>>* bytes = nullptr) {
@@ -1072,14 +1269,17 @@ int main(int argc, char** argv) {
     const uint32_t special = i < cases / 3 ? 0 : i < cases * 2 / 3 ? 64 : 8;
     RandomCase(g, special, s);
   }
+  // The DObj accessors (12000 cases, after the evaluation's).
+  for (int i = 0; i < 12000; i++) AccessorCase(g, i < 4000 ? 0 : i < 8000 ? 64 : 8, s);
   const int random = s.cases;
   for (int i = first_capture; i < argc; i++)
     if (!RunCaptures(argv[i], g, s)) return 1;
   std::printf("%d random + %d captured cases (0x47CD80 %d, 0x4766E0 %d, 0x47CC90 %d, 0x47CCD0 %d, "
               "several %d; maps made %d, released %d, part duplicates %d, names released %d, "
-              "notes queued %d; the game's: notes sent %d, cycle ends %d, steps cut short %d): "
-              "%d mismatched\n",
+              "notes queued %d; the game's: notes sent %d, cycle ends %d, steps cut short %d; the "
+              "accessors: 0x477290 %d, 0x477340 %d, 0x476510 %d, 0x4771B0 %d): %d mismatched\n",
               random, s.cases - random, s.by_fn[0], s.by_fn[1], s.by_fn[2], s.by_fn[3], s.by_fn[4],
-              s.made, s.freed, s.dups, s.names, s.notes, s.sent, s.ends, s.partial, s.failures);
+              s.made, s.freed, s.dups, s.names, s.notes, s.sent, s.ends, s.partial, s.accessors[0],
+              s.accessors[1], s.accessors[2], s.accessors[3], s.failures);
   return s.failures || s.game_differs ? 1 : 0;
 }
