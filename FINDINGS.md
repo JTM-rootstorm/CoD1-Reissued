@@ -178,6 +178,14 @@ speed.
   first of its own; the two runs of main 107, more than ever before);
   mean 1.881-2.071 ms (main) and 1.847-1.883 ms, p95 2.6-2.9 and 2.6,
   p99 2.7-3.6 and 2.8-2.9; errors 3.
+  With layer 11 (scripts rebuilt, out/fe11; 1816 frames a run now): 13
+  of 13 shared, 46 of 1640 in-level identical against both runs of main
+  (a second run of this build 46 and 54; the two runs of main 47, this
+  build's two 47); with other sessions' VM and analyses loading the
+  machine (load 12) throughout, mean 1.955-3.496 ms (main) and
+  2.005-3.071 ms (this build better in two of the three pairs), p95
+  2.7-6.5 and 2.9-4.5, p99 2.9-9.4 and 3.5-5.4: no difference
+  measurable; errors 3; the walks end at (4343-4346, -4852).
 - Layer 4, the cell walk (2026-11-09): a polygon's clip 0x4D7F30 (ECX
   plane; stack points, &count, out: distances z + x + y less the plane's,
   behind below -0.001, in front above 0.001; none in front: count 0, EAX
@@ -825,6 +833,164 @@ speed.
   aliasing (until NaN payloads and overlapping outputs) and the 4x4
   cofactors' order (until exactly singular matrices); logs
   mut17_round1-5.log and mut17_final.log in the session's scratchpad.
+- Layer 11, the light grid's helpers, the debug draws and three more
+  vector helpers (2026-11-18): R_PointInLeaf 0x5008B0 (named by its own
+  ri.Error string "R_PointInLeaf: bad model", raised (code 1) without a
+  world, the walk going on from the null world's +0x98 as the original
+  does; ESI the point, EAX and ECX the leaf: from the world's +0x98 while
+  a node's +0 is -1, its plane +0xC (products summed z + y + x less the
+  distance) above 0 to +0x10, else (NaN too) to +0x14). So the world's
+  +0x98 is its BSP and a "grid point" of layers 9 and 10 is a leaf: +0xC
+  below 0 off the grid, +0x10 the sun, its lights +0x18 from +0x14 of the
+  world's indexes. Whether a light reaches a point 0x4A99C0 (EAX the
+  light's end, ECX the start; AL 2 or 0, the rest of EAX not reproduced:
+  its two callers read AL only): the trace 0x41CD60 (CM_Trace, native in
+  src/cm_trace.cpp; results at e - 0x30 with the fraction 1 to beat, model
+  0, the zero vector 0x537E54 as mins, maxs and origin, mask 0x2001, no
+  capsule or sphere); from inside a solid (+0x2F) the contents' bit 0x800
+  (+0x20) answers, else a fraction of exactly 1 or a surface flag 4
+  (+0x1C). Layer 10 called it "blocked": AL 2 is the light reaching (the
+  lights' debug draw draws those to their end in 0x537910, the others to
+  its uninitialised local). A grid corner's lights 0x4A9EC0 (EAX the
+  leaf's +0xC, ECX y; stack x, z, count, lights, origin, &byte; EAX the
+  16-bit set or -1): a cache of 0x2000 buckets of 32 eight-byte entries at
+  0xC952C8 (key ((x & 0x3FF) | y << 10) << 12 | EAX & 0xFFF, a state byte
+  (0 empty, 1 with bits), the byte, the bits); the bucket (z with each
+  byte's bits reversed by 0x4A9880 (its table 0xC951B0 made once while
+  0x564A20 is set) + y x 0xC41 - x x 0xC3D) & 0x1FFF; a hit gives the
+  byte; a miss records x, y, z and the origin (24 bytes) at 0xC952B0 while
+  0xC952B8 counts below 0x400000 (signed) and adds the corner to the
+  sorted list 0x4AC7E0 (EAX z; x, y, 1), counts 0xC952C4, then takes the
+  first empty entry (0xC951A8 counted, 0xC951A4 the deepest 0x21 - left)
+  or shifts the full bucket down one by memmove 0x51ACF0 (0xF8 bytes,
+  0xC952C0 counted) for the first, stores the key and has 0x4A9C30 (EAX
+  the corner (x - 0x1000) x 32, (y - 0x1000) x 32, (z - 0x800) x 64 as
+  floats in the frame; entry, count, lights, origin) fill it; the bits only
+  for state 1. The argument slot of x ends holding the entries left (a
+  hit) or (z - 0x800) << 6, as the original leaves it. The vector helpers:
+  the squared distance 0x426610 (EAX, ECX; ST0 the differences stored,
+  squares (z + y) + x; its one caller is 0x4AA5C0), a point projected onto
+  a plane through the origin 0x429710 (EAX the normal, ECX the point, EDX
+  out: 1 over the squares (x + y) + z stored, the dot (z + y) + x times it
+  stored, the normal by it stored, each coordinate (the memory operand)
+  less its product with the dot; called by 0x4273C0 (native, which reads
+  EDX after it) and by 0x429F40, which nothing calls) and the 3x3 product
+  0x427590 (ECX x EAX into EDX, each element stored as made in the
+  original's sum and operand orders; called by 0x426AB0 and the game
+  modules' syscall 0x44A2F0, which pops and clears EAX after it). None of
+  the three changes a register, nor does the native code; no code or data
+  pointer to any of the layer's functions exists in CoDSP.exe or the game
+  DLLs. The debug draws (queues the back end draws, each a limit, a count
+  and a block from the zeroed allocation 0x42A480 made at the limit's
+  size when missing): a polygon 0x4AD630 (EBX the count, stack the points,
+  EAX the colour: 24 bytes at 0x1549588 (colour, first point, count) and
+  the points' 12 bytes at 0x154957C, limits 0x1549574/0x1549580, both
+  blocks made when either is missing), a line 0x4AD760 (EBX, EDI, ESI the
+  colour; 0x2C bytes at 0x15495AC, limit 0x15495A4: from, to, colour, 0),
+  a box 0x4AD7E0 (ECX mins, EDX maxs, EAX colour: eight corners through
+  the x87 (an SNaN quietened), the twelve edges of the table 0x536578 as
+  lines), text 0x4AD8F0 (EAX the point, EDI the colour, stack the text:
+  scale (the direction from the view origin 0x1536030 normalised by
+  0x426710, along the forward axis z + y + x, less 0.995) x the distance,
+  at least 1, queued by 0x4AD860), the client's line 0x40F4E0 (stack
+  from, a value, a dword, a flag; ESI colour, EDI to: with 0x1439370 on
+  and the count 0x1439464 below 0x1000 (the limit 0x1439460 set to it each
+  time); its blocks made together (0x2C000 bytes, then a byte and a dword
+  per line; the count then 0); the line, its byte (0x1439474, 2 without
+  the flag) and dword), the light grid's corners near the view 0x4AC890
+  (with the record 0xC952B0 on and the cvar 0x15346E4 above 0: for the
+  view's cell (FISTP of the stored distances from -131072, x and y + 2^-30
+  over 32, z less 0.5 - 2^-30 over 64) and those up to the cvar away in x
+  and y and one in z, inside 0-0x80000 units, a "." (0x4AD860, scale 1)
+  where 0x4AC7E0 has no corner and 0x4C9070 does not cull the point,
+  0x537850 for the layer below, else 0x537820), and r_xdebug's draws
+  0x5068B0 (EBX the entity, EDI passed on: by _stricmp "boxes" or "both"
+  the bones' boxes 0x506310, "axes" or "both" their axes 0x5065E0; any
+  other word sets r_xdebug to "" (0x431CF0, EAX 1) and prints the three
+  choices). 0x4CA8D0 was already native (src/render_backend.cpp, `replace
+  004CA8D0` in its section) and stays there, a stub in this oracle. Still
+  lifted under the layer: 0x4A9880, 0x4AC7E0 (and 0x4AC780 under it),
+  0x4A9C30 (a corner's lights by traces; it calls R_PointInLeaf and
+  0x4A99C0), 0x51ACF0, 0x42A480, 0x4AD860, _stricmp, 0x431CF0, 0x42E300.
+- Layer 11 oracle and mutations: the old stubs of the layer's functions
+  gone (the culls, walks, portals, scenes and lighting now reach the
+  originals' queues, R_PointInLeaf and the corner cache); new stubs
+  CM_Trace 0x41CD60 (it was linked lifted, never reached; now the
+  results: fractions 1, less, an ulp either side, NaN; inside a solid or
+  not, contents and surface flags, from a per-case salt so that a single
+  call sees them all), 0x4A9C30 (fills the entry: state 1 mostly, byte,
+  bits; a hash of the corner), 0x4AC7E0 (an index or none), 0x42A480 (a
+  zeroed heap block), 0x4AD860 (hashes of its point and colour),
+  _stricmp (strcasecmp), 0x431CF0 and 0x42E300; 0x4A9880 and the memmove
+  run lifted. The queues and the corner cache's globals are set for every
+  case from a generator of their own (DebugQueues: limits mostly the
+  room, now and then 0, 1, 16, half or -1; counts below or at them; the
+  client's count anything up to 0x1001, -1, 0x7FFFFFFF or 0x80000000 with
+  its blocks placed so its entry lands in the region; the record on or
+  off, its count below 0x400000 or at the edges; the next entry's bytes
+  random), the cases' own streams untouched. What the lifted side's
+  calls write outside the case's windows (a queue entry, a bucket and the
+  8 bytes past it, a record) is registered by its callers' wrappers with
+  its bytes before the write, compared after the native side and
+  restored in between (Touch); this replaces the old stubs' hashes of what
+  they were handed, so a draw past a queue's limit is no longer checked.
+  The lights' debug draw's free lines end at its uninitialised local: the
+  trace stub fills those 12 bytes (past the end point's) when called from
+  under it, so both sides queue the same bytes. The walks' BSP leaves
+  carry lights (from their addresses: +0xC below 0 now and then, the
+  sun, up to 16 lights from the first 32 indexes), allocated 0x1C bytes
+  now; a lighting world of its own gets a node tree over the grid's
+  points (planes axial or not, NaN distances now and then) where it had
+  +0x98 = 1. r_xdebug's string is now one of its choices in any case,
+  another word or empty (8 bytes); a third of the composite models' bone
+  draw cases run 0x5068B0 instead (bone boxes 1888, axes 2107 cases).
+  Each new entry reached alone (about 3000 cases each, 4000 for the
+  helpers, 5800 for the box): R_PointInLeaf with points on a node's
+  plane (exactly on an axial one; products that nearly cancel through
+  the origin) and without a world; the trace's every answer; grid corners
+  in empty, partly used and full buckets, the key anywhere or missing;
+  the squared distance with squares that round apart by their order;
+  points onto planes with the out on or one float past the point or the
+  normal, dots that nearly cancel; 3x3 products with a row and a column
+  that nearly cancel and outputs on either input; each debug draw with
+  its blocks missing at small limits, the box with SNaNs and -0, text on
+  the forward axis and with (2^k, -2^k, ~1) forward axes whose order
+  shows, the grid corners' draw at the grid's edges. LightCase went from
+  42000 to 51000 cases, HelperCase from 40000 to 52000, DebugCase is new
+  (21000); 0x4AA5C0's mode 4 now meets distances of exactly 96 and an ulp
+  either side. 880478 random cases, 3.65M calls out, 0 mismatched, 30 s,
+  peak 118 MB; ctest 68 of 68 (SwARc's runtime_thread failed once in an
+  earlier -j4 run and passed alone three times). A first fixture let the corner records run
+  over the cvar 0x15346E4's struct in the debug region (8 GB of recorded
+  calls from a radius read as a float's bits, killed at the cap): the
+  records and the client's lines now have room for 0x1000 entries.
+  206 mutants: 190 caught (4 by crashing or hanging the oracle: wild
+  record and client line pointers, a leaf taken for a node); 16 survive,
+  all equivalent: the return addresses of calls into callees that are
+  not stubs (0x4A9880, the memmove, 0x4AD760 from the box, 0x426710 from
+  the text, 0x4C9070, 0x506310, 0x5065E0: seven), whose slots are below
+  ESP and unread; the deepest entry's `<` as `<=` and the text's scale
+  `< 1` as `<= 1` (the same value rewritten); the lines' count read again
+  after the allocation and the client's byte block sized by 0x1439460
+  rather than 0x1000 (nothing between changes them); the projection's
+  last subtraction with the point on the stack rather than in memory and
+  its product's operands swapped (the product carries the point's NaN
+  already, of at least its fraction and, at an equal one, positive when
+  the point's is, so a QNaN over a memory SNaN picks the same; the swap
+  is of two stored, quiet floats); the corners' x and y FISTP without
+  + 2^-30 and z's less 0.5 rather than 0.5 - 2^-30 (they differ only at
+  ties k + 0.5 with k even, where k and k + 1 share k >> 5 and k >> 6);
+  z's limit compared unsigned (a stored float below 2^31 keeps z << 6
+  below 2^31). The first round missed R_PointInLeaf's sum order (until
+  the cancelling points), the trace's contents bit and AL (until the
+  salt), the bucket shift's size (until the 8 bytes past it), outputs one
+  float past their inputs, the 3x3 product's last sums, a polygon limit
+  of -1, the lines' last dword (until the next entries' bytes random), the
+  text's sum order, the client's count 0x80000000 and the grid's edges;
+  a full rerun (round 3) then lost the distance's store under the
+  corners' draw (z a hair below a layer's edge, which the store rounds
+  onto it, now made on purpose); logs mut18_round1-4.log and
+  mut18_final.log in the session's scratchpad.
 - The oracle's time (2026-11-15): three quarters of a run went to the
   harness, not the code under test: each case's compared windows saved
   three times into newly grown vectors and compared a byte at a time.

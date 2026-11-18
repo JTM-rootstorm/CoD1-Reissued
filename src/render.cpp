@@ -15,13 +15,17 @@
 // the composite models' debug bone draws; the entity lighting: the dlights
 // on a brush model, an entity's lights from its own or the light grid (a
 // light's intensity, the grid's lights at a point, the lights beyond the
-// limit merged, their debug draw), a vertex's colour; the model cache's
-// blocks, splits, eviction and frees); the back end's sky clipping
-// (ClipSkyPolygon, AddSkyPolygon), texture coordinates (ComputeTexCoords);
-// the draw surface sort (qsortFast), the 4x4 matrix product and the memcpy
-// 0x42B0A0 under both; and the vector helpers the whole game calls (the
-// normalisations, a perpendicular, a rotation about a vector, the 3x3 and
-// 4x4 inverses, bounds, BoxOnPlaneSide, a plane from points). Replacements of lifted
+// limit merged, their debug draw; R_PointInLeaf, a grid corner's lights
+// and their cache, whether a light reaches a point), a vertex's colour; the
+// model cache's blocks, splits, eviction and frees; the debug draws (a
+// polygon, a line, a box, text, the client's line, the light grid's
+// corners, r_xdebug's)); the back end's sky clipping (ClipSkyPolygon,
+// AddSkyPolygon), texture coordinates (ComputeTexCoords); the draw surface
+// sort (qsortFast), the 4x4 matrix product and the memcpy 0x42B0A0 under
+// both; and the vector helpers the whole game calls (the normalisations, a
+// perpendicular, a rotation about a vector, the 3x3 and 4x4 inverses,
+// bounds, BoxOnPlaneSide, a plane from points, the squared distance, a
+// point projected onto a plane, the 3x3 matrix product). Replacements of lifted
 // functions named with `replace` in manifest/CoDSP.manifest; FINDINGS.md
 // "Renderer". Names and evidence are in the Ghidra plate comments.
 //
@@ -55,7 +59,7 @@
 
 namespace recomp::gen {
 
-void f_004AD7E0(Ctx& c);  // draws a debug box (ECX mins, EDX maxs, EAX colour)
+void f_004AD7E0(Ctx& c);  // draws a debug box (ECX mins, EDX maxs, EAX colour), below
 void f_004DEC10(Ctx& c);  // RE_AddRefEntityToScene (refentity, its +0x2B0), below
 void f_004CAF00(Ctx& c);  // R_AddDrawSurf(surface, dlight, 0, 0; EAX, EDX shader)
 void f_0042B0A0_lifted(Ctx& c);  // the memcpy, for overlapping copies
@@ -66,15 +70,15 @@ void f_004290E0(Ctx& c);  // adds bounds to bounds (ECX/ESI mins/maxs, EDX/EDI t
 void f_00429800(Ctx& c);  // BoxOnPlaneSide(mins, maxs, plane), below
 void f_004268B0(Ctx& c);  // normalises a vector (EAX), below
 void f_00426710(Ctx& c);  // VectorNormalize (ESI; the length in ST0), below
-void f_004AD630(Ctx& c);  // draws a debug polygon (EBX count, stack points; EAX colour)
-void f_004AD760(Ctx& c);  // draws a debug line (EBX from, EDI to; ESI colour)
+void f_004AD630(Ctx& c);  // draws a debug polygon (EBX count, stack points; EAX colour), below
+void f_004AD760(Ctx& c);  // draws a debug line (EBX from, EDI to; ESI colour), below
 void f_004CA170(Ctx& c);  // a surface's plane (ECX surface, ESI out)
 void f_004C9580(Ctx& c);  // an entity's orientation (EAX out, EBX view, EDI entity)
 void f_004CA8D0(Ctx& c);  // whether a portal surface is off the screen (draw surface; EAX)
 void f_004273C0(Ctx& c);  // a vector across EBX into EDX, below
 void f_00426AB0(Ctx& c);  // rotates a point about EAX (out, point, degrees), below
-void f_00429710(Ctx& c);  // a point (ECX) projected onto the plane of the normal EAX into EDX
-void f_00427590(Ctx& c);  // a 3x3 matrix product (ECX by EAX into EDX)
+void f_00429710(Ctx& c);  // a point (ECX) projected onto the plane of the normal EAX into EDX, below
+void f_00427590(Ctx& c);  // a 3x3 matrix product (ECX by EAX into EDX), below
 void f_0052E6D0(Ctx& c);  // the CRT's trigonometric function of ST0 called by the portal rotation
 void f_004CB270(Ctx& c);  // renders a view (view parms)
 void f_004C97D0(Ctx& c);  // the viewer's orientation (src/render_backend.cpp)
@@ -90,12 +94,12 @@ void f_004AA5C0(Ctx& c);  // a debug draw of an entity's lights (origin, entity)
 void f_004AA970(Ctx& c);  // the lights beyond the limit merged into one (EBX entity; origin, values, order), below
 void f_004AACB0(Ctx& c);  // the light grid's lights at a point (origin, scales, &sun, lights; EAX count), below
 void f_00440940(Ctx& c);  // va(format, ...)
-void f_004AD8F0(Ctx& c);  // draws debug text (EAX origin, EDI colour, text)
+void f_004AD8F0(Ctx& c);  // draws debug text (EAX origin, EDI colour, text), below
 void f_00477290(Ctx& c);  // a model's surface count (EDX model, EDI levels; EAX)
 void f_00477340(Ctx& c);  // a model's surfaces (model, list, levels; ESI out)
 void f_00476510(Ctx& c);  // (model, the surfaces' out)
-void f_005068B0(Ctx& c);  // a debug draw of the cvar 0x15346D4 (EBX entity, EDI out)
-void f_004AC890(Ctx& c);  // a debug draw of the cvar 0x15344D0
+void f_005068B0(Ctx& c);  // the composite models' debug draws by r_xdebug (EBX entity, EDI), below
+void f_004AC890(Ctx& c);  // a debug draw of the light grid's corners near the view, below
 void f_0051D45A(Ctx& c);  // the CRT's fprintf
 void f_0052E610(Ctx& c);  // the CRT's square root (ST0)
 void f_00447CA0(Ctx& c);  // a warning icon (stack its image's name; EAX, ECX)
@@ -105,11 +109,21 @@ void f_004DA1B0(Ctx& c);  // the model cache's oldest entry freed (EDI the cache
 void f_004DA0F0(Ctx& c);  // a model cache entry's blocks freed (cache, entry, node, shift), below
 void f_004DA420(Ctx& c);  // a vertex's lighting (EBX the refentity; position, normal, colour out), below
 void f_004771B0(Ctx& c);  // a model's bones' bounds (EDX out, model)
-void f_0040F4E0(Ctx& c);  // draws a debug line (from, 0, 0, 0; ESI colour, EDI to)
-void f_005008B0(Ctx& c);  // the light grid's point at ESI (EAX)
-void f_004A9EC0(Ctx& c);  // a grid corner's lights (EAX, ECX; x, z, count, lights, origin, &byte; EAX bits)
-void f_00426610(Ctx& c);  // the squared distance between EAX and ECX (ST0)
-void f_004A99C0(Ctx& c);  // whether a trace from ECX to EAX is blocked (AL)
+void f_0040F4E0(Ctx& c);  // the client's debug line (from, value, dword, flag; ESI colour, EDI to), below
+void f_005008B0(Ctx& c);  // R_PointInLeaf: the world's leaf at ESI (EAX), below
+void f_004A9EC0(Ctx& c);  // a grid corner's lights (EAX, ECX; x, z, count, lights, origin, &byte; EAX bits), below
+void f_00426610(Ctx& c);  // the squared distance between EAX and ECX (ST0), below
+void f_004A99C0(Ctx& c);  // whether the light at EAX reaches ECX (AL 2), below
+void f_0041CD60(Ctx& c);  // CM_Trace (src/cm_trace.cpp)
+void f_004A9880(Ctx& c);  // each byte of a dword's bits reversed (EAX)
+void f_004AC7E0(Ctx& c);  // a grid corner in the sorted list 0xC952B4 (EAX z; x, y, add; EAX index)
+void f_004A9C30(Ctx& c);  // a grid corner's lights found (EAX corner; entry, count, lights, origin)
+void f_0051ACF0(Ctx& c);  // the CRT's memmove
+void f_0042A480(Ctx& c);  // a zeroed allocation (size; EAX)
+void f_004AD860(Ctx& c);  // queues debug text (EBX point, EDI colour; scale, text)
+void f_0052AB6F(Ctx& c);  // _stricmp
+void f_00431CF0(Ctx& c);  // sets a cvar (name, value; EAX force)
+void f_0042E300(Ctx& c);  // prints (format, ...)
 // ComputeTexCoords' texture coordinate generators and modifiers.
 void f_0050A2B0(Ctx& c);
 void f_0050ABF0(Ctx& c);
@@ -4364,18 +4378,19 @@ void f_004AA970(Ctx& c) {
 }
 
 // A debug draw of an entity's lights at an origin (stack the origin, the
-// refentity), with a world with a light grid (+0x98): not for the cvar
+// refentity), with a world with a node tree (+0x98): not for the cvar
 // 0x15344CC at 3 when the direction from the view origin 0x1536330
 // (normalised by 0x4268B0) is less than 0.95 along the view's forward
 // axis 0x153633C, nor at 4 beyond 96 (0x426610's squared distance); a
-// line from the origin to each of the grid point's lights (0x5008B0: count
-// +0x18, the world's 16-bit indexes +0x11C from +0x14 into its lights
-// +0x110), a direction's 1024 along it, yellow or green when the entity
-// has it (+0xD0, +0xCC); with the cvar at 4 or more and the point's +0x10
+// line from the origin to each of the lights of the leaf there
+// (R_PointInLeaf 0x5008B0: count +0x18, the world's 16-bit indexes +0x11C
+// from +0x14 into its lights +0x110), a direction's 1024 along it, yellow
+// or green when the entity has it (+0xD0, +0xCC); with the cvar at 4 or
+// more and the leaf's +0x10
 // a grid of traces (0x4A99C0) down from the origin's height + 0.1, 32768
 // long, the grid's step 32768 (16384 above 3 of 0x15364C4) over half the
-// step x (0x15364C4 - 1) each way: one blocked drawn to its end, a free one
-// to the original's uninitialised local at e - 0x2C.
+// step x (0x15364C4 - 1) each way: one that reaches (AL) drawn to its end,
+// one that does not to the original's uninitialised local at e - 0x2C.
 void f_004AA5C0(Ctx& c) {
   const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, s = e - 0x6C;
   const uint32_t origin = Arg(c, e, 1), ent = Arg(c, e, 2), world = U32(0x1535A34);
@@ -4447,10 +4462,10 @@ void f_004AA5C0(Ctx& c) {
           c.eax = to;
           c.ecx = from;
           Call(c, f_004A99C0, 0x4AA869);
-          const bool blocked = c.eax & 0xFF;
+          const bool reaches = c.eax & 0xFF;
           c.ebx = from;
-          c.esi = blocked ? 0x537910 : 0x5378E0;
-          c.edi = blocked ? to : e - 0x2C;
+          c.esi = reaches ? 0x537910 : 0x5378E0;
+          c.edi = reaches ? to : e - 0x2C;
           Call(c, f_004AD760, 0x4AA88A);
           x = Fst(St(x) + step);
         } while (St(x) <= r);
@@ -4463,10 +4478,141 @@ void f_004AA5C0(Ctx& c) {
   c.esp = e + 4;
 }
 
+// R_PointInLeaf (its error string "R_PointInLeaf: bad model"): the leaf of
+// the world's node tree (+0x98) at the point ESI (EAX and ECX the leaf).
+// Without a world ri.Error, then the walk as before. A node (+0 -1) goes
+// to its child +0x10 when the point is in front of its plane (+0xC: the
+// products summed z + y + x, less the distance, above 0), else to +0x14.
+void f_005008B0(Ctx& c) {
+  const uint32_t e = c.esp, p = c.esi;
+  if (!U32(0x1535A34)) {
+    Push(c, 0x539394);
+    Push(c, 1);
+    CallPtr(c, U32(0x1549604), 0x5008C6, 0x5008C0);
+    c.esp = e;
+  }
+  uint32_t node = U32(U32(0x1535A34) + 0x98);
+  while (U32(node) == 0xFFFFFFFF) {
+    const uint32_t plane = U32(node + 0xC);
+    const St d = (St(Ld(plane + 8)) * Ld(p + 8) + St(Ld(plane + 4)) * Ld(p + 4)) + St(Ld(plane)) * Ld(p) -
+                 Ld(plane + 0xC);
+    node = U32(node + (d > 0.0f ? 0x10 : 0x14));
+  }
+  c.eax = c.ecx = node;
+  c.esp = e + 4;
+}
+
+// Whether the light at EAX reaches the point ECX (AL 2) or not (AL 0):
+// the collision trace 0x41CD60 (results in the frame at e - 0x30, fraction
+// 1 to beat; start ECX, end EAX, model 0, the zero vector 0x537E54 as
+// origin, mins and maxs, brush mask 0x2001, no capsule or sphere). From
+// inside a solid (+0x2F) the contents' bit 0x800 (+0x20) says; else a trace
+// that went the whole way (fraction exactly 1) or stopped on a surface
+// with flag 4 (+0x1C).
+void f_004A99C0(Ctx& c) {
+  const uint32_t e = c.esp, from = c.ecx, to = c.eax, results = e - 0x30;
+  c.esp = results;
+  for (uint32_t v : {0u, 0x2001u, 0x537E54u, 0u, to, from, results}) Push(c, v);
+  Put(results, 0x3F800000u);
+  c.eax = 0;
+  c.ecx = c.edx = 0x537E54;
+  Call(c, f_0041CD60, 0x4A99EE);
+  if (U8(results + 0x2F))
+    c.eax = U32(results + 0x20) >> 11 & 1 ? 2 : 0;
+  else
+    c.eax = St(Ld(results)) == 1.0f || U8(results + 0x1C) & 4 ? 2 : 0;
+  c.esp = e + 4;
+}
+
+// A grid corner's lights (EAX the leaf's +0xC, ECX y; stack x, z, count,
+// lights, origin, &byte; EAX the 16-bit set of the lights seen, or -1),
+// cached: the key (x & 0x3FF | y << 10) << 12 | EAX & 0xFFF in the bucket
+// (z with each byte's bits reversed (0x4A9880) + y x 0xC41 - x x 0xC3D) &
+// 0x1FFF of 32 entries (key, state byte, the byte, the bits) at 0xC952C8.
+// A hit gives its byte; a miss (the first empty entry, or the bucket shifted
+// down one by memmove when full: 0xC952C0 counted) first records the corner
+// and origin (24 bytes) at 0xC952B0 while 0xC952B8 counts below 0x400000
+// and adds it to the sorted list 0x4AC7E0, counts 0xC952C4 (and 0xC951A8,
+// the deepest entry 0xC951A4 when not full), then fills the entry
+// (0x4A9C30: the corner at (x - 0x1000) x 32, (y - 0x1000) x 32, (z - 0x800)
+// x 64 in the frame) and gives its byte. The bits only for state 1. The
+// argument slot of x keeps what the original leaves there.
+void f_004A9EC0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t x = Arg(c, e, 1), y = c.ecx, z = Arg(c, e, 2), out = Arg(c, e, 6);
+  const uint32_t key = ((x & 0x3FF) | y << 10) << 12 | (c.eax & 0xFFF);
+  c.esp = e - 0x24;
+  Push(c, z);
+  Call(c, f_004A9880, 0x4A9EEE);
+  c.esp = e - 0x24;
+  const uint32_t first = 0xC952C8 + ((c.eax + (y * 0xC41 - x * 0xC3D)) & 0x1FFF) * 0x100;
+  uint32_t entry = first, left = 0x20;
+  bool hit = false;
+  while (U8(entry + 4)) {
+    if (U32(entry) == key) {
+      hit = true;
+      break;
+    }
+    entry += 8;
+    if (!--left) break;
+  }
+  Put(e + 4, left);
+  if (hit) {
+    Wr<uint8_t>(g_guest_base, out, U8(entry + 5));
+  } else {
+    if (U32(0xC952B0) && I32(0xC952B8) < 0x400000) {
+      auto record = [](uint32_t o, uint32_t v) { Put(U32(0xC952B0) + U32(0xC952B8) * 24 + o, v); };
+      const uint32_t origin = Arg(c, e, 5);
+      record(0, x);
+      record(4, y);
+      record(8, Arg(c, e, 2));
+      for (uint32_t o = 0; o < 0xC; o += 4) record(0xC + o, U32(origin + o));
+      Push(c, 1);
+      Push(c, y);
+      Push(c, x);
+      c.eax = Arg(c, e, 2);
+      c.ecx = U32(0xC952B8) * 3;
+      c.edx = U32(0xC952B0);
+      Call(c, f_004AC7E0, 0x4A9FE1);
+      c.esp = e - 0x24;
+      Put(0xC952B8, U32(0xC952B8) + 1);
+    }
+    Put(0xC952C4, U32(0xC952C4) + 1);
+    if (const uint32_t n = U32(e + 4)) {
+      Put(0xC951A8, U32(0xC951A8) + 1);
+      if (I32(0xC951A4) < int32_t(0x21 - n)) Put(0xC951A4, 0x21 - n);
+    } else {
+      Push(c, 0xF8);
+      Push(c, first);
+      Push(c, first + 8);
+      Call(c, f_0051ACF0, 0x4AA01E);
+      c.esp = e - 0x24;
+      Put(0xC952C0, U32(0xC952C0) + 1);
+      entry = first;
+    }
+    const uint32_t xs = (x - 0x1000) << 5, ys = (y - 0x1000) << 5, zs = (Arg(c, e, 2) - 0x800) << 6;
+    Put(e - 0xC, Fst(FromInt(int32_t(xs))));
+    Put(e - 8, Fst(FromInt(int32_t(ys))));
+    Put(e - 4, Fst(FromInt(int32_t(zs))));
+    Put(e + 4, zs);
+    for (uint32_t v : {Arg(c, e, 5), Arg(c, e, 4), Arg(c, e, 3), entry}) Push(c, v);
+    Put(entry, key);
+    c.eax = e - 0xC;
+    Call(c, f_004A9C30, 0x4AA0BC);
+    Wr<uint8_t>(g_guest_base, out, U8(entry + 5));
+  }
+  c.eax = U8(entry + 4) == 1 ? U16(entry + 6) : 0xFFFFFFFFu;
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
 // The light grid's lights at a point (stack: the origin, the values, the
 // sun's value and the lights out; EAX their count). The sun's value 0;
-// with the world's grid (+0x98) the grid point (0x5008B0): a point outside
-// it (+0xC below 0) gives the world's default light +0x114 (if any) at 1
+// with the world's node tree (+0x98) the leaf at the origin (R_PointInLeaf
+// 0x5008B0): a leaf off the grid (+0xC below 0) gives the world's default light +0x114 (if any) at 1
 // with the sun's value 1; one without lights (+0x18) nor sun (+0x10)
 // none. Else its lights (the world's 16-bit indexes +0x11C from +0x14 into
 // its lights +0x110) at 0, and for each of the eight corners of the grid
@@ -4908,6 +5054,266 @@ void f_004DA420(Ctx& c) {
   c.esp = e + 4;
 }
 
+// ---- the front end's debug draws --------------------------------------------
+//
+// Queues the back end draws (each a count and its limit, read signed, and a
+// block from 0x42A480, the zeroed allocation, made at the limit's size when
+// it is missing): polygons 0x1549580/0x1549584/0x1549588 (24 bytes: colour,
+// first point, count) with their points 0x1549574/0x1549578/0x154957C (12
+// bytes), text 0x154958C/0x1549590/0x1549594 (0x4AD860) and lines
+// 0x15495A4/0x15495A8/0x15495AC (0x2C bytes: from, to, colour, 0); and the
+// client's lines (0x40F4E0).
+
+// A debug polygon (EBX the count, stack the points, EAX the colour): unless
+// the points or the polygons would pass their limits, both blocks made
+// when either is missing, the polygon (its first point the point count),
+// then the points copied a dword at a time and counted.
+void f_004AD630(Ctx& c) {
+  const uint32_t e = c.esp, n = c.ebx, colour = c.eax;
+  if (int32_t(U32(0x1549578) + n) > I32(0x1549574) || int32_t(U32(0x1549584) + 1) > I32(0x1549580)) {
+    c.esp = e + 4;
+    return;
+  }
+  if (!U32(0x1549588) || !U32(0x154957C)) {
+    c.esp = e - 4;
+    Push(c, U32(0x1549580) * 24);
+    Call(c, f_0042A480, 0x4AD67E);
+    Put(0x1549588, c.eax);
+    Push(c, U32(0x1549574) * 12);
+    Call(c, f_0042A480, 0x4AD694);
+    Put(0x154957C, c.eax);
+  }
+  auto poly = [](uint32_t o, uint32_t v) { Put(U32(0x1549588) + U32(0x1549584) * 24 + o, v); };
+  poly(0x10, U32(0x1549578));
+  poly(0x14, n);
+  for (uint32_t o = 0; o < 0x10; o += 4) poly(o, U32(colour + o));
+  const uint32_t to = U32(0x154957C) + U32(0x1549578) * 12, from = Arg(c, e, 1);
+  Put(0x1549584, U32(0x1549584) + 1);
+  for (uint32_t o = 0; o < n * 12; o += 4) Put(to + o, U32(from + o));
+  Put(0x1549578, U32(0x1549578) + n);
+  c.esp = e + 4;
+}
+
+// A debug line (EBX from, EDI to, ESI the colour) unless the lines would
+// pass their limit; the block made when missing.
+void f_004AD760(Ctx& c) {
+  const uint32_t e = c.esp;
+  int32_t n = I32(0x15495A8);
+  if (int32_t(uint32_t(n) + 1) > I32(0x15495A4)) {
+    c.esp = e + 4;
+    return;
+  }
+  uint32_t lines = U32(0x15495AC);
+  if (!lines) {
+    Push(c, U32(0x15495A4) * 0x2C);
+    Call(c, f_0042A480, 0x4AD785);
+    lines = c.eax;
+    n = I32(0x15495A8);
+    Put(0x15495AC, lines);
+  }
+  const uint32_t line = uint32_t(n) * 0x2C + lines;
+  for (uint32_t o = 0; o < 0xC; o += 4) Put(line + o, U32(c.ebx + o));
+  for (uint32_t o = 0; o < 0xC; o += 4) Put(line + 0xC + o, U32(c.edi + o));
+  for (uint32_t o = 0; o < 0x10; o += 4) Put(line + 0x18 + o, U32(c.esi + o));
+  Put(line + 0x28, 0u);
+  Put(0x15495A8, U32(0x15495A8) + 1);
+  c.esp = e + 4;
+}
+
+// A debug box (ECX mins, EDX maxs, EAX the colour): its eight corners (bit
+// 0 x, 1 y, 2 z from the maxs, else the mins; through the x87, an SNaN
+// quietened) in the frame, and its twelve edges (the corner pairs of the
+// table 0x536578) as lines.
+void f_004AD7E0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t mins = c.ecx, maxs = c.edx, corners = e - 0x60;
+  for (uint32_t i = 0; i < 8; ++i)
+    for (uint32_t k = 0; k < 3; ++k)
+      Put(corners + 12 * i + 4 * k, Fst(St(Ld((i >> k & 1 ? maxs : mins) + 4 * k))));
+  c.esi = c.eax;
+  for (uint32_t k = 0; k < 0x60; k += 8) {
+    c.esp = e - 0x70;
+    c.ebx = corners + 12 * U32(0x536578 + k);
+    c.edi = corners + 12 * U32(0x53657C + k);
+    Call(c, f_004AD760, 0x4AD84F);
+  }
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// Debug text at a point (EAX the point, EDI the colour; stack the text):
+// its scale the direction from the view origin 0x1536030 (stored,
+// normalised by 0x426710) along the view's forward axis 0x153603C (z + y +
+// x) less 0.995, times the distance, stored, at least 1; queued by 0x4AD860
+// (EBX the point).
+void f_004AD8F0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, origin = c.eax, dir = e - 0xC;
+  for (uint32_t o = 0; o < 0xC; o += 4) Put(dir + o, Fst(St(Ld(origin + o)) - Ld(0x1536030 + o)));
+  c.esp = e - 0x18;
+  c.ebx = origin;
+  c.esi = dir;
+  Call(c, f_00426710, 0x4AD926);
+  const St len(std::bit_cast<double>(x87::StoreF64(c.fpu)));
+  x87::Pop(c.fpu);
+  F32 scale = Fst(
+      ((St(Ld(0x1536044)) * Ld(dir + 8) + St(Ld(0x1536040)) * Ld(dir + 4)) + St(Ld(0x153603C)) * Ld(dir) - 0.995f) *
+      len);
+  if (St(scale) < 1.0f) scale = F32{0x3F800000u};
+  Push(c, Arg(c, e, 1));
+  Push(c, scale.bits);
+  Call(c, f_004AD860, 0x4AD97E);
+  c.ebx = ebx;
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// The client's debug line (stack from, a value kept with it, a dword and a
+// flag; ESI the colour, EDI to): with 0x1439370 set, the limit 0x1439460
+// set to 0x1000 and unless the count 0x1439464 would pass it: the blocks
+// made when missing (0x2C000 bytes of lines, a byte and a dword per line;
+// the count then 0), the line (from, to, colour, the value), its byte
+// (0x1439474, 2 without the flag) and dword.
+void f_0040F4E0(Ctx& c) {
+  const uint32_t e = c.esp, from = Arg(c, e, 1);
+  [&] {
+    if (!U32(0x1439370)) return;
+    int32_t n = I32(0x1439464);
+    Put(0x1439460, 0x1000u);
+    if (int32_t(uint32_t(n) + 1) > 0x1000) return;
+    const uint8_t flag = Arg(c, e, 4) ? U8(0x1439474) : 2;
+    if (!U32(0x1439468)) {
+      c.esp = e - 8;
+      Push(c, 0x2C000);
+      Call(c, f_0042A480, 0x40F535);
+      Push(c, U32(0x1439460));
+      Put(0x1439468, c.eax);
+      Call(c, f_0042A480, 0x40F546);
+      Put(0x143946C, c.eax);
+      Push(c, U32(0x1439460) * 4);
+      Call(c, f_0042A480, 0x40F55D);
+      Put(0x1439470, c.eax);
+      n = 0;
+      Put(0x1439464, 0u);
+    }
+    const uint32_t line = uint32_t(n) * 0x2C + U32(0x1439468);
+    for (uint32_t o = 0; o < 0xC; o += 4) Put(line + o, U32(from + o));
+    for (uint32_t o = 0; o < 0xC; o += 4) Put(line + 0xC + o, U32(c.edi + o));
+    for (uint32_t o = 0; o < 0x10; o += 4) Put(line + 0x18 + o, U32(c.esi + o));
+    Put(line + 0x28, Arg(c, e, 2));
+    Wr<uint8_t>(g_guest_base, U32(0x143946C) + U32(0x1439464), flag);
+    Put(U32(0x1439470) + 4 * U32(0x1439464), Arg(c, e, 3));
+    Put(0x1439464, U32(0x1439464) + 1);
+  }();
+  c.esp = e + 4;
+}
+
+// A debug draw of the light grid's corners near the view with the cvar
+// 0x15346E4 above 0 and the record 0xC952B0 on: for the view's corner
+// (FISTP of the stored distances from -131072, x and y + 2^-30 over 32, z
+// less 0.5 - 2^-30 over 64) and those up to the cvar away in x and y and
+// one in z, each inside the grid (0 to 0x80000 units) and not in the
+// sorted list (0x4AC7E0 below 0) nor culled (0x4C9070 of the point, radius
+// 0), a "." at it (0x4AD860, scale 1; 0x537850 for the layer below, else
+// 0x537820).
+void f_004AC890(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi, point = e - 0xC;
+  [&] {
+    if (!U32(0xC952B0)) return;
+    const int32_t r = CvarInt(0x15346E4);
+    if (r <= 0) return;
+    auto stored = [](uint32_t va) { return St(Fst(St(Ld(va)) - -131072.0f)); };
+    const int32_t cx = Fistp(stored(0x1536030) + St(0x1p-30)) >> 5, cy = Fistp(stored(0x1536034) + St(0x1p-30)) >> 5;
+    const int32_t cz = Fistp(stored(0x1536038) - St(std::bit_cast<double>(0x3FDFFFFFFF000000ull))) >> 6;
+    const uint32_t lo = 0u - uint32_t(r), count = uint32_t(r) - lo + 1;
+    for (int32_t dz = -1; dz <= 1; ++dz) {
+      const uint32_t z = uint32_t(dz) + uint32_t(cz);
+      if (int32_t(z) < 0 || int32_t(z << 6) > 0x80000) continue;
+      uint32_t y = lo + uint32_t(cy), ny = count;
+      do {
+        if (int32_t(y) >= 0 && int32_t(y << 5) <= 0x80000) {
+          uint32_t x = lo + uint32_t(cx), xs = (x - 0x1000) << 5, nx = count;
+          do {
+            if (int32_t(x) >= 0 && int32_t(x << 5) <= 0x80000) {
+              c.esp = e - 0x54;
+              Push(c, 0);
+              Push(c, y);
+              Push(c, x);
+              c.eax = z;
+              Call(c, f_004AC7E0, 0x4ACA3A);
+              if (int32_t(c.eax) < 0) {
+                Put(point, Fst(FromInt(int32_t(xs))));
+                Put(point + 4, Fst(FromInt(int32_t((y - 0x1000) << 5))));
+                Put(point + 8, Fst(FromInt(int32_t((z - 0x800) << 6))));
+                c.esp = e - 0x54;
+                Push(c, 0);
+                c.edx = point;
+                Call(c, f_004C9070, 0x4ACA85);
+                if (!c.eax) {
+                  c.esp = e - 0x54;
+                  Push(c, 0x55504C);
+                  Push(c, 0x3F800000);
+                  c.ebx = point;
+                  c.edi = dz == -1 ? 0x537850 : 0x537820;
+                  Call(c, f_004AD860, 0x4ACAB6);
+                }
+              }
+            }
+            xs += 0x20;
+            ++x;
+          } while (--nx);
+        }
+        ++y;
+      } while (--ny);
+    }
+  }();
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The composite models' debug draws by the string of r_xdebug (0x15346D4;
+// EBX the entity, EDI passed on): "boxes" or "both" the bones' boxes
+// (0x506310), "axes" or "both" their axes (0x5065E0), compared by _stricmp;
+// anything else sets r_xdebug to "" and prints the three choices.
+void f_005068B0(Ctx& c) {
+  const uint32_t e = c.esp;
+  auto is = [&](uint32_t name, uint32_t ret) {
+    c.esp = e - 4;
+    Push(c, name);
+    Push(c, U32(U32(0x15346D4) + 4));
+    Call(c, f_0052AB6F, ret);
+    c.esp = e - 4;
+    return c.eax == 0;
+  };
+  bool boxes = false;
+  if (is(0x539278, 0x5068C6) || is(0x539270, 0x5068E1)) {
+    Push(c, c.edi);
+    Push(c, c.ebx);
+    boxes = true;
+    Call(c, f_00506310, 0x5068F4);
+  }
+  if (is(0x539268, 0x50690B) || is(0x539270, 0x506925)) {
+    Push(c, c.edi);
+    Push(c, c.ebx);
+    Call(c, f_005065E0, 0x506933);
+  } else if (!boxes) {
+    Push(c, 0x54ED00);
+    Push(c, 0x54D79C);
+    c.eax = 1;
+    Call(c, f_00431CF0, 0x506950);
+    for (uint32_t s : {0x539248u, 0x539234u, 0x53920Cu}) {
+      Push(c, s);
+      Call(c, f_0042E300, s == 0x539248 ? 0x50695A : s == 0x539234 ? 0x506964 : 0x50696E);
+    }
+  }
+  c.esp = e + 4;
+}
+
 // ---- the front end's vector helpers ----------------------------------------
 //
 // Called throughout the game (collision, game code, the back end), so
@@ -5174,6 +5580,50 @@ void f_00429650(Ctx& c) {
   }
   c.esi = esi;
   c.esp = e + 4;
+}
+
+// The squared distance between EAX and ECX, pushed on the x87 stack (no
+// register changed): the differences stored, their squares summed z + y + x.
+void f_00426610(Ctx& c) {
+  const uint32_t a = c.eax, b = c.ecx;
+  const F32 dx = Fst(St(Ld(a)) - Ld(b)), dy = Fst(St(Ld(a + 4)) - Ld(b + 4)), dz = Fst(St(Ld(a + 8)) - Ld(b + 8));
+  const St d2 = (St(dz) * dz + St(dy) * dy) + St(dx) * dx;
+  x87::LoadF64(c.fpu, std::bit_cast<uint64_t>(d2.v));
+  c.esp += 4;
+}
+
+// The point ECX projected onto the plane through the origin of the normal
+// EAX, into EDX (no register changed): 1 over the normal's squares (x + y)
+// + z stored, the dot product (z + y) + x of the point and the normal times
+// that stored, the normal times it stored, and each coordinate less its
+// product with the dot; the normal read before the first write.
+void f_00429710(Ctx& c) {
+  const uint32_t n = c.eax, p = c.ecx, out = c.edx;
+  const F32 x = Ld(n), y = Ld(n + 4), z = Ld(n + 8);
+  const F32 inv = Fst(St(1.0f) / Fst((St(x) * x + St(y) * y) + St(z) * z));
+  const F32 d = Fst(((St(Ld(p + 8)) * Ld(n + 8) + St(Ld(p + 4)) * Ld(n + 4)) + St(Ld(p)) * Ld(n)) * inv);
+  F32 t[3];
+  for (uint32_t k = 0; k < 3; ++k) t[k] = Fst(St(inv) * Ld(n + 4 * k));
+  for (uint32_t k = 0; k < 3; ++k) Put(out + 4 * k, Fst(Ld(p + 4 * k) - St(t[k]) * d));
+  c.esp += 4;
+}
+
+// The 3x3 matrix product ECX x EAX into EDX (no register changed), each
+// element's three products summed in the original's order and stored as it
+// is made (later elements read an output on an input).
+void f_00427590(Ctx& c) {
+  const uint32_t a = c.eax, m = c.ecx, o = c.edx;
+  auto p = [](uint32_t i, uint32_t j) { return St(Ld(i)) * Ld(j); };
+  Put(o, Fst((p(m, a) + p(m + 4, a + 0xC)) + p(a + 0x18, m + 8)));
+  Put(o + 4, Fst((p(m + 4, a + 0x10) + p(a + 0x1C, m + 8)) + p(a + 4, m)));
+  Put(o + 8, Fst((p(m + 4, a + 0x14) + p(a + 0x20, m + 8)) + p(a + 8, m)));
+  Put(o + 0xC, Fst((p(m + 0x10, a + 0xC) + p(m + 0xC, a)) + p(m + 0x14, a + 0x18)));
+  Put(o + 0x10, Fst((p(m + 0x14, a + 0x1C) + p(m + 0x10, a + 0x10)) + p(m + 0xC, a + 4)));
+  Put(o + 0x14, Fst((p(m + 0x14, a + 0x20) + p(m + 0x10, a + 0x14)) + p(m + 0xC, a + 8)));
+  Put(o + 0x18, Fst((p(m + 0x18, a) + p(a + 0x18, m + 0x20)) + p(m + 0x1C, a + 0xC)));
+  Put(o + 0x1C, Fst((p(a + 0x1C, m + 0x20) + p(a + 0x10, m + 0x1C)) + p(a + 4, m + 0x18)));
+  Put(o + 0x20, Fst((p(a + 0x20, m + 0x20) + p(a + 0x14, m + 0x1C)) + p(a + 8, m + 0x18)));
+  c.esp += 4;
 }
 
 }  // namespace recomp::gen

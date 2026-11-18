@@ -322,6 +322,10 @@ void f_00427E80_lifted(Ctx& c);
 void f_00427E80(Ctx& c) { f_00427E80_lifted(c); }
 void f_00429650_lifted(Ctx& c);
 void f_00429650(Ctx& c) { f_00429650_lifted(c); }
+void f_00429710_lifted(Ctx& c);
+void f_00429710(Ctx& c) { f_00429710_lifted(c); }
+void f_00427590_lifted(Ctx& c);
+void f_00427590(Ctx& c) { f_00427590_lifted(c); }
 // The originals...
 void f_004C89D0_lifted(Ctx& c);
 void f_004C8A20_lifted(Ctx& c);
