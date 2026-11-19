@@ -104,7 +104,17 @@ replace 00519140
 # reaches it, the sun's traces) and whether a light reaches a point; the
 # debug draws: a polygon, a line, a box, text and its queue, the client's
 # line, the light grid's corners and the composite models' r_xdebug draws;
-# the client's warning icon StatMon_UpdateEntry; the vector
+# the client's warning icon StatMon_UpdateEntry; the refexport's
+# per-frame entries: the scene's (its firsts, a polygon, RE_AddPolysToScene,
+# a dlight, a corona, the cull's far distance, a fog set, the fogs saved
+# and restored, a free list cleared, the pending frees, a model's bounds),
+# the command r_smc_flush, an image uploaded, the frame's (RE_BeginFrame
+# with the commands so far run, r_textureMode, the light grid's settings,
+# r_nv_fogdist_mode and the per-frame world and model surfaces; the
+# frame's end with its counters and texture memory; commands 9 and 10,
+# the stats, a trace's surface names, a font's height, text, the client's
+# debug text and lines, a number shown at a point) and the back end's
+# debug draws (the numbers at points, the polygons, the lines); the vector
 # helpers the whole game calls: the two normalisations, a perpendicular
 # vector, a point rotated about a vector, the 3x3 and 4x4 inverses, a
 # point and bounds added to bounds, BoxOnPlaneSide, a plane through three
@@ -224,6 +234,44 @@ replace 004A9A30
 replace 004A9A90
 replace 004AD860
 replace 00447CA0
+replace 004DE950
+replace 004DEA40
+replace 004DEAE0
+replace 004DED10
+replace 004DEE20
+replace 004DA0C0
+replace 004C8AA0
+replace 004C8C40
+replace 004C8C90
+replace 004CEC10
+replace 004DB370
+replace 004DF5F0
+replace 004DF600
+replace 004F8C20
+replace 004DF810
+replace 004D3ED0
+replace 004D4A60
+replace 004D4B40
+replace 004D4B70
+replace 004D4BB0
+replace 004D4BC0
+replace 004D5D30
+replace 004D5D60
+replace 004ADAD0
+replace 004ADAF0
+replace 004ADB10
+replace 004D41A0
+replace 004A97B0
+replace 004D0870
+replace 004F8D50
+replace 004DF740
+replace 004A70A0
+replace 004D4680
+replace 004CD1F0
+replace 004AD480
+replace 004ACB20
+replace 004ACDD0
+replace 004AD5C0
 
 # The renderer back end (src/render_backend.cpp): GL_Bind, the cull face,
 # the texture environment, the state bits and the client arrays, fog on

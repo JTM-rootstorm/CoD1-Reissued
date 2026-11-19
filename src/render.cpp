@@ -22,7 +22,10 @@
 // vertex's colour; the model cache's blocks, splits, eviction and frees;
 // the debug draws (a polygon, a line, a box, text and its queue, the
 // client's line, the light grid's corners, r_xdebug's) and the client's
-// warning icon (StatMon_UpdateEntry)); the back end's sky clipping (ClipSkyPolygon,
+// warning icon (StatMon_UpdateEntry)); the refexport's per-frame entries
+// (the scene's polygons, dlights, coronas and fogs; RE_BeginFrame, the
+// frame's end, its counters and commands) and the back end's draws of the
+// debug queues; the back end's sky clipping (ClipSkyPolygon,
 // AddSkyPolygon), texture coordinates (ComputeTexCoords); the draw surface
 // sort (qsortFast), the 4x4 matrix product and the memcpy 0x42B0A0 under
 // both; and the vector helpers the whole game calls (the normalisations, a
@@ -133,6 +136,30 @@ void f_0042E660(Ctx& c);  // the error routine (code, format, ...; longjmps for 
 void f_0052AB6F(Ctx& c);  // _stricmp
 void f_00431CF0(Ctx& c);  // sets a cvar (name, value; EAX force)
 void f_0042E300(Ctx& c);  // prints (format, ...)
+void f_004CEA70(Ctx& c);  // the back end's commands run (EAX the list; src/render_backend.cpp)
+void f_004CB3B0(Ctx& c);  // GL_Bind (ESI the image; src/render_backend.cpp)
+void f_004CB710(Ctx& c);  // GL_State (EAX the state bits; src/render_backend.cpp)
+void f_004CBBE0(Ctx& c);  // the client arrays (bits; src/render_backend.cpp)
+void f_004ADC20(Ctx& c);  // the immediate-mode batch begun (src/render_backend.cpp)
+void f_004ADEC0(Ctx& c);  // a vertex of the batch (x, y, z; src/render_backend.cpp)
+void f_004ACF50(Ctx& c);  // debug text drawn (EAX the count; the text; src/render_backend.cpp)
+void f_004D6400(Ctx& c);  // the text command queued (src/screen2d.cpp)
+void f_004406F0(Ctx& c);  // Q_stricmpn (EAX the count, ECX, EDX; EAX)
+void f_004D0700(Ctx& c);  // a world surface's vertices (ESI the surface; buffer, size)
+void f_004815E0(Ctx& c);  // a model surface's vertices (ESI the surface; ...)
+void f_004FC1B0(Ctx& c);  // the per-frame vertex buffer work (3)
+void f_004E59D0(Ctx& c);  // r_gamma applied
+void f_004DF810(Ctx& c);  // the frame's texture memory (three outs), below
+void f_004D3ED0(Ctx& c);  // the frame's counters printed and cleared, below
+void f_004D41A0(Ctx& c);  // the commands so far run, below
+void f_004DF740(Ctx& c);  // r_textureMode applied (EAX its string), below
+void f_004A97B0(Ctx& c);  // the light grid's settings for the frame, below
+void f_004A70A0(Ctx& c);  // r_nv_fogdist_mode applied, below
+void f_004D0870(Ctx& c);  // one world surface of type 0x1A a frame, below
+void f_004F8D50(Ctx& c);  // one model surface a frame (passed on), below
+void f_004AD480(Ctx& c);  // the numbers at points drawn and aged, below
+void f_004ACB20(Ctx& c);  // the debug polygons drawn, below
+void f_004ACDD0(Ctx& c);  // debug lines drawn (EAX the count; the lines), below
 // ComputeTexCoords' texture coordinate generators and modifiers.
 void f_0050A2B0(Ctx& c);
 void f_0050ABF0(Ctx& c);
@@ -1079,9 +1106,9 @@ constexpr uint32_t kOr = 0x153629C, kViewOrigin = 0x1536030, kViewAxis = 0x15360
 constexpr uint32_t kFovX = 0x1536168, kFovY = 0x153616C, kFrustum = 0x15361F8;
 constexpr uint32_t kZFar = 0x1536248, kProjection = 0x1536178, kProjectionCopy = 0x15361B8;
 constexpr uint32_t kRefdefFovX = 0x1536328, kRefdefFovY = 0x153632C, kTime = 0x1536360;
-// Cvars (cvar_t*: float at +0x1C, integer at +0x20): r_nocull, the debug
-// level the fog and far clip print at (5), r_znear, the far clip's and a
-// depth one.
+// Cvars (cvar_t*: float at +0x1C, integer at +0x20): r_nocull, r_speeds
+// (the fog and far clip print at 5), r_znear, the far clip's and a depth
+// one.
 constexpr uint32_t kNoCull = 0x15344F4, kFogDebug = 0x15346E0, kZNear = 0x15347E4,
                    kFarClip = 0x15343F0, kDepthCvar = 0x1534458;
 // ri.Printf, through the refimport table.
@@ -5631,6 +5658,246 @@ void f_005068B0(Ctx& c) {
   c.esp = e + 4;
 }
 
+// The numbers shown at points (0x4ADB10's) drawn and aged (0x4AD480): each
+// whose time (0x1536360 less its +0x20, signed) is past its duration or
+// negative is replaced by the last (rep movs, the count less 1, the same
+// index next); the others get an alpha (+0x18) of 1, 2 - 2t/d over their
+// second half, and are queued as text (0x4AD860, scale 0.5, va("%i")) at
+// their point moved by 4 sin(t x 0x55B890 + index) (FSIN on the x87
+// model) along 0x1536348 and up by t x 0.064, in the frame at e - 0xC.
+void f_004AD480(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi, pt = e - 0xC;
+  if (I32(0x15495B8) > 0) {
+    uint32_t i = 0, off = 0;
+    do {
+      const uint32_t entry = U32(0x15495C0) + off;
+      const int32_t t = int32_t(U32(kTime) - U32(entry + 0x20));
+      if (t < 0 || t > I32(entry + 0x24)) {
+        const uint32_t n = U32(0x15495B8) - 1;
+        Put(0x15495B8, n);
+        MovsD(entry, U32(0x15495C0) + n * 40, 10);
+        continue;
+      }
+      Put(entry + 0x18, 0x3F800000u);
+      const uint32_t p = U32(0x15495C0) + off;
+      if (const int32_t d = I32(p + 0x24); int32_t(uint32_t(t) * 2) > d)
+        Put(p + 0x18, Fst(Ld(0x55B624) - (FromInt(t) + FromInt(t)) / FromInt(d)));
+      const St x = St(Ld(0x55B890)) * FromInt(t) + FromInt(int32_t(i));
+      x87::LoadF64(c.fpu, std::bit_cast<uint64_t>(x.v));
+      x87::Sin(c.fpu);
+      x87::ArithF32(c.fpu, x87::Op::Mul, Ld(0x55B800).bits);
+      const St w(std::bit_cast<double>(x87::StoreF64(c.fpu)));
+      x87::Pop(c.fpu);
+      Put(pt, Fst(St(Ld(0x1536348)) * w + Ld(p)));
+      Put(pt + 4, Fst(St(Ld(0x153634C)) * w + Ld(p + 4)));
+      Put(pt + 8, Fst(St(Ld(0x1536350)) * w + Ld(p + 8) + FromInt(t) * Ld(0x55B88C)));
+      c.esp = e - 0x28;
+      Push(c, U32(p + 0x1C));
+      Push(c, 0x5560E0);
+      Call(c, f_00440940, 0x4AD55F);
+      Push(c, c.eax);
+      Push(c, 0x3F000000);
+      c.edi = U32(0x15495C0) + off + 0xC;
+      c.ebx = pt;
+      Call(c, f_004AD860, 0x4AD577);
+      i++;
+      off += 40;
+    } while (int32_t(i) < I32(0x15495B8));
+  }
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+namespace {
+
+// A GL entry point called through its qgl pointer (stdcall) with the
+// arguments pushed in the order given, from the call site returning to ret.
+void Gl(Ctx& c, uint32_t ptr, std::initializer_list<uint32_t> args, uint32_t ret) {
+  for (uint32_t v : args) Push(c, v);
+  CallPtr(c, U32(ptr), ret, ret - 6);
+}
+
+// The view's matrices loaded (glLoadMatrixf, glMatrixMode), from the call
+// sites returning to rets.
+void ViewMatrices(Ctx& c, const uint32_t rets[4]) {
+  Gl(c, 0x1534D00, {0x15360E8}, rets[0]);
+  Gl(c, 0x1534D6C, {0x1701}, rets[1]);
+  Gl(c, 0x1534D00, {0x1536178}, rets[2]);
+  Gl(c, 0x1534D6C, {0x1700}, rets[3]);
+}
+
+// The fog enabled again after a debug draw (glEnable from the call site
+// returning to ret): unless 0x1549B50 or the fog's state bit 0x200000
+// (0x1534630) is set, with r_fog (0x15347F4) on and a fog (0x1535890 for
+// 0x15496EC bit 8, else 0x13F9CF8).
+void FogAgain(Ctx& c, uint32_t ret) {
+  if (U32(0x1549B50) || U32(0x1534630) & 0x200000 || !CvarInt(0x15347F4)) return;
+  if (!U32(U8(0x15496EC) & 8 ? 0x1535890 : 0x13F9CF8)) return;
+  Gl(c, 0x1534F68, {0xB60}, ret);
+  Put(0x1534630, U32(0x1534630) | 0x200000);
+}
+
+}  // namespace
+
+// The debug polygons drawn (0x4ACB20), when there are any (0x1549584): the
+// client arrays to plain ones (0x153465C 3) as the immediate-mode batch's
+// begin sets them; the white image bound (GL_Bind 0x1535AC4), the client
+// arrays 0x400 (0x4CBBE0), the points as the vertices, the view's
+// matrices; the fog off (GL_State's bit 0x200000), the points locked
+// (0x1534DDC) and culling off (0x153462C 2); each polygon (24 bytes from
+// 0x1549588) as GL_POLYGON (state 0x165, its colour through 0x15357B8),
+// then again in 0x1535114 at state 0x1100 and depth range 0..0; the counts
+// cleared, the points unlocked (0x1534C2C) and the fog back.
+void f_004ACB20(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi;
+  c.eax = U32(0x1549584);
+  if (!c.eax) {
+    c.esp = e + 4;
+    return;
+  }
+  c.esp = e - 8;
+  if (U32(0x153465C) != 3) {
+    if (const uint32_t range = U32(0x153479C)) {
+      Gl(c, 0x153495C, {range == 1 ? 0x851Du : 0x8533u}, 0x4ACB61);
+      Gl(c, 0x15354F0, {0x1630C40, 0, 0x1406, U32(0x17F0C60)}, 0x4ACB79);
+      Gl(c, 0x153503C, {0x1698C40, 0, 0x1406}, 0x4ACB8B);
+      Gl(c, 0x15349A0, {U32(0x16E8C40), 0, 0x1406, 2}, 0x4ACBA1);
+      Gl(c, 0x153542C, {0x16E0C40, 0, 0x1401, 4}, 0x4ACBB5);
+    } else if (U32(0x15347B8)) {
+      Gl(c, 0x15354F0, {0x1630C40, 0, 0x1406, U32(0x17F0C60)}, 0x4ACBD9);
+      Gl(c, 0x153503C, {0x1698C40, 0xC, 0x1406}, 0x4ACBEB);
+      Gl(c, 0x15349A0, {U32(0x16E8C40), 0, 0x1406, 2}, 0x4ACC00);
+    }
+    Put(0x153465C, 3u);
+  }
+  c.edi = 3;
+  c.esi = U32(0x1535AC4);
+  Call(c, f_004CB3B0, 0x4ACC11);
+  Push(c, 0x400);
+  Call(c, f_004CBBE0, 0x4ACC1B);
+  c.esp = e - 8;
+  Gl(c, 0x15354F0, {U32(0x154957C), 0, 0x1406, 3}, 0x4ACC33);
+  static constexpr uint32_t kRets[4] = {0x4ACC3E, 0x4ACC49, 0x4ACC54, 0x4ACC5F};
+  ViewMatrices(c, kRets);
+  c.esi = 0x200000;
+  if (U32(0x1534630) & 0x200000) {
+    Gl(c, 0x15349E0, {0xB60}, 0x4ACC78);
+    Put(0x1534630, U32(0x1534630) & 0xFFDFFFFF);
+  }
+  if (const uint32_t lock = U32(0x1534DDC)) {
+    Push(c, U32(0x1549578));
+    Push(c, 0);
+    CallPtr(c, lock, 0x4ACC96, 0x4ACC94);
+  }
+  if (U32(0x153462C) != 2) {
+    Gl(c, 0x15349E0, {0xB44}, 0x4ACCAA);
+    Put(0x153462C, 2u);
+  }
+  for (int32_t i = 0; i < I32(0x1549584); i++) {
+    const uint32_t o = 0x18 * uint32_t(i);
+    c.edi = uint32_t(i);
+    c.esi = o;
+    c.eax = 0x165;
+    Call(c, f_004CB710, 0x4ACCCF);
+    Gl(c, 0x15357B8, {U32(0x1549588) + o}, 0x4ACCDE);
+    Gl(c, 0x153501C, {U32(U32(0x1549588) + o + 0x14), U32(U32(0x1549588) + o + 0x10), 9}, 0x4ACCF5);
+    c.eax = 0x1100;
+    Call(c, f_004CB710, 0x4ACCFF);
+    Gl(c, 0x153539C, {0, 0, 0, 0}, 0x4ACD0D);
+    Gl(c, 0x1535114, {U32(0x1549588) + o}, 0x4ACD1D);
+    Gl(c, 0x153501C, {U32(U32(0x1549588) + o + 0x14), U32(U32(0x1549588) + o + 0x10), 9}, 0x4ACD34);
+    Gl(c, 0x153539C, {0x3FF00000, 0, 0, 0}, 0x4ACD45);
+  }
+  c.esi = 0x200000;
+  const uint32_t unlock = U32(0x1534C2C);
+  Put(0x1549584, 0u);
+  Put(0x1549578, 0u);
+  if (unlock) CallPtr(c, unlock, 0x4ACD7A, 0x4ACD78);
+  FogAgain(c, 0x4ACDB9);
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// Debug lines drawn (0x4ACDD0; EAX the count, stack the lines, 0x2C bytes:
+// from, to, colour, a flag), none for a count of 0: the white image bound,
+// the immediate-mode batch begun (0x4ADC20), the view's matrices; each line
+// at state 0x100 (with the flag) or 0x10100, the batch's mode 1 (lines)
+// and colour bytes the components x 255 truncated (_ftol, the low byte),
+// its two ends (0x4ADEC0) drawn (glDrawArrays of the batch's vertices, its
+// count and mode then 0); the batch ended (0x15495C4 0), the fog back and
+// the tessellator's positions as the vertices again.
+void f_004ACDD0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, n = c.eax;
+  if (n) {
+    c.esp = e - 0xC;
+    c.edi = n;
+    c.ebx = 0;
+    c.esi = U32(0x1535AC4);
+    Call(c, f_004CB3B0, 0x4ACDEA);
+    Call(c, f_004ADC20, 0x4ACDEF);
+    static constexpr uint32_t kRets[4] = {0x4ACDFA, 0x4ACE05, 0x4ACE10, 0x4ACE1B};
+    ViewMatrices(c, kRets);
+    if (int32_t(n) > 0) {
+      for (uint32_t left = n, line = Arg(c, e, 1); left; left--, line += 0x2C) {
+        c.edi = left;
+        c.esi = line + 0x20;
+        c.eax = U32(line + 0x28) ? 0x100 : 0x10100;
+        Call(c, f_004CB710, 0x4ACE46);
+        Put(0x15495C8, 1u);
+        for (uint32_t k = 0; k < 4; k++)
+          Wr<uint8_t>(g_guest_base, 0x15495D8 + k, uint8_t(Ftol(St(Ld(line + 0x18 + 4 * k)) * Ld(0x55B5FC))));
+        for (uint32_t k : {8u, 4u, 0u}) Push(c, U32(line + k));
+        Call(c, f_004ADEC0, 0x4ACEAC);
+        for (uint32_t k : {0x14u, 0x10u, 0xCu}) Push(c, U32(line + k));
+        Call(c, f_004ADEC0, 0x4ACEBD);
+        c.esp = e - 0xC;
+        Gl(c, 0x153501C, {U32(0x15495E8), 0, U32(0x15495C8)}, 0x4ACED4);
+        Put(0x15495E8, 0u);
+        Put(0x15495C8, 0u);
+      }
+    }
+    Put(0x15495C4, 0u);
+    c.esi = 0x200000;
+    FogAgain(c, 0x4ACF33);
+    Gl(c, 0x15354F0, {0x1630C40, 0, 0x1406, 3}, 0x4ACF4C);
+  }
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The back end's debug draws (0x4AD5C0, from RB_SwapBuffers): the numbers
+// at points (0x4AD480), the polygons (0x4ACB20), the lines (0x4ACDD0) and
+// the client's (0x15495B0/0x15495B4), the text (0x4ACF50) and the
+// client's (0x154959C/0x15495A0); the line and text counts then 0.
+void f_004AD5C0(Ctx& c) {
+  const uint32_t e = c.esp;
+  Call(c, f_004AD480, 0x4AD5C5);
+  Call(c, f_004ACB20, 0x4AD5CA);
+  Push(c, U32(0x15495AC));
+  c.eax = U32(0x15495A8);
+  Call(c, f_004ACDD0, 0x4AD5DA);
+  c.ecx = U32(0x15495B4);
+  c.eax = U32(0x15495B0);
+  Push(c, c.ecx);
+  Call(c, f_004ACDD0, 0x4AD5EB);
+  c.edx = U32(0x1549594);
+  c.eax = U32(0x1549590);
+  Push(c, c.edx);
+  Put(0x15495A8, 0u);
+  Call(c, f_004ACF50, 0x4AD606);
+  Push(c, U32(0x15495A0));
+  c.eax = U32(0x154959C);
+  Call(c, f_004ACF50, 0x4AD616);
+  Put(0x1549590, 0u);
+  c.esp = e + 4;
+}
+
 // ---- the front end's vector helpers ----------------------------------------
 //
 // Called throughout the game (collision, game code, the back end), so
@@ -5941,6 +6208,1261 @@ void f_00427590(Ctx& c) {
   Put(o + 0x1C, Fst((p(a + 0x1C, m + 0x20) + p(a + 0x10, m + 0x1C)) + p(a + 4, m + 0x18)));
   Put(o + 0x20, Fst((p(a + 0x20, m + 0x20) + p(a + 0x14, m + 0x1C)) + p(a + 8, m + 0x18)));
   c.esp += 4;
+}
+
+
+// ---- the front end: the scene's and the frame's entry points -------------------
+//
+// The refexport's per-frame entries (the table 0xC950B8, filled by
+// 0x4A94C0; the client's copy at 0x1426D60) and what they call. The scene's
+// counts: entities 0x154D70C, coronas 0x154D710, dlights 0x154D714, polygon
+// vertices 0x154D71C, polygons 0x154D730 (each with its first of the scene
+// at 0x154D72C, 0x154D728, 0x154D718, 0x154D720); the back end's buffer
+// 0x1549698 holds dlights from +0x80000 (0x88 bytes), coronas from +0x81100
+// (0x30), polygons from +0x1FD700 (16) and their vertices from +0x20D700
+// (32), and the commands from +0x24D700 (used +0x28D700). Registered: the
+// renderer's 0x1535A20.
+
+namespace {
+
+constexpr uint32_t kRegistered = 0x1535A20, kFrameCount = 0x1535A24;
+constexpr uint32_t kNumEntities = 0x154D70C, kNumCoronas = 0x154D710, kNumDlights = 0x154D714,
+                   kNumPolyVerts = 0x154D71C, kNumPolys = 0x154D730;
+constexpr uint32_t kCmds = 0x24D700, kCmdsUsed = 0x28D700;
+constexpr uint32_t kErrorPtr = 0x1549604, kCvarSetPtr = 0x1549628;
+
+// The x87 compare `fld m32; fcomp m32; fnstsw ax` on the guest's x87 stack:
+// AX the status word (the rest of EAX kept).
+void CompareSw(Ctx& c, F32 a, F32 b) {
+  x87::LoadF32(c.fpu, a.bits);
+  x87::CompareF32(c.fpu, b.bits);
+  x87::Pop(c.fpu);
+  c.eax = (c.eax & 0xFFFF0000u) | x87::StatusWord(c.fpu);
+}
+
+// R_GetCommandBuffer inlined: size bytes of the command buffer (none once
+// it would pass 0x3FFF8 bytes, unsigned), 0 for none; EAX and ECX as the
+// original leaves them.
+uint32_t CommandBuffer(Ctx& c, uint32_t size) {
+  const uint32_t bed = U32(kBackEndData), used = U32(bed + kCmdsUsed) + size;
+  c.ecx = bed;
+  c.eax = used;
+  if (used > 0x3FFF8) return 0;
+  Put(bed + kCmdsUsed, used);
+  return c.eax = used + bed + kCmds - size;
+}
+
+// The end of the command list (0 at the used offset, the count 0) and the
+// commands run by the back end (0x4CEA70, EAX the list) without the cvar
+// 0x153455C, from the call site returning to ret.
+void IssueCommands(Ctx& c, uint32_t ret) {
+  const uint32_t cmds = U32(kBackEndData) + kCmds;
+  Put(cmds + U32(cmds + 0x40000), 0u);
+  Put(cmds + 0x40000, 0u);
+  c.eax = cmds;
+  c.edx = U32(0x153455C);
+  if (!CvarInt(0x153455C)) Call(c, f_004CEA70, ret);
+}
+
+// Q_stricmpn(EAX 99999, ECX, EDX) from the call site returning to ret: 0 when
+// the strings match but for case.
+bool SameName(Ctx& c, uint32_t a, uint32_t b, uint32_t ret) {
+  c.eax = 99999;
+  c.ecx = a;
+  c.edx = b;
+  Call(c, f_004406F0, ret);
+  return !c.eax;
+}
+
+}  // namespace
+
+// The scene's firsts set to the counts (dlights, coronas, entities,
+// polygons): EAX, ECX and EDX the polygons', coronas' and entities' counts.
+void f_004DE950(Ctx& c) {
+  c.eax = U32(kNumDlights);
+  c.ecx = U32(kNumCoronas);
+  c.edx = U32(kNumEntities);
+  Put(0x154D718, c.eax);
+  c.eax = U32(kNumPolys);
+  Put(0x154D728, c.ecx);
+  Put(0x154D72C, c.edx);
+  Put(0x154D720, c.eax);
+  c.esp += 4;
+}
+
+// A polygon added to the scene (shader, 0 for the default shader's index
+// (0x1535AE8 +0x44); the vertex count; the vertices, 32 bytes each): when
+// registered, unless the vertices would pass 0x15344F8 or the polygons
+// reach 0x1534504 (signed): the polygon (type 2, the shader, the count,
+// its vertices' place) and its vertices copied (rep movs of count << 5
+// bytes), both counts.
+void f_004DEA40(Ctx& c) {
+  const uint32_t e = c.esp;
+  c.esp = e + 4;
+  c.eax = U32(kRegistered);
+  if (!c.eax) return;
+  uint32_t shader = Arg(c, e, 1);
+  if (!shader) shader = U32(U32(0x1535AE8) + 0x44);
+  const uint32_t first = U32(kNumPolyVerts), n = Arg(c, e, 2), total = first + n;
+  c.ecx = n;
+  c.eax = U32(0x15344F8);
+  if (int32_t(total) > int32_t(c.eax)) return;
+  const uint32_t polys = U32(kNumPolys);
+  c.edx = polys;
+  if (int32_t(polys) >= I32(0x1534504)) return;
+  const uint32_t bed = U32(kBackEndData), poly = ((polys + 0x1FD70) << 4) + bed;
+  const uint32_t verts = ((first + 0x106B8) << 5) + bed, bytes = n << 5;
+  Put(poly + 8, n);
+  Put(poly, 2u);
+  Put(poly + 4, shader);
+  Put(poly + 0xC, verts);
+  RepMovs(verts, Arg(c, e, 3), bytes >> 2, bytes & 3);
+  c.eax = bytes;
+  c.ecx = 0;
+  c.edx = polys + 1;
+  Put(kNumPolys, c.edx);
+  Put(kNumPolyVerts, total);
+}
+
+// RE_AddPolysToScene (its warning for a null shader; shader, vertex count,
+// vertices, polygon count): when registered and the shader not 0, each
+// polygon as 0x4DEA40 adds one (the vertex limit checked against the
+// counts at the call plus the vertices so far), until a limit or the count.
+// EAX the place of the next polygon's count, ECX the vertex count, EDX the
+// next vertices' place.
+void f_004DEAE0(Ctx& c) {
+  const uint32_t e = c.esp;
+  c.esp = e + 4;
+  c.eax = U32(kRegistered);
+  if (!c.eax) return;
+  const uint32_t shader = Arg(c, e, 1);
+  c.eax = shader;
+  if (!shader) {
+    c.esp = e - 0xC;
+    Push(c, 0x541CD4);
+    Push(c, 2);
+    CallPtr(c, U32(kPrintfPtr), 0x4DEB05, 0x4DEAFF);
+    c.esp = e + 4;
+    return;
+  }
+  const int32_t count = I32(e + 0x10);
+  c.eax = uint32_t(count);
+  if (count <= 0) return;
+  const uint32_t bed = U32(kBackEndData), n = Arg(c, e, 2), bytes = n << 5;
+  uint32_t total = U32(kNumPolyVerts) + n, from = Arg(c, e, 3);
+  c.ecx = n;
+  c.edx = ((U32(kNumPolyVerts) + 0x106B8) << 5) + bed;
+  c.eax = (U32(kNumPolys) << 4) + bed + 0x1FD708;
+  for (int32_t j = 0; j < count; j++) {
+    if (int32_t(total) > I32(0x15344F8) || I32(kNumPolys) >= I32(0x1534504)) break;
+    Put(c.eax, c.ecx);
+    Put(c.eax - 4, shader);
+    Put(c.eax + 4, c.edx);
+    Put(c.eax - 8, 2u);
+    RepMovs(c.edx, from, bytes >> 2, bytes & 3);
+    Put(kNumPolys, U32(kNumPolys) + 1);
+    c.ecx = Arg(c, e, 2);
+    total += c.ecx;
+    const uint32_t verts = U32(kNumPolyVerts) + c.ecx;
+    c.eax += 0x10;
+    c.edx += bytes;
+    Put(kNumPolyVerts, verts);
+    from += bytes;
+  }
+}
+
+// A dlight added to the scene (origin, intensity, r, g, b): when
+// registered, below 32 dlights and with an intensity not at or below 0
+// (NaN passes): the next of the back end's dlights (type 2, the colour,
+// the intensity's bits at +0x74, its square x 1/32 at +0x10 and that by the
+// scale 0x1536290 by each component at +0x24, the origin, an attenuation of
+// 1, a cone of 180 at +0x70 and the fields between) and the count. EAX the
+// dlight (the status word in AX when refused), ECX 0, EDX the origin's z.
+void f_004DED10(Ctx& c) {
+  const uint32_t e = c.esp;
+  c.esp = e + 4;
+  c.eax = U32(kRegistered);
+  c.ecx = 0;
+  if (!c.eax) return;
+  const uint32_t n = U32(kNumDlights);
+  c.edx = n;
+  if (int32_t(n) >= 0x20) return;
+  const F32 intensity = Ld(e + 8);
+  CompareSw(c, intensity, Ld(0x55B584));
+  if (St(intensity) < 0.0f || St(intensity) == 0.0f) return;
+  const St radius = St(intensity) * intensity * Ld(0x55B5C0);
+  const uint32_t l = n * 0x88 + U32(kBackEndData) + 0x80000, org = Arg(c, e, 1);
+  Put(kNumDlights, n + 1);
+  Put(l + 0x74, intensity);
+  Put(l + 0x10, Fst(radius));
+  for (uint32_t k = 0; k < 0xC; k += 4) Put(l + 4 + k, U32(e + 0xC + k));
+  Put(l + 0x20, 0x3F800000u);
+  Put(l, 2u);
+  for (uint32_t k = 0x14; k < 0x20; k += 4) Put(l + k, 0u);
+  Put(l + 0x24, Fst(St(Ld(0x1536290)) * radius * Ld(e + 0xC)));
+  Put(l + 0x28, Fst(St(Ld(0x1536290)) * radius * Ld(e + 0x10)));
+  Put(l + 0x30, 0x3F800000u);
+  Put(l + 0x40, 0x3F800000u);
+  for (uint32_t k = 0x34; k < 0x40; k += 4) Put(l + k, 0u);
+  Put(l + 0x2C, Fst(St(Ld(0x1536290)) * radius * Ld(e + 0x14)));
+  Put(l + 0x44, U32(org));
+  Put(l + 0x48, U32(org + 4));
+  c.edx = U32(org + 8);
+  Put(l + 0x50, 0x3F800000u);
+  Put(l + 0x68, 0x3F800000u);
+  Put(l + 0x4C, c.edx);
+  Put(l + 0x60, 0x3A83126Fu);
+  Put(l + 0x64, 0u);
+  Put(l + 0x6C, 0u);
+  Put(l + 0x70, 0x43340000u);
+  c.eax = l;
+}
+
+// A corona added to the scene (its warning for an id outside 0-0x7FF;
+// origin, r, g, b, scale, id, flags): when registered and below 32: the
+// next of the back end's coronas (origin, colour, scale +0x24, id +0x28,
+// flags +0x2C) and the count, or ri.Printf's warning (code 1). EAX the
+// corona, ECX the scale, EDX the flags.
+void f_004DEE20(Ctx& c) {
+  const uint32_t e = c.esp;
+  c.esp = e + 4;
+  c.eax = U32(kRegistered);
+  if (!c.eax) return;
+  const uint32_t n = U32(kNumCoronas);
+  c.ecx = n;
+  if (int32_t(n) >= 0x20) return;
+  const uint32_t id = Arg(c, e, 6);
+  c.edx = id;
+  if (int32_t(id) < 0 || int32_t(id) >= 0x800) {
+    c.esp = e;
+    for (uint32_t v : {0x800u, id, 0x541C28u, 1u}) Push(c, v);
+    CallPtr(c, U32(kPrintfPtr), 0x4DEEB2, 0x4DEEAC);
+    c.esp = e + 4;
+    return;
+  }
+  const uint32_t q = n * 0x30 + U32(kBackEndData) + 0x81100, org = Arg(c, e, 1);
+  Put(kNumCoronas, n + 1);
+  for (uint32_t k = 0; k < 0xC; k += 4) Put(q + k, U32(org + k));
+  for (uint32_t k = 0; k < 0xC; k += 4) Put(q + 0xC + k, U32(e + 8 + k));
+  c.ecx = Arg(c, e, 5);
+  Put(q + 0x28, id);
+  c.edx = Arg(c, e, 7);
+  Put(q + 0x24, c.ecx);
+  Put(q + 0x2C, c.edx);
+  c.eax = q;
+}
+
+// The cull's far distance 0x11BEB84 set: the argument when above 0 (NaN
+// too), else 0 (EAX then the status word in AX).
+void f_004DA0C0(Ctx& c) {
+  const F32 d = Ld(c.esp + 4);
+  CompareSw(c, d, Ld(0x55B584));
+  if (St(d) > 0.0f || !(St(d) == St(d))) {
+    c.eax = d.bits;
+    Put(kCullFar, d);
+  } else {
+    Put(kCullFar, 0u);
+  }
+  c.esp += 4;
+}
+
+// A fog set (fog, then start and end times (or for the fog 8 the mode),
+// colour, density): fogs 0x15357E0 (64 bytes each: mode, hint 0x1100,
+// colour, density +0x2C (1 for linear), start and end as floats, the set
+// flag +0x30, 0 at +0x38); a start and end of 0 clears the set flag; a
+// density below 1 (NaN too) is exponential fog (0x800, its density), else
+// linear (0x2601). The fog 8 changes the fog now (0x1535920, its target
+// 0x15359A0, its start 0x1535960): mode 3 clears the fog now and its target
+// (the fog now copied to the start while 0x1535950 is set) and 0x13F9CF8;
+// another fog that is set becomes 0x13F9CF8 and the target (the start the
+// fog now, or that fog without one), at once without a time (the fog now's
+// and the target's +0x3C 1, the times 0) or over it from 0x1536360. The
+// float conversions and the compare are on the guest's x87 stack (AX the
+// status word, which no caller reads).
+void f_004C8AA0(Ctx& c) {
+  const uint32_t e = c.esp, fog = Arg(c, e, 1);
+  c.esp = e + 4;
+  if (fog != 8) {
+    c.edx = 0;
+    const uint32_t f = (fog << 6) + 0x15357E0;
+    c.ecx = fog << 6;
+    if (!Arg(c, e, 2) && !Arg(c, e, 3)) {
+      c.eax = 0;
+      Put(f + 0x30, 0u);
+      return;
+    }
+    auto toFloat = [&](uint32_t v) {
+      x87::LoadI32(c.fpu, int32_t(v));
+      const uint32_t b = x87::StoreF32(c.fpu);
+      x87::Pop(c.fpu);
+      return b;
+    };
+    Put(f + 0x10, Arg(c, e, 4));
+    Put(f + 0x20, toFloat(Arg(c, e, 2)));
+    Put(f + 0x14, Arg(c, e, 5));
+    Put(f + 0x18, Arg(c, e, 6));
+    Put(f + 0x24, toFloat(Arg(c, e, 3)));
+    c.eax = Arg(c, e, 6);
+    const F32 density = Ld(e + 0x1C);
+    Put(f + 0x1C, 0x3F800000u);
+    Put(f + 0x38, 0u);
+    Put(f + 0x34, 1u);
+    CompareSw(c, density, Ld(0x55B580));
+    if (!(St(density) >= 1.0f)) {
+      c.edx = density.bits;
+      Put(f, 0x800u);
+      Put(f + 0x2C, c.edx);
+    } else {
+      Put(f, 0x2601u);
+      Put(f + 0x2C, 0x3F800000u);
+    }
+    Put(f + 0x30, 1u);
+    Put(f + 4, 0x1100u);
+    return;
+  }
+  const uint32_t mode = Arg(c, e, 2);
+  c.ecx = mode;
+  if (mode == 3) {
+    if (U32(kFog + 0x30)) MovsD(kFogFrom, kFog, 0x10);
+    for (uint32_t k = 0; k < 0x40; k += 4) Put(0x15358A0 + k, 0u);
+    for (uint32_t k = 0; k < 0x40; k += 4) Put(kFogTo + k, 0u);
+    c.eax = c.ecx = c.edx = 0;
+    Put(0x13F9CF8, 0u);
+    return;
+  }
+  c.eax = mode << 6;
+  c.edx = U32(c.eax + 0x1535810);
+  if (c.edx != 1) return;
+  Put(0x13F9CF8, mode);
+  c.edx = 0;
+  MovsD(kFogFrom, U32(kFog + 0x30) ? kFog : c.eax + 0x15357E0, 0x10);
+  MovsD(kFogTo, c.eax + 0x15357E0, 0x10);
+  c.ecx = 0;
+  c.eax = Arg(c, e, 3);
+  if (!c.eax) {
+    Put(kFogTo + 0x3C, 1u);
+    Put(kFog + 0x3C, 1u);
+    Put(kFogTo + 8, 0u);
+    Put(kFogTo + 0xC, 0u);
+    return;
+  }
+  c.ecx = U32(kTime);
+  Put(kFogTo + 8, c.ecx);
+  c.ecx += c.eax;
+  Put(kFogTo + 0xC, c.ecx);
+}
+
+// The fogs saved (its error for a buffer below 0x244 bytes; buffer, size):
+// the fogs' 0x240 bytes, then 0x13F9CF8. EAX 0x244, ECX that fog.
+void f_004C8C40(Ctx& c) {
+  const uint32_t e = c.esp;
+  if (const uint32_t size = Arg(c, e, 2); size < 0x244) {
+    for (uint32_t v : {0x244u, size, 0x543200u, 1u}) Push(c, v);
+    CallPtr(c, U32(kErrorPtr), 0x4C8C5E, 0x4C8C58);
+    c.esp = e;
+  }
+  const uint32_t buf = Arg(c, e, 1);
+  MovsD(buf, 0x15357E0, 0x90);
+  c.ecx = U32(0x13F9CF8);
+  Put(buf + 0x240, c.ecx);
+  c.eax = 0x244;
+  c.esp = e + 4;
+}
+
+// The fogs restored (its error for a buffer below 0x244 bytes; buffer,
+// size): the fogs' 0x240 bytes, then 0x13F9CF8 from the buffer's +0x240.
+// EAX 0x244, ECX 0.
+void f_004C8C90(Ctx& c) {
+  const uint32_t e = c.esp;
+  if (Arg(c, e, 2) < 0x244) {
+    Push(c, 0x5431B0);
+    Push(c, 1);
+    CallPtr(c, U32(kErrorPtr), 0x4C8CA7, 0x4C8CA1);
+    c.esp = e;
+  }
+  const uint32_t buf = Arg(c, e, 1);
+  MovsD(0x15357E0, buf, 0x90);
+  Put(0x13F9CF8, U32(buf + 0x240));
+  c.eax = 0x244;
+  c.ecx = 0;
+  c.esp = e + 4;
+}
+
+// 128 entries of 0x4C bytes at 0x154B100 cleared and linked into a free
+// list (each to the one before, the head 0x154D700 the last), 0x154B0EC,
+// 0x13F9CF4 and 0x11CE828-0x11CE830 cleared. EAX the end, ECX the last.
+void f_004CEC10(Ctx& c) {
+  for (uint32_t k = 0; k < 0x2600; k += 4) Put(0x154B100 + k, 0u);
+  for (uint32_t va : {0x154B0ECu, 0x13F9CF4u, 0x11CE828u, 0x11CE82Cu, 0x11CE830u}) Put(va, 0u);
+  c.ecx = 0;
+  for (c.eax = 0x154B100; int32_t(c.eax) < 0x154D700; c.eax += 0x4C) {
+    Put(c.eax, c.ecx);
+    c.ecx = c.eax;
+  }
+  Put(0x154D700, c.ecx);
+  c.esp += 4;
+}
+
+// The command r_smc_flush (its registration): each model cache entry in use
+// (from the list's last, 0x11CD054) has its blocks freed (0x4DA0F0 from the
+// tree's root), the list's last unlinked and the entry's first block
+// (+0x88) appended to the free list of level 0 (0x11CD028).
+void f_004DB370(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi;
+  for (uint32_t entry = U32(0x11CD054); entry != 0x11CD050; entry = U32(0x11CD054)) {
+    c.esi = entry;
+    c.esp = e - 4;
+    for (uint32_t v : {4u, 0u, entry, 0x11BEC28u}) Push(c, v);
+    Call(c, f_004DA0F0, 0x4DB38F);
+    Put(U32(U32(0x11CD054) + 4), U32(U32(0x11CD054)));
+    const uint32_t last = U32(0x11CD054);
+    Put(U32(last) + 4, U32(last + 4));
+    c.eax = entry + 0x88;
+    Put(c.eax, 0x11CD028u);
+    c.ecx = U32(0x11CD02C);
+    Put(entry + 0x8C, c.ecx);
+    Put(0x11CD02C, c.eax);
+    c.edx = U32(entry + 0x8C);
+    Put(c.edx, c.eax);
+  }
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// The pending frees cleared (0x13F9CE8).
+void f_004DF5F0(Ctx& c) {
+  Put(0x13F9CE8, 0u);
+  c.esp += 4;
+}
+
+// The pending frees done, last first (0x13F9CE8 of 8 bytes from 0x11D0A58:
+// a kind, a block): kind 0 through the refimport's 0x1549650, 1 its
+// 0x154961C, others none (ECX then the kind less 1); the count stored
+// before each. EAX the count left (as read after a free).
+void f_004DF600(Ctx& c) {
+  const uint32_t e = c.esp;
+  c.eax = U32(0x13F9CE8);
+  while (int32_t(c.eax) > 0) {
+    const uint32_t kind = U32(c.eax * 8 + 0x11D0A50);
+    c.eax--;
+    Put(0x13F9CE8, c.eax);
+    if (kind > 1) {
+      c.ecx = kind - 1;
+      continue;
+    }
+    c.esp = e;
+    const uint32_t block = U32(c.eax * 8 + 0x11D0A5C);
+    Push(c, block);
+    if (kind) {
+      c.eax = block;
+      c.ecx = 0;
+      CallPtr(c, U32(kFreePtr), 0x4DF633, 0x4DF62D);
+    } else {
+      c.ecx = block;
+      CallPtr(c, U32(0x1549650), 0x4DF643, 0x4DF63D);
+    }
+    c.eax = U32(0x13F9CE8);
+  }
+  c.esp = e + 4;
+}
+
+// A model's bounds (handle, mins, maxs): its brush model's (+0x4C, read
+// again for each component), zeros without one. EAX the brush model, ECX
+// maxs, EDX the last value.
+void f_004F8C20(Ctx& c) {
+  const uint32_t e = c.esp, model = U32(0x15364F8 + 4 * Arg(c, e, 1)), mins = Arg(c, e, 2), maxs = Arg(c, e, 3);
+  c.esp = e + 4;
+  if (!U32(model + 0x4C)) {
+    c.ecx = c.edx = 0;
+    for (uint32_t k : {8u, 4u, 0u}) Put(mins + k, 0u);
+    for (uint32_t k : {8u, 4u, 0u}) Put(maxs + k, 0u);
+    c.eax = maxs;
+    return;
+  }
+  for (uint32_t k = 0; k < 0xC; k += 4) Put(mins + k, U32(U32(model + 0x4C) + k));
+  for (uint32_t k = 0; k < 8; k += 4) Put(maxs + k, c.edx = U32(U32(model + 0x4C) + 0xC + k));
+  c.eax = U32(model + 0x4C);
+  c.ecx = maxs;
+  Put(maxs + 8, c.edx = U32(c.eax + 0x14));
+}
+
+// The frame's texture memory (0x4DF810; stack: three outs, any of them 0):
+// once a frame (0x11D0C5C the frame 0x1535A24 counted at), over the images
+// (0x153A51C of them at 0x153A520) used this frame or the last (+0x5C):
+// their sizes +0x48 summed (0x11D4D60; those of type 3 (+0x50) apart,
+// 0x11D0C58) and their +0x4C (0x11D4D68). Above 0x1400000 with the warning
+// icons' cvar 0x14E43EC on, StatMon_UpdateEntry's entry 6 inlined: shown
+// 0xBB8 ms (timeGetTime against the base 0x15342A0, taken once), its image
+// "gfx/2d/warning@textures.jpg" registered when missing and 0x1439370 set,
+// the count 0x8D5A98 at least 7.
+void f_004DF810(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi;
+  const uint32_t frame = U32(kFrameCount);
+  if (U32(0x11D0C5C) != frame) {
+    Put(0x11D0C5C, frame);
+    Put(0x11D4D60, 0u);
+    Put(0x11D0C58, 0u);
+    Put(0x11D4D68, 0u);
+    uint32_t total = 0, other = 0;
+    if (I32(0x153A51C) > 0) {
+      for (int32_t i = 0; i < I32(0x153A51C); i++) {
+        const uint32_t img = U32(0x153A520 + 4 * uint32_t(i)), used = U32(img + 0x5C);
+        if (used != frame && used != frame - 1) continue;
+        const uint32_t size = U32(img + 0x48);
+        total += size;
+        if (U32(img + 0x50) == 3) Put(0x11D0C58, U32(0x11D0C58) + size);
+        other += U32(img + 0x4C);
+      }
+      Put(0x11D4D68, other);
+      Put(0x11D4D60, total);
+    }
+    if (CvarInt(0x14E43EC) && int32_t(other) > 0x1400000) {
+      const uint32_t time = U32(0x53331C);
+      c.esp = e - 0xC;
+      if (!U32(0x13F9DB0)) {
+        CallPtr(c, time, 0x4DF8BF, 0x4DF8BD);
+        Put(0x15342A0, c.eax);
+        Put(0x13F9DB0, 1u);
+      }
+      CallPtr(c, time, 0x4DF8D0, 0x4DF8CE);
+      Put(0x8D58C8, c.eax + (0xBB8 - U32(0x15342A0)));
+      if (!U32(0x8D58CC) && U32(0x1439370)) {
+        Push(c, 1);
+        Push(c, 0x541A48);
+        CallPtr(c, U32(0x1426D74), 0x4DF903, 0x4DF8FD);
+        c.esp = e - 0xC;
+        Put(0x8D58CC, c.eax);
+      }
+      if (I32(0x8D5A98) <= 6) Put(0x8D5A98, 7u);
+    }
+  }
+  const uint32_t total = U32(0x11D4D60), other = U32(0x11D4D68);
+  if (const uint32_t p = Arg(c, e, 1)) Put(p, total);
+  if (const uint32_t p = Arg(c, e, 2)) Put(p, U32(0x11D0C58));
+  if (const uint32_t p = Arg(c, e, 3)) Put(p, other);
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The frame's counters printed by r_speeds (0x15346E0) and cleared
+// (0x15364CC-0x15364EC, 0x1549B04-0x1549B34): with the warning icons' cvar
+// 0x14E43EC the texture memory's check (0x4DF810); with the stats 0x15364F4
+// (0x4D4BB0's) its counts, texture memory and overdraw per pixel (the sum
+// 0x1549B1C over the screen 0x15347C8 x 0x15347C4) and entities; r_speeds 1
+// the counts, triangles (/3), texture memory in MB (by 2^-20) and the
+// overdraw, 2 the patches', 3 the view cluster, 4 the dlights' (with any
+// surfaces), 6 the flares', through ri.Printf. EAX and ECX 0.
+void f_004D3ED0(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi;
+  auto print = [&](std::initializer_list<uint32_t> args, uint32_t ret, uint32_t va) {
+    c.esp = e - 0x18;
+    for (uint32_t v : args) Push(c, v);
+    CallPtr(c, U32(kPrintfPtr), ret, va);
+  };
+  auto pixels = [] { return FromInt(I32(0x15347C8) * I32(0x15347C4)); };
+  c.esp = e - 0x10;
+  if (CvarInt(0x14E43EC)) {
+    for (uint32_t v : {0u, 0u, 0u}) Push(c, v);
+    Call(c, f_004DF810, 0x4D3EEA);
+    c.esp = e - 0x10;
+  }
+  if (U32(0x15364F4)) {
+    Put(U32(0x15364F4), U32(0x1549B10));
+    Put(U32(0x15364F4) + 4, U32(0x1549B14));
+    Put(U32(0x15364F4) + 8, U32(0x1549B0C));
+    Put(U32(0x15364F4) + 0xC, U32(0x1549B18));
+    const uint32_t s = U32(0x15364F4);
+    for (uint32_t v : {s + 0x18, s + 0x14, s + 0x10}) Push(c, v);
+    Call(c, f_004DF810, 0x4D3F3F);
+    c.esp = e - 0x10;
+    const St pp = pixels();
+    c.edx = U32(kNumEntities);
+    Put(U32(0x15364F4) + 0x20, Fst(Ld(0x1549B1C) / pp));
+    Put(U32(0x15364F4) + 0x1C, c.edx);
+  }
+  switch (CvarInt(kFogDebug)) {
+    case 0: break;
+    case 1: {
+      c.esp = e - 0x18;
+      for (uint32_t v : {e - 4, e - 8, e - 0x10}) Push(c, v);
+      Call(c, f_004DF810, 0x4D3FA3);
+      const St pp = pixels();
+      const uint32_t total = U32(e - 0x10), diff = U32(e - 0x10) - U32(e - 8), other = U32(e - 4);
+      auto put = [&](uint32_t va, St v) {
+        const uint64_t d = std::bit_cast<uint64_t>(v.v);
+        Put(va, uint32_t(d));
+        Put(va + 4, uint32_t(d >> 32));
+      };
+      put(e - 0x20, Ld(0x1549B1C) / pp);
+      put(e - 0x28, FromInt(int32_t(total)) * Ld(0x55B5F8));
+      put(e - 0x30, FromInt(int32_t(diff)) * Ld(0x55B5F8));
+      put(e - 0x38, FromInt(int32_t(other)) * Ld(0x55B5F8));
+      c.esp = e - 0x38;
+      for (uint32_t v : {uint32_t(I32(0x1549B14) / 3), uint32_t(I32(0x1549B10) / 3), U32(0x1549B0C), U32(0x15364E4),
+                         U32(0x1549B04), U32(0x1549B08), 0x542940u, 0u})
+        Push(c, v);
+      CallPtr(c, U32(kPrintfPtr), 0x4D404E, 0x4D4048);
+      break;
+    }
+    case 2:
+      print({U32(0x15364E0), U32(0x15364DC), U32(0x15364D8), U32(0x15364D4), U32(0x15364D0), U32(0x15364CC),
+             0x542904u, 0u},
+            0x4D4090, 0x4D408A);
+      break;
+    case 3: print({U32(0x15364A0), 0x5428F0u, 0u}, 0x4D40B0, 0x4D40AA); break;
+    case 4:
+      if (const uint32_t surfs = U32(0x1549B20))
+        print({uint32_t(I32(0x1549B24) / 3), surfs, U32(0x15364EC), U32(0x15364E8), 0x5428C0u, 0u}, 0x4D40F4,
+              0x4D40EE);
+      break;
+    case 6: print({U32(0x1549B30), U32(0x1549B2C), U32(0x1549B28), 0x54289Cu, 0u}, 0x4D411F, 0x4D4119); break;
+  }
+  for (uint32_t k = 0; k < 0x24; k += 4) Put(0x15364CC + k, 0u);
+  for (uint32_t k = 0; k < 0x34; k += 4) Put(0x1549B04 + k, 0u);
+  c.eax = c.ecx = 0;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// The frame's end (0x4D4A60; stack: where to put the front end's and the
+// back end's times, either 0): when registered, the swap command (id 11 at
+// the used offset, unchecked) and the list's end, the counters (0x4D3ED0),
+// the commands run (0x4CEA70) without the cvar 0x153455C, then the used
+// offset and the scene's counts and firsts cleared; the times 0x15364F0 and
+// 0x1549B34 handed out and cleared.
+void f_004D4A60(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi;
+  c.esp = e + 4;
+  c.eax = U32(kRegistered);
+  if (!c.eax) return;
+  const uint32_t bed = U32(kBackEndData), cmds = bed + kCmds;
+  Put(U32(bed + kCmdsUsed) + bed + kCmds, 0xBu);
+  Put(bed + kCmdsUsed, U32(bed + kCmdsUsed) + 4);
+  Put(cmds + U32(cmds + 0x40000), 0u);
+  Put(cmds + 0x40000, 0u);
+  c.esi = cmds;
+  c.edi = 0;
+  c.esp = e - 8;
+  Call(c, f_004D3ED0, 0x4D4AB0);
+  if (!CvarInt(0x153455C)) {
+    c.eax = cmds;
+    Call(c, f_004CEA70, 0x4D4AC1);
+  }
+  Put(U32(kBackEndData) + kCmdsUsed, 0u);
+  for (uint32_t va : {0x154D724u, kNumDlights, 0x154D718u, kNumCoronas, 0x154D728u, kNumEntities, 0x154D72Cu,
+                      kNumPolys, 0x154D720u, kNumPolyVerts})
+    Put(va, 0u);
+  if (const uint32_t p = Arg(c, e, 1)) Put(p, U32(0x15364F0));
+  Put(0x15364F0, 0u);
+  if (const uint32_t p = Arg(c, e, 2)) Put(p, U32(0x1549B34));
+  Put(0x1549B34, 0u);
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// Command 9 queued (4 bytes). EAX and ECX as the original leaves them.
+void f_004D4B40(Ctx& c) {
+  if (const uint32_t cmd = CommandBuffer(c, 4)) Put(cmd, 9u);
+  c.esp += 4;
+}
+
+// Command 10 queued with its argument (8 bytes) for an argument above 0.
+void f_004D4B70(Ctx& c) {
+  c.edx = Arg(c, c.esp, 1);
+  if (int32_t(c.edx) > 0)
+    if (const uint32_t cmd = CommandBuffer(c, 8)) {
+      Put(cmd, 0xAu);
+      Put(cmd + 4, c.edx);
+    }
+  c.esp += 4;
+}
+
+// The stats 0x15364F4 that 0x4D3ED0 fills (EAX the argument).
+void f_004D4BB0(Ctx& c) {
+  c.eax = Arg(c, c.esp, 1);
+  Put(0x15364F4, c.eax);
+  c.esp += 4;
+}
+
+// What a trace from a point (start; dir: its end start + dir x 262144,
+// stored) hits (CM_Trace 0x41CD60, mask 0xF83FFF7, the zero box; results at
+// e - 0x30 with the fraction 1 to beat): EAX 0 for none (from inside a solid
+// (+0x2F), +0x2E set, a fraction of exactly 1 or no surface name (+0x24)),
+// else 1 with the outs filled (each size bytes, its last byte and first
+// cleared; EAX 0 when one ends full): the surface's name copied, its
+// material ((flags +0x1C >> 20) & 0x1F, 1-0x16: the names at 0x5646C0, else
+// "^1default^7"), "solid" or "^3nonsolid^7" by the contents' (+0x20) bit 1,
+// then each surface parameter of the table 0x564830 (name, surface flag
+// +8, content +0xC) whose flag the surface or whose content the contents
+// has, after a space. The first out's length is kept in the dir's argument
+// slot.
+void f_004D4BC0(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const uint32_t start = Arg(c, e, 1), dir = Arg(c, e, 2), results = e - 0x30, end = e - 0x3C;
+  auto done = [&](uint32_t eax) {
+    c.eax = eax;
+    c.ebx = ebx;
+    c.ebp = ebp;
+    c.esi = esi;
+    c.edi = edi;
+    c.esp = e + 4;
+  };
+  Put(end, Fst(St(Ld(dir)) * Ld(0x55B884) + Ld(start)));
+  Put(results, 0x3F800000u);
+  Put(end + 4, Fst(St(Ld(dir + 4)) * Ld(0x55B884) + Ld(start + 4)));
+  Put(end + 8, Fst(St(Ld(dir + 8)) * Ld(0x55B884) + Ld(start + 8)));
+  c.esp = e - 0x4C;
+  for (uint32_t v : {0u, 0xF83FFF7u, 0x537E54u, 0u, end, start, results}) Push(c, v);
+  c.eax = c.ecx = c.edx = 0;
+  Call(c, f_0041CD60, 0x4D4C29);
+  c.esp = e - 0x4C;
+  if (U8(results + 0x2F) || U8(results + 0x2E) || St(Ld(results)) == 1.0f || !U32(results + 0x24)) return done(0);
+  const uint32_t out0 = Arg(c, e, 3), out1 = Arg(c, e, 4), out2 = Arg(c, e, 5), size = Arg(c, e, 6);
+  const uint32_t flags = U32(results + 0x1C), contents = U32(results + 0x20);
+  for (uint32_t s = U32(results + 0x24), d = out0;; s++, d++) {
+    const uint8_t ch = U8(s);
+    Wr<uint8_t>(g_guest_base, d, ch);
+    if (!ch) break;
+  }
+  auto strncpy = [&](uint32_t to, uint32_t from, uint32_t n, uint32_t ret) {
+    for (uint32_t v : {n, from, to}) Push(c, v);
+    Call(c, f_0051AA00, ret);
+    c.esp = e - 0x4C;
+  };
+  auto len = [](uint32_t s) {
+    uint32_t n = 0;
+    while (U8(s + n)) n++;
+    return n;
+  };
+  c.esi = size;
+  c.edi = out1;
+  c.ebp = out2;
+  Wr<uint8_t>(g_guest_base, out1, 0);
+  Wr<uint8_t>(g_guest_base, out1 + size - 1, 0);
+  const int32_t material = int32_t(flags) >> 20 & 0x1F;
+  Wr<uint8_t>(g_guest_base, out2, 0);
+  Wr<uint8_t>(g_guest_base, out2 + size - 1, 0);
+  strncpy(out1, material > 0 && material < 0x17 ? U32(0x5646C0 + 16 * uint32_t(material)) : 0x542730, size,
+          0x4D4CB5);
+  if (U8(out1 + size - 1)) return done(0);
+  uint32_t len1 = len(out1);
+  Put(e + 8, len1);
+  strncpy(out2, contents & 1 ? 0x542728 : 0x542718, size, 0x4D4CF7);
+  if (U8(out2 + size - 1)) return done(0);
+  uint32_t len2 = len(out2);
+  for (uint32_t p = 0x564830; U32(p); p += 0x10) {
+    c.ebx = p;
+    if (U32(p + 8) & flags) {
+      Wr<uint8_t>(g_guest_base, out1 + len1, ' ');
+      len1++;
+      Put(e + 8, len1);
+      strncpy(out1 + len1, U32(p), size - len1, 0x4D4D58);
+      if (U8(out1 + size - 1)) return done(0);
+      len1 += len(out1 + len1);
+      Put(e + 8, len1);
+    }
+    if (U32(p + 0xC) & contents) {
+      Wr<uint8_t>(g_guest_base, out2 + len2, ' ');
+      len2++;
+      strncpy(out2 + len2, U32(p), size - len2, 0x4D4DAA);
+      if (U8(out2 + size - 1)) return done(0);
+      len2 += len(out2 + len2);
+    }
+  }
+  done(1);
+}
+
+// A font's height at a scale (font, scale): the refimport's 0x1549694 with
+// both, its +0x5004 times the scale, truncated (_ftol); EAX.
+void f_004D5D30(Ctx& c) {
+  const uint32_t e = c.esp;
+  Push(c, Arg(c, e, 2));
+  Push(c, Arg(c, e, 1));
+  CallPtr(c, U32(0x1549694), 0x4D5D40, 0x4D5D3A);
+  c.eax = uint32_t(Ftol(St(Ld(e + 8)) * Ld(c.eax + 0x5004)));
+  c.esp = e + 4;
+}
+
+// Text drawn (nine arguments) as 0x4D6400 with -1 and 0 after the sixth.
+void f_004D5D60(Ctx& c) {
+  const uint32_t e = c.esp;
+  for (int n : {9, 8, 7})
+    Push(c, Arg(c, e, n));
+  Push(c, 0);
+  Push(c, 0xFFFFFFFF);
+  for (int n : {6, 5, 4, 3, 2, 1}) Push(c, Arg(c, e, n));
+  Call(c, f_004D6400, 0x4D5D96);
+  c.esp = e + 4;
+}
+
+// The client's debug text (its block and count; 0x15495A0, 0x154959C) and
+// lines (0x15495B4, 0x15495B0) for the back end's debug draws (0x4AD5C0).
+// EAX and ECX the arguments.
+void f_004ADAD0(Ctx& c) {
+  c.eax = Arg(c, c.esp, 1);
+  c.ecx = Arg(c, c.esp, 2);
+  Put(0x15495A0, c.eax);
+  Put(0x154959C, c.ecx);
+  c.esp += 4;
+}
+void f_004ADAF0(Ctx& c) {
+  c.eax = Arg(c, c.esp, 1);
+  c.ecx = Arg(c, c.esp, 2);
+  Put(0x15495B4, c.eax);
+  Put(0x15495B0, c.ecx);
+  c.esp += 4;
+}
+
+// A number shown at a point for a while (point, number, colour, duration
+// in ms; 0x4AD480 draws them): 40-byte entries at 0x15495C0 (made at the
+// limit 0x15495BC's size by 0x42A480 when missing, the count 0x15495B8
+// then 0), unless the count is the limit: the point, the colour's three
+// components (+0xC), the number (+0x1C), the time 0x1536360 (+0x20) and the
+// duration (+0x24), the count and block read again for each. EAX the block,
+// ECX the count x 5, EDX the duration.
+void f_004ADB10(Ctx& c) {
+  const uint32_t e = c.esp;
+  c.eax = U32(0x15495C0);
+  if (!c.eax) {
+    Push(c, U32(0x15495BC) * 40);
+    Call(c, f_0042A480, 0x4ADB2A);
+    c.esp = e;
+    c.ecx = 0;
+    Put(0x15495C0, c.eax);
+    Put(0x15495B8, 0u);
+  } else {
+    c.ecx = U32(0x15495B8);
+  }
+  c.esp = e + 4;
+  if (c.ecx == U32(0x15495BC)) return;
+  auto field = [](uint32_t o, uint32_t v) { Put(U32(0x15495C0) + U32(0x15495B8) * 40 + o, v); };
+  const uint32_t org = Arg(c, e, 1), colour = Arg(c, e, 3);
+  Put(c.eax + c.ecx * 40, U32(org));
+  field(4, U32(org + 4));
+  field(8, U32(org + 8));
+  for (uint32_t k = 0; k < 0xC; k += 4) field(0xC + k, U32(colour + k));
+  field(0x1C, Arg(c, e, 2));
+  field(0x20, U32(kTime));
+  c.edx = Arg(c, e, 4);
+  field(0x24, c.edx);
+  c.eax = U32(0x15495C0);
+  c.ecx = U32(0x15495B8) * 5;
+  Put(0x15495B8, U32(0x15495B8) + 1);
+}
+
+// The commands so far run (0x4D41A0): when registered, the list's end and
+// the commands run (0x4CEA70) without the cvar 0x153455C. ECX unchanged.
+void f_004D41A0(Ctx& c) {
+  const uint32_t e = c.esp, ecx = c.ecx;
+  c.eax = U32(kRegistered);
+  if (c.eax) {
+    const uint32_t cmds = U32(kBackEndData) + kCmds;
+    c.edx = U32(0x153455C);
+    Put(cmds + U32(cmds + 0x40000), 0u);
+    Put(cmds + 0x40000, 0u);
+    c.eax = cmds;
+    c.esp = e - 4;
+    if (!CvarInt(0x153455C)) Call(c, f_004CEA70, 0x4D41DD);
+  }
+  c.ecx = ecx;
+  c.esp = e + 4;
+}
+
+// The light grid's settings for the frame (0x4A97B0): 0x15364C0 the cvar
+// 0x15344D4 within 0-2, the grid's size 0x15364C4 the cvar 0x153471C within
+// 1-5 and 0x15364C8 0.5 over its square, the light limit 0x15364BC the cvar
+// 0x1534480 within 0x15364C0 + 1 and 0x153475C; the size's cvar modified
+// (+0x14) clears the grid corners' cache (0xC952C8, 2 MB) and counters.
+// ECX the size's square (left in the slot of the ECX it saves).
+void f_004A97B0(Ctx& c) {
+  int32_t mode = CvarInt(0x15344D4);
+  Put(0x15364C0, uint32_t(mode));
+  if (mode < 0) Put(0x15364C0, uint32_t(mode = 0));
+  else if (mode > 2) Put(0x15364C0, uint32_t(mode = 2));
+  const uint32_t cvar = U32(0x153471C);
+  int32_t n = I32(cvar + 0x20);
+  Put(0x15364C4, uint32_t(n));
+  if (n < 1) Put(0x15364C4, uint32_t(n = 1));
+  else if (n > 5) Put(0x15364C4, uint32_t(n = 5));
+  c.ecx = uint32_t(n * n);
+  const uint32_t limit = U32(0x1534480);
+  Put(0x15364C8, Fst(Ld(0x55B590) / FromInt(int32_t(c.ecx))));
+  c.eax = U32(limit + 0x20);
+  Put(0x15364BC, c.eax);
+  if (int32_t(c.eax) < mode + 1) Put(0x15364BC, c.eax = uint32_t(mode + 1));
+  if (int32_t(c.eax) > I32(0x153475C)) Put(0x15364BC, U32(0x153475C));
+  c.edx = cvar;
+  if (U32(cvar + 0x14)) {
+    Put(cvar + 0x14, 0u);
+    std::memset(g_guest_base + 0xC952C8, 0, 0x200000);
+    for (uint32_t va : {0xC951A4u, 0xC951A8u, 0xC952C0u, 0xC952C4u}) Put(va, 0u);
+    c.eax = 0;
+  }
+  c.esp += 4;
+}
+
+// One world surface of type 0x1A a frame (0x4D0870): from the cursor
+// 0x1538514 on (wrapping at the world's surface count +0x9C, stopping at
+// the cursor), the next whose reference (12 bytes from +0xA0) points to
+// one has 0x4D0700 called (ESI the surface; its reference's +4 +0x18C, and
+// the least of its +0x44 16-bit indexes from +0x48 (signed) x 32).
+void f_004D0870(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, world = U32(kWorld);
+  if (world) {
+    const uint32_t from = U32(0x1538514);
+    for (uint32_t i = from + 1;; i++) {
+      Put(0x1538514, i);
+      if (i == U32(world + 0x9C)) Put(0x1538514, i = 0);
+      if (i == from) break;
+      const uint32_t surf = U32(U32(world + 0xA0) + i * 12 + 8);
+      if (U32(surf) != 0x1A) continue;
+      const int32_t n = I32(surf + 0x44);
+      uint32_t least = U16(surf + 0x48);
+      for (int32_t k = 1; k < n; k++)
+        if (int32_t(least) > int32_t(U16(surf + 0x48 + 2 * uint32_t(k)))) least = U16(surf + 0x48 + 2 * uint32_t(k));
+      c.esi = surf;
+      c.esp = e - 8;
+      Push(c, least << 5);
+      Push(c, U32(U32(U32(world + 0xA0) + i * 12 + 4) + 0x18C));
+      Call(c, f_004D0700, 0x4D08F0);
+      break;
+    }
+  }
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// One model surface a frame (0x4F8D50; stack passed on): from the cursors
+// 0x15384FC (model), 0x1538500 (level) and 0x1538504 (surface) the next
+// surface of a model with an XModel (+0x54; its levels' surfaces as the
+// DObj accessors read them, 16-bit counts) has 0x4815E0 called (ESI the
+// surface); the models wrap at 0x15384F8 (signed), stopping at the model
+// the search started from.
+void f_004F8D50(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, ebp = c.ebp, esi = c.esi, edi = c.edi;
+  const int32_t models = I32(0x15384F8);
+  uint32_t level = U32(0x1538500), model = U32(0x15384FC), surf = U32(0x1538504);
+  auto xmodel = [&] { return U32(U32(0x15364F8 + 4 * model) + 0x54); };
+  for (;;) {
+    if (xmodel()) {
+      const uint32_t s = U32(U32(U32(xmodel() + 4) + 0x14 + 0x14 * level) + 4);
+      Put(0x1538504, ++surf);
+      if (int32_t(surf) < int32_t(int16_t(U16(s + 4)))) {
+        c.esi = U32(U32(s + 8) + 4 * surf);
+        c.esp = e - 0x10;
+        Push(c, Arg(c, e, 1));
+        Call(c, f_004815E0, 0x4F8E05);
+        break;
+      }
+      Put(0x1538504, surf = 0);
+      Put(0x1538500, ++level);
+      if (int32_t(level) < int32_t(int16_t(U16(U32(xmodel() + 4) + 0x64)))) continue;
+    }
+    Put(0x1538500, level = 0);
+    const uint32_t from = model;
+    do {
+      Put(0x15384FC, ++model);
+      if (int32_t(model) >= models) Put(0x15384FC, model = 0);
+    } while (model != from && !xmodel());
+    if (model == from) break;
+  }
+  c.ebx = ebx;
+  c.ebp = ebp;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// r_textureMode applied (0x4DF740; EAX its string): the mode of that name
+// (the table 0x564308 of six: name, minification and magnification
+// filters; Q_stricmpn) into 0x5642FC and 0x564300, and each mipmapped image
+// (+0x64 bit 0) bound (GL_Bind) and given both through glTexParameter
+// (0x15356BC, its target +0x54); "bad filter name" through ri.Printf for
+// none.
+void f_004DF740(Ctx& c) {
+  const uint32_t e = c.esp, ebx = c.ebx, esi = c.esi, edi = c.edi, name = c.eax;
+  c.esp = e - 0xC;
+  uint32_t i = 0;
+  for (; i < 6; i++) {
+    const uint32_t mode = 0x564308 + 12 * i;
+    c.esi = mode;
+    c.edi = i;
+    if (U32(mode) && name && SameName(c, name, U32(mode), 0x4DF766)) break;
+  }
+  if (i == 6) {
+    Push(c, 0x541A64);
+    Push(c, 0);
+    CallPtr(c, U32(kPrintfPtr), 0x4DF788, 0x4DF782);
+  } else {
+    Put(0x5642FC, U32(0x56430C + 12 * i));
+    Put(0x564300, U32(0x564310 + 12 * i));
+    c.ebx = (name & 0xFFFFFF00u) | 1;
+    for (int32_t k = 0; k < I32(0x153A51C); k++) {
+      const uint32_t img = U32(0x153A520 + 4 * uint32_t(k));
+      c.edi = uint32_t(k);
+      c.esi = img;
+      if (!(U8(img + 0x64) & 1)) continue;
+      Call(c, f_004CB3B0, 0x4DF7D1);
+      for (uint32_t v : {U32(0x5642FC), 0x2801u, U32(img + 0x54)}) Push(c, v);
+      CallPtr(c, U32(0x15356BC), 0x4DF7E6, 0x4DF7E0);
+      for (uint32_t v : {U32(0x564300), 0x2800u, U32(img + 0x54)}) Push(c, v);
+      CallPtr(c, U32(0x15356BC), 0x4DF7FC, 0x4DF7F6);
+    }
+  }
+  c.ebx = ebx;
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
+}
+
+// r_nv_fogdist_mode applied (0x4A70A0): GL_EYE_PLANE_ABSOLUTE_NV,
+// GL_EYE_PLANE or GL_EYE_RADIAL_NV (Q_stricmpn) into 0x1534798 and glFogi
+// (GL_FOG_DISTANCE_MODE_NV); another name (or none) is set to
+// GL_EYE_RADIAL_NV through ri.Cvar_Set first.
+void f_004A70A0(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, name = U32(U32(0x1534558) + 4);
+  static constexpr uint32_t kModes[][4] = {{0x54E4BC, 0x855C, 0x4A70C2, 0x4A70E2},
+                                           {0x54E4AC, 0x2502, 0x4A70F9, 0x4A7119},
+                                           {0x54E498, 0x855B, 0x4A7130, 0x4A7150}};
+  c.esi = name;
+  c.esp = e - 4;
+  auto fogi = [&](uint32_t ret) {
+    Push(c, U32(0x1534798));
+    Push(c, 0x855A);
+    CallPtr(c, U32(0x1534C84), ret, ret - 6);
+  };
+  for (const auto& m : kModes) {
+    if (!name) break;
+    if (SameName(c, m[0], name, m[2])) {
+      Put(0x1534798, m[1]);
+      fogi(m[3]);
+      c.esi = esi;
+      c.esp = e + 4;
+      return;
+    }
+  }
+  Push(c, 0x54E498);
+  Push(c, 0x54E484);
+  Put(0x1534798, 0x855Bu);
+  CallPtr(c, U32(kCvarSetPtr), 0x4A716C, 0x4A7166);
+  c.esp = e - 4;
+  fogi(0x4A7181);
+  c.esi = esi;
+  c.esp = e + 4;
+}
+
+// RE_BeginFrame (its error strings; stereo frame): when registered, the
+// frame count 0x1535A24 incremented, 0x1534628 and 0x1535A2C cleared;
+// r_measureOverdraw on: off again (ri.Printf's warning, ri.Cvar_Set) with
+// fewer than 4 stencil bits (0x1534768) or cg_shadows 2, else the commands
+// so far run (0x4D41A0) and the stencil set to count (glEnable, 0x15355D0
+// -1, 0x1535754 0, glStencilFunc, glStencilOp); off but modified: the
+// commands run and the stencil test disabled; its modified flag cleared.
+// r_textureMode modified: the commands run, 0x4DF740. The light grid's
+// settings (0x4A97B0). With the PN triangles entry 0x15348C0: each of
+// r_ati_truform_tess (above the maximum 0x15347AC lowered to it through
+// va("%d")), _pointmode (LINEAR or CUBIC into 0x15347B4; another set to
+// LINEAR, CUBIC kept) and _normalmode (LINEAR or QUADRATIC into 0x15347B0;
+// another set to LINEAR, LINEAR kept) that is modified is applied. With
+// 0x1534794, r_nv_fogdist_mode modified (0x4A70A0); r_gamma modified: the
+// commands run, 0x4E59D0; with 0x1534788 and r_vbo_paranoia, 0x4D0870,
+// 0x4FC1B0(3) and 0x4F8D50(3). Without r_ignoreGLErrors: the commands run
+// and glGetError, an error through ri.Error. Then the draw buffer command
+// (id 8, 8 bytes): with stereo (0x15347D8) GL_BACK_LEFT or GL_BACK_RIGHT
+// for the frame 1 or 2 (else ri.Error, the buffer not set); without, an
+// error for a frame other than 0, then GL_FRONT for r_drawBuffer
+// "GL_FRONT" (Q_stricmpn), else GL_BACK.
+void f_004D4680(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi;
+  auto done = [&] {
+    c.esi = esi;
+    c.edi = edi;
+    c.esp = e + 4;
+  };
+  c.esp = e - 4;
+  c.edi = 0;
+  if (!U32(kRegistered)) return done();
+  Put(0x1534628, 0u);
+  Put(kFrameCount, U32(kFrameCount) + 1);
+  Put(0x1535A2C, 0u);
+  auto cvarSet = [&](uint32_t name, uint32_t value, uint32_t ret) {
+    Push(c, value);
+    Push(c, name);
+    CallPtr(c, U32(kCvarSetPtr), ret, ret - 6);
+  };
+  auto gl = [&](std::initializer_list<uint32_t> args, uint32_t ptr, uint32_t ret) {
+    for (uint32_t v : args) Push(c, v);
+    CallPtr(c, U32(ptr), ret, ret - 6);
+  };
+  if (CvarInt(0x15343EC)) {
+    if (const int32_t bits = I32(0x1534768); bits < 4) {
+      for (uint32_t v : {uint32_t(bits), 0x54283Cu, 0u}) Push(c, v);
+      CallPtr(c, U32(kPrintfPtr), 0x4D46CE, 0x4D46C8);
+      cvarSet(0x54D9E4, 0x55B190, 0x4D46DE);
+      c.esp = e - 4;
+      Put(U32(0x15343EC) + 0x14, 0u);
+    } else if (CvarInt(0x15343D8) == 2) {
+      Push(c, 0x5427F0);
+      Push(c, 0);
+      CallPtr(c, U32(kPrintfPtr), 0x4D4706, 0x4D4700);
+      cvarSet(0x54D9E4, 0x55B190, 0x4D4716);
+      c.esp = e - 4;
+      Put(U32(0x15343EC) + 0x14, 0u);
+    } else {
+      Call(c, f_004D41A0, 0x4D4729);
+      gl({0xB90}, 0x1534F68, 0x4D4734);
+      gl({0xFFFFFFFF}, 0x15355D0, 0x4D473C);
+      gl({0}, 0x1535754, 0x4D4743);
+      gl({0xFFFFFFFF, 0, 0x207}, 0x1534E7C, 0x4D4751);
+      gl({0x1E02, 0x1E02, 0x1E00}, 0x1535428, 0x4D4766);
+    }
+  } else if (U32(U32(0x15343EC) + 0x14)) {
+    Call(c, f_004D41A0, 0x4D4772);
+    gl({0xB90}, 0x15349E0, 0x4D477D);
+  }
+  Put(U32(0x15343EC) + 0x14, 0u);
+  if (U32(U32(0x1534414) + 0x14)) {
+    Call(c, f_004D41A0, 0x4D4795);
+    c.eax = U32(U32(0x1534414) + 4);
+    Call(c, f_004DF740, 0x4D47A3);
+    Put(U32(0x1534414) + 0x14, 0u);
+  }
+  c.esp = e - 8;
+  Call(c, f_004A97B0, 0x4D47B1);
+  if (U32(0x15348C0)) {
+    if (const uint32_t tess = U32(0x1534428); U32(tess + 0x14)) {
+      Put(tess + 0x14, 0u);
+      if (FromInt(I32(0x15347AC)) < Ld(tess + 0x1C)) {
+        Push(c, U32(0x15347AC));
+        Push(c, 0x55AE18);
+        Call(c, f_00440940, 0x4D47EC);
+        Push(c, c.eax);
+        Push(c, 0x54E470);
+        CallPtr(c, U32(kCvarSetPtr), 0x4D47F8, 0x4D47F2);
+        c.esp = e - 8;
+      }
+      gl({U32(U32(0x1534428) + 0x20), 0x87F4}, 0x15348C0, 0x4D4810);
+    }
+    // The point and normal modes: their cvars, names, values, the global
+    // they go to, the PN triangles enum and the return addresses.
+    static constexpr uint32_t kModes[][9] = {
+        {0x15344BC, 0x54DFE4, 0x87F5, 0x87F6, 0x15347B4, 0x54DFCC, 0x87F6, 0x87F2, 0},
+        {0x15344B4, 0x54E008, 0x87F7, 0x87F8, 0x15347B0, 0x54DFEC, 0x87F7, 0x87F3, 1}};
+    static constexpr uint32_t kRets[][4] = {{0x4D4835, 0x4D485A, 0x4D4884, 0x4D4898},
+                                            {0x4D48BD, 0x4D48E2, 0x4D490C, 0x4D4921}};
+    for (const auto& m : kModes) {
+      const uint32_t* r = kRets[m[8]];
+      const uint32_t cvar = U32(m[0]);
+      if (!U32(cvar + 0x14)) continue;
+      Put(cvar + 0x14, 0u);
+      const uint32_t name = U32(cvar + 4);
+      c.esi = name;
+      if (name && SameName(c, 0x5427E4, name, r[0]))
+        Put(m[4], m[2]);
+      else if (name && SameName(c, m[1], name, r[1]))
+        Put(m[4], m[3]);
+      else {
+        Push(c, 0x5427E4);
+        Push(c, m[5]);
+        Put(m[4], m[6]);
+        CallPtr(c, U32(kCvarSetPtr), r[2], r[2] - 6);
+        c.esp = e - 8;
+      }
+      gl({U32(m[4]), m[7]}, 0x15348C0, r[3]);
+    }
+  }
+  if (U32(0x1534794) && U32(U32(0x1534558) + 0x14)) {
+    Put(U32(0x1534558) + 0x14, 0u);
+    Call(c, f_004A70A0, 0x4D493B);
+  }
+  if (U32(U32(0x15343F8) + 0x14)) {
+    Put(U32(0x15343F8) + 0x14, 0u);
+    Call(c, f_004D41A0, 0x4D494D);
+    Call(c, f_004E59D0, 0x4D4952);
+  }
+  if (U32(0x1534788) && CvarInt(0x15346BC)) {
+    Call(c, f_004D0870, 0x4D496A);
+    Push(c, 3);
+    Call(c, f_004FC1B0, 0x4D4971);
+    Push(c, 3);
+    Call(c, f_004F8D50, 0x4D4978);
+    c.esp = e - 8;
+  }
+  if (!CvarInt(0x1534690)) {
+    Call(c, f_004D41A0, 0x4D498A);
+    CallPtr(c, U32(0x153483C), 0x4D4990, 0x4D498A);
+    if (c.eax) {
+      for (uint32_t v : {c.eax, 0x5427B4u, 0u}) Push(c, v);
+      CallPtr(c, U32(kErrorPtr), 0x4D49A1, 0x4D499B);
+      c.esp = e - 8;
+    }
+  }
+  const uint32_t cmd = CommandBuffer(c, 8);
+  if (!cmd) return done();
+  c.esi = cmd;
+  Put(cmd, 8u);
+  const uint32_t frame = Arg(c, e, 1);
+  if (U32(0x15347D8)) {
+    if (frame == 1 || frame == 2) {
+      Put(cmd + 4, frame == 1 ? 0x402u : 0x403u);
+    } else {
+      for (uint32_t v : {frame, 0x542778u, 0u}) Push(c, v);
+      CallPtr(c, U32(kErrorPtr), 0x4D4A10, 0x4D4A0A);
+    }
+    return done();
+  }
+  if (frame) {
+    for (uint32_t v : {frame, 0x54273Cu, 0u}) Push(c, v);
+    CallPtr(c, U32(kErrorPtr), 0x4D4A27, 0x4D4A21);
+    c.esp = e - 8;
+  }
+  const uint32_t buffer = U32(U32(0x15344E8) + 4);
+  Put(cmd + 4, buffer && SameName(c, 0x54C9C4, buffer, 0x4D4A46) ? 0x404u : 0x405u);
+  done();
+}
+
+// An image of 0x1535A3C (by the sixth argument) uploaded from data (stack:
+// two unused, columns, rows, data, the image, whether it changed): bound
+// (GL_Bind); at its size (16-bit +0x40, +0x42) and changed, glTexSubImage2D;
+// at another, the size into +0x44/+0x40 and +0x46/+0x42 (the image read
+// again for each), glTexImage2D (RGBA, 3 components) and glTexParameter's
+// linear filters and clamping to the edge.
+void f_004CD1F0(Ctx& c) {
+  const uint32_t e = c.esp, esi = c.esi, edi = c.edi, n = Arg(c, e, 6);
+  auto img = [&] { return U32(0x1535A3C + 4 * n); };
+  auto gl = [&](std::initializer_list<uint32_t> args, uint32_t ptr, uint32_t ret) {
+    for (uint32_t v : args) Push(c, v);
+    CallPtr(c, U32(ptr), ret, ret - 6);
+  };
+  c.esp = e - 8;
+  c.esi = img();
+  c.edi = n;
+  Call(c, f_004CB3B0, 0x4CD202);
+  const uint32_t cols = Arg(c, e, 3), rows = Arg(c, e, 4), data = Arg(c, e, 5);
+  c.eax = cols;
+  c.ecx = rows;
+  c.edx = img();
+  if (cols == U16(c.edx + 0x40) && rows == U16(c.edx + 0x42)) {
+    c.edx = Arg(c, e, 7);
+    if (c.edx) gl({data, 0x1401, 0x1908, rows, cols, 0, 0, 0, 0xDE1}, 0x1534E4C, 0x4CD24F);
+  } else {
+    Wr<uint16_t>(g_guest_base, img() + 0x44, uint16_t(cols));
+    Wr<uint16_t>(g_guest_base, img() + 0x40, uint16_t(cols));
+    Wr<uint16_t>(g_guest_base, img() + 0x46, uint16_t(rows));
+    Wr<uint16_t>(g_guest_base, img() + 0x42, uint16_t(rows));
+    gl({data, 0x1401, 0x1908, 0, rows, cols, 3, 0, 0xDE1}, 0x1534CC4, 0x4CD299);
+    gl({0x2601, 0x2801, 0xDE1}, 0x15356BC, 0x4CD2AE);
+    gl({0x2601, 0x2800, 0xDE1}, 0x15356BC, 0x4CD2C3);
+    gl({0x812F, 0x2802, 0xDE1}, 0x15356BC, 0x4CD2D8);
+    gl({0x812F, 0x2803, 0xDE1}, 0x15356BC, 0x4CD2ED);
+  }
+  c.esi = esi;
+  c.edi = edi;
+  c.esp = e + 4;
 }
 
 }  // namespace recomp::gen

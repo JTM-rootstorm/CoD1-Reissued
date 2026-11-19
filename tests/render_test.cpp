@@ -71,18 +71,23 @@
 // corners' cache (its bits reversed, sorted list and insertion, a corner's
 // lights found, a point light's reach, the sun's traces) and whether a
 // light reaches a point; the debug draws, the text queue and the warning
-// icons (StatMon_UpdateEntry); the vector helpers alone. Values are now and then
+// icons (StatMon_UpdateEntry); the refexport's per-frame entries and the
+// back end's debug draws (FrameCase; the GL entry points and refimport
+// functions they call through pointers recorded, kPtrs); the vector
+// helpers alone. Values are now and then
 // zeros, denormals, infinities, NaNs or huge. Captures
 // (tests/render_capture.h) add the game's own calls.
 
 #include <algorithm>
 #include <bit>
+#include <cctype>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <random>
+#include <set>
 #include <strings.h>
 #include <string>
 #include <vector>
@@ -143,13 +148,54 @@ constexpr uint32_t kThreadData = 0x6FEFF000;
 // image registered: name, 1; a handle, now and then 0).
 constexpr uint32_t kTimeGetTimePtr = 0x53331C, kTimeGetTime = 0x7FFE00D0;
 constexpr uint32_t kRegisterPtr = 0x1426D74, kRegister = 0x7FFE00E0;
+// The GL entry points (stdcall) and the refimport's functions (cdecl) the
+// scene's and the frame's entries call through their pointers, recorded
+// with their stack arguments: glGetError answers 0, now and then an error;
+// the refimport's 0x1549694 the case's font (g_font).
+struct PtrInfo {
+  uint32_t ptr;
+  int args;
+  bool cdecl;
+};
+constexpr PtrInfo kPtrs[] = {
+    {0x153495C, 1, false},  // glDisableClientState
+    {0x15354F0, 4, false},  // glVertexPointer
+    {0x153503C, 3, false},  // glNormalPointer
+    {0x15349A0, 4, false},  // glTexCoordPointer
+    {0x153542C, 4, false},  // glColorPointer
+    {0x1534D00, 1, false},  // glLoadMatrixf
+    {0x1534D6C, 1, false},  // glMatrixMode
+    {0x15349E0, 1, false},  // glDisable
+    {0x1534F68, 1, false},  // glEnable
+    {0x1534DDC, 2, false},  // glLockArraysEXT
+    {0x1534C2C, 0, false},  // glUnlockArraysEXT
+    {0x15357B8, 1, false},  // a colour
+    {0x153501C, 3, false},  // glDrawArrays
+    {0x153539C, 4, false},  // glDepthRange
+    {0x1535114, 1, false},
+    {0x1534E4C, 9, false},  // glTexSubImage2D
+    {0x1534CC4, 9, false},  // glTexImage2D
+    {0x15356BC, 3, false},  // glTexParameter
+    {0x15355D0, 1, false},
+    {0x1535754, 1, false},
+    {0x1534E7C, 3, false},  // glStencilFunc
+    {0x1535428, 3, false},  // glStencilOp
+    {0x153483C, 0, false},  // glGetError
+    {0x15348C0, 2, false},  // the PN triangles' parameter
+    {0x1534C84, 2, false},  // glFogi
+    {0x1549628, 2, true},   // ri.Cvar_Set
+    {0x1549650, 1, true},   // a pending free of kind 0
+    {0x1549694, 2, true},   // a font at a scale
+};
+constexpr uint32_t kPtrTargets = 0x7FFE1000;  // + 0x10 x index
+uint32_t g_font = 0;
 uint32_t g_heap_top = kHeap;
 
 enum Reg { kEax = 1, kEcx = 2, kEdx = 4, kEbx = 8, kEsi = 16, kEdi = 32, kEbp = 64 };
 constexpr int kSaved = kEbx | kEsi | kEdi | kEbp;
 
 struct CallRec {
-  uint32_t va, ret, esp, regs[7], args[8];
+  uint32_t va, ret, esp, regs[7], args[16];
   bool operator==(const CallRec&) const = default;
 };
 std::vector<CallRec> g_calls;
@@ -188,6 +234,7 @@ constexpr uint32_t kPoints = kDebug + 0x6000, kMaxPoints = 1024;     // 12 each
 constexpr uint32_t kPolys = kDebug + 0x9000, kMaxPolys = 256;        // 24 each
 constexpr uint32_t kDebugCvar = kDebug + 0xB000;                     // 0x15346E4's
 constexpr uint32_t kVaText = kDebug + 0xB100;                        // va's result
+constexpr uint32_t kSurfName = kDebug + 0xB200;                      // a trace's surface name
 constexpr uint32_t kClientBytes = kDebug + 0xC000, kClientDwords = kDebug + 0xE000;
 constexpr uint32_t kRecords = kDebug + 0x13000, kMaxRecords = 64;    // 24 each
 constexpr uint32_t kClientLines = kDebug + 0x40000, kMaxClient = 64;  // 0x2C, 1, 4 each
@@ -286,6 +333,18 @@ constexpr StubInfo kStubs[] = {
     {0x42A480, 0, 1},                           // a zeroed allocation
     {0x42E660, 0, 3},                           // the error routine (code, format, entry)
     {0x52AB6F, 0, 2},                           // _stricmp
+    {0x4CEA70, kEax, 0},                        // the back end's commands run
+    {0x4CB3B0, kEsi, 0},                        // GL_Bind
+    {0x4CB710, kEax, 0},                        // GL_State
+    {0x4CBBE0, 0, 1},                           // the client arrays
+    {0x4ADC20, 0, 0},                           // the immediate-mode batch begun
+    {0x4ADEC0, 0, 3},                           // a vertex of the batch
+    {0x4ACF50, kEax, 1},                        // debug text drawn
+    {0x4D6400, 0, 11},                          // the text command
+    {0x4D0700, kEsi, 2},                        // a world surface's vertices
+    {0x4815E0, kEsi, 1},                        // a model surface's vertices
+    {0x4FC1B0, 0, 1},                           // the per-frame vertex buffers
+    {0x4E59D0, 0, 0},                           // r_gamma applied
     {0x431CF0, kEax, 2},                        // Cvar_Set
     {0x42E300, 0, 1},                           // a print
     {0x51D45A, 0, 3},                           // fprintf to the log
@@ -371,7 +430,18 @@ void Stub(Ctx& c, uint32_t va, int regs, int args) {
     Wr(r.args[0] + 0x1C, h);
     if (Rd(r.args[0] + 0x30) == 0x4AA869)
       for (uint32_t i = 0; i < 0xC; i += 4) Wr(r.args[2] + 0x10 + i, k * 0x27D4EB2Fu + i);
+    // Under a trace's surface names (0x4D4BC0): +0x2E now and then, the
+    // surface's name (+0x24) of up to 40 letters, now and then none.
+    if (r.ret == 0x4D4C29) {
+      g_mem.write<uint8_t>(r.args[0] + 0x2E, (h >> 12) % 8 == 0);
+      const uint32_t len = (h >> 16) % 41;
+      for (uint32_t i = 0; i <= len; i++) g_mem.write<uint8_t>(kSurfName + i, i < len ? uint8_t('a' + (h + i) % 26) : 0);
+      Wr(r.args[0] + 0x24, (h >> 24) % 8 ? kSurfName : 0);
+    }
   }
+  // The back end's command loop leaves its time in 0x1549B34 (the frame's
+  // end hands it out).
+  if (va == 0x4CEA70) Wr(0x1549B34, k * 0x9E3779B9u);
   if (va == 0x4771B0)
     for (uint32_t i = 0; i < g_mem.read<uint8_t>(r.args[0] + 0x17); i++) Wr(c.edx + 4 * i, g_bone_bounds + 24 * ((k + i) % 8));
   // A composite model's surfaces: none without submodels, now and then
@@ -534,6 +604,44 @@ void f_004A9A30_lifted(Ctx& c);
 void f_004A9A90_lifted(Ctx& c);
 void f_004AD860_lifted(Ctx& c);
 void f_00447CA0_lifted(Ctx& c);
+void f_004DE950_lifted(Ctx& c);
+void f_004DEA40_lifted(Ctx& c);
+void f_004DEAE0_lifted(Ctx& c);
+void f_004DED10_lifted(Ctx& c);
+void f_004DEE20_lifted(Ctx& c);
+void f_004DA0C0_lifted(Ctx& c);
+void f_004C8AA0_lifted(Ctx& c);
+void f_004C8C40_lifted(Ctx& c);
+void f_004C8C90_lifted(Ctx& c);
+void f_004CEC10_lifted(Ctx& c);
+void f_004DB370_lifted(Ctx& c);
+void f_004DF5F0_lifted(Ctx& c);
+void f_004DF600_lifted(Ctx& c);
+void f_004F8C20_lifted(Ctx& c);
+void f_004DF810_lifted(Ctx& c);
+void f_004D3ED0_lifted(Ctx& c);
+void f_004D4A60_lifted(Ctx& c);
+void f_004D4B40_lifted(Ctx& c);
+void f_004D4B70_lifted(Ctx& c);
+void f_004D4BB0_lifted(Ctx& c);
+void f_004D4BC0_lifted(Ctx& c);
+void f_004D5D30_lifted(Ctx& c);
+void f_004D5D60_lifted(Ctx& c);
+void f_004ADAD0_lifted(Ctx& c);
+void f_004ADAF0_lifted(Ctx& c);
+void f_004ADB10_lifted(Ctx& c);
+void f_004D41A0_lifted(Ctx& c);
+void f_004A97B0_lifted(Ctx& c);
+void f_004D0870_lifted(Ctx& c);
+void f_004F8D50_lifted(Ctx& c);
+void f_004DF740_lifted(Ctx& c);
+void f_004A70A0_lifted(Ctx& c);
+void f_004D4680_lifted(Ctx& c);
+void f_004CD1F0_lifted(Ctx& c);
+void f_004AD480_lifted(Ctx& c);
+void f_004ACB20_lifted(Ctx& c);
+void f_004ACDD0_lifted(Ctx& c);
+void f_004AD5C0_lifted(Ctx& c);
 // ...call each other, not the native code (tests/render_native.cpp renames
 // its entries).
 void f_004D68E0(Ctx& c) { f_004D68E0_lifted(c); }
@@ -655,6 +763,17 @@ void f_004AC780(Ctx& c) { f_004AC780_lifted(c); }
 void f_004A9C30(Ctx& c) { f_004A9C30_lifted(c); }
 void f_004A9A30(Ctx& c) { f_004A9A30_lifted(c); }
 void f_004A9A90(Ctx& c) { f_004A9A90_lifted(c); }
+void f_004DF810(Ctx& c) { f_004DF810_lifted(c); }
+void f_004D3ED0(Ctx& c) { f_004D3ED0_lifted(c); }
+void f_004D41A0(Ctx& c) { f_004D41A0_lifted(c); }
+void f_004DF740(Ctx& c) { f_004DF740_lifted(c); }
+void f_004A97B0(Ctx& c) { f_004A97B0_lifted(c); }
+void f_004A70A0(Ctx& c) { f_004A70A0_lifted(c); }
+void f_004D0870(Ctx& c) { f_004D0870_lifted(c); }
+void f_004F8D50(Ctx& c) { f_004F8D50_lifted(c); }
+void f_004AD480(Ctx& c) { f_004AD480_lifted(c); }
+void f_004ACB20(Ctx& c) { f_004ACB20_lifted(c); }
+void f_004ACDD0(Ctx& c) { f_004ACDD0_lifted(c); }
 // The writes the lifted side's callers have these make outside the
 // windows (Touch, above): the bucket and the record of a grid corner, a
 // queued polygon and its points, a line, a client's line.
@@ -714,6 +833,210 @@ void f_0051B3DD(Ctx& c) { f_0051B3DD_lifted(c); }
 // reaches it.
 void f_00508940_lifted(Ctx& c);
 void f_00508940(Ctx& c) { f_00508940_lifted(c); }
+// Native in the game (src/render.cpp, src/render_backend.cpp,
+// src/screen2d.cpp, src/skinning.cpp): reached only by the lifted bodies
+// of stubs (the back end's command loop 0x4CEA70 under the frame's
+// entries) and of what they call, never run.
+void f_004AD5C0_lifted(Ctx& c);
+void f_004AD5C0(Ctx& c) { f_004AD5C0_lifted(c); }
+void f_004ADAD0_lifted(Ctx& c);
+void f_004ADAD0(Ctx& c) { f_004ADAD0_lifted(c); }
+void f_004ADAF0_lifted(Ctx& c);
+void f_004ADAF0(Ctx& c) { f_004ADAF0_lifted(c); }
+void f_004ADB10_lifted(Ctx& c);
+void f_004ADB10(Ctx& c) { f_004ADB10_lifted(c); }
+void f_004ADFE0_lifted(Ctx& c);
+void f_004ADFE0(Ctx& c) { f_004ADFE0_lifted(c); }
+void f_004C8830_lifted(Ctx& c);
+void f_004C8830(Ctx& c) { f_004C8830_lifted(c); }
+void f_004C89D0_lifted(Ctx& c);
+void f_004C89D0(Ctx& c) { f_004C89D0_lifted(c); }
+void f_004C8A20_lifted(Ctx& c);
+void f_004C8A20(Ctx& c) { f_004C8A20_lifted(c); }
+void f_004C8AA0_lifted(Ctx& c);
+void f_004C8AA0(Ctx& c) { f_004C8AA0_lifted(c); }
+void f_004C8C40_lifted(Ctx& c);
+void f_004C8C40(Ctx& c) { f_004C8C40_lifted(c); }
+void f_004C8C90_lifted(Ctx& c);
+void f_004C8C90(Ctx& c) { f_004C8C90_lifted(c); }
+void f_004C8CE0_lifted(Ctx& c);
+void f_004C8CE0(Ctx& c) { f_004C8CE0_lifted(c); }
+void f_004C9340_lifted(Ctx& c);
+void f_004C9340(Ctx& c) { f_004C9340_lifted(c); }
+void f_004C9440_lifted(Ctx& c);
+void f_004C9440(Ctx& c) { f_004C9440_lifted(c); }
+void f_004CB5D0_lifted(Ctx& c);
+void f_004CB5D0(Ctx& c) { f_004CB5D0_lifted(c); }
+void f_004CB640_lifted(Ctx& c);
+void f_004CB640(Ctx& c) { f_004CB640_lifted(c); }
+void f_004CBFE0_lifted(Ctx& c);
+void f_004CBFE0(Ctx& c) { f_004CBFE0_lifted(c); }
+void f_004CC050_lifted(Ctx& c);
+void f_004CC050(Ctx& c) { f_004CC050_lifted(c); }
+void f_004CC300_lifted(Ctx& c);
+void f_004CC300(Ctx& c) { f_004CC300_lifted(c); }
+void f_004CC440_lifted(Ctx& c);
+void f_004CC440(Ctx& c) { f_004CC440_lifted(c); }
+void f_004CC670_lifted(Ctx& c);
+void f_004CC670(Ctx& c) { f_004CC670_lifted(c); }
+void f_004CCC10_lifted(Ctx& c);
+void f_004CCC10(Ctx& c) { f_004CCC10_lifted(c); }
+void f_004CD1F0_lifted(Ctx& c);
+void f_004CD1F0(Ctx& c) { f_004CD1F0_lifted(c); }
+void f_004CD300_lifted(Ctx& c);
+void f_004CD300(Ctx& c) { f_004CD300_lifted(c); }
+void f_004CD540_lifted(Ctx& c);
+void f_004CD540(Ctx& c) { f_004CD540_lifted(c); }
+void f_004CD740_lifted(Ctx& c);
+void f_004CD740(Ctx& c) { f_004CD740_lifted(c); }
+void f_004CDA10_lifted(Ctx& c);
+void f_004CDA10(Ctx& c) { f_004CDA10_lifted(c); }
+void f_004CDCC0_lifted(Ctx& c);
+void f_004CDCC0(Ctx& c) { f_004CDCC0_lifted(c); }
+void f_004CE290_lifted(Ctx& c);
+void f_004CE290(Ctx& c) { f_004CE290_lifted(c); }
+void f_004CE2F0_lifted(Ctx& c);
+void f_004CE2F0(Ctx& c) { f_004CE2F0_lifted(c); }
+void f_004CE340_lifted(Ctx& c);
+void f_004CE340(Ctx& c) { f_004CE340_lifted(c); }
+void f_004CE5C0_lifted(Ctx& c);
+void f_004CE5C0(Ctx& c) { f_004CE5C0_lifted(c); }
+void f_004CE650_lifted(Ctx& c);
+void f_004CE650(Ctx& c) { f_004CE650_lifted(c); }
+void f_004CE730_lifted(Ctx& c);
+void f_004CE730(Ctx& c) { f_004CE730_lifted(c); }
+void f_004CEC10_lifted(Ctx& c);
+void f_004CEC10(Ctx& c) { f_004CEC10_lifted(c); }
+void f_004CEC60_lifted(Ctx& c);
+void f_004CEC60(Ctx& c) { f_004CEC60_lifted(c); }
+void f_004CEF90_lifted(Ctx& c);
+void f_004CEF90(Ctx& c) { f_004CEF90_lifted(c); }
+void f_004CF0C0_lifted(Ctx& c);
+void f_004CF0C0(Ctx& c) { f_004CF0C0_lifted(c); }
+void f_004CF2D0_lifted(Ctx& c);
+void f_004CF2D0(Ctx& c) { f_004CF2D0_lifted(c); }
+void f_004CF470_lifted(Ctx& c);
+void f_004CF470(Ctx& c) { f_004CF470_lifted(c); }
+void f_004D42A0_lifted(Ctx& c);
+void f_004D42A0(Ctx& c) { f_004D42A0_lifted(c); }
+void f_004D4680_lifted(Ctx& c);
+void f_004D4680(Ctx& c) { f_004D4680_lifted(c); }
+void f_004D4A60_lifted(Ctx& c);
+void f_004D4A60(Ctx& c) { f_004D4A60_lifted(c); }
+void f_004D4B40_lifted(Ctx& c);
+void f_004D4B40(Ctx& c) { f_004D4B40_lifted(c); }
+void f_004D4B70_lifted(Ctx& c);
+void f_004D4B70(Ctx& c) { f_004D4B70_lifted(c); }
+void f_004D4BB0_lifted(Ctx& c);
+void f_004D4BB0(Ctx& c) { f_004D4BB0_lifted(c); }
+void f_004D4BC0_lifted(Ctx& c);
+void f_004D4BC0(Ctx& c) { f_004D4BC0_lifted(c); }
+void f_004D5D30_lifted(Ctx& c);
+void f_004D5D30(Ctx& c) { f_004D5D30_lifted(c); }
+void f_004D5D60_lifted(Ctx& c);
+void f_004D5D60(Ctx& c) { f_004D5D60_lifted(c); }
+void f_004DA0C0_lifted(Ctx& c);
+void f_004DA0C0(Ctx& c) { f_004DA0C0_lifted(c); }
+void f_004DB370_lifted(Ctx& c);
+void f_004DB370(Ctx& c) { f_004DB370_lifted(c); }
+void f_004DBAF0_lifted(Ctx& c);
+void f_004DBAF0(Ctx& c) { f_004DBAF0_lifted(c); }
+void f_004DD480_lifted(Ctx& c);
+void f_004DD480(Ctx& c) { f_004DD480_lifted(c); }
+void f_004DE950_lifted(Ctx& c);
+void f_004DE950(Ctx& c) { f_004DE950_lifted(c); }
+void f_004DEA40_lifted(Ctx& c);
+void f_004DEA40(Ctx& c) { f_004DEA40_lifted(c); }
+void f_004DEAE0_lifted(Ctx& c);
+void f_004DEAE0(Ctx& c) { f_004DEAE0_lifted(c); }
+void f_004DED10_lifted(Ctx& c);
+void f_004DED10(Ctx& c) { f_004DED10_lifted(c); }
+void f_004DEE20_lifted(Ctx& c);
+void f_004DEE20(Ctx& c) { f_004DEE20_lifted(c); }
+void f_004DF5F0_lifted(Ctx& c);
+void f_004DF5F0(Ctx& c) { f_004DF5F0_lifted(c); }
+void f_004DF600_lifted(Ctx& c);
+void f_004DF600(Ctx& c) { f_004DF600_lifted(c); }
+void f_004F2E60_lifted(Ctx& c);
+void f_004F2E60(Ctx& c) { f_004F2E60_lifted(c); }
+void f_004F3330_lifted(Ctx& c);
+void f_004F3330(Ctx& c) { f_004F3330_lifted(c); }
+void f_004F3410_lifted(Ctx& c);
+void f_004F3410(Ctx& c) { f_004F3410_lifted(c); }
+void f_004F3810_lifted(Ctx& c);
+void f_004F3810(Ctx& c) { f_004F3810_lifted(c); }
+void f_004F38B0_lifted(Ctx& c);
+void f_004F38B0(Ctx& c) { f_004F38B0_lifted(c); }
+void f_004F3920_lifted(Ctx& c);
+void f_004F3920(Ctx& c) { f_004F3920_lifted(c); }
+void f_004F39B0_lifted(Ctx& c);
+void f_004F39B0(Ctx& c) { f_004F39B0_lifted(c); }
+void f_004F3A70_lifted(Ctx& c);
+void f_004F3A70(Ctx& c) { f_004F3A70_lifted(c); }
+void f_004F3C70_lifted(Ctx& c);
+void f_004F3C70(Ctx& c) { f_004F3C70_lifted(c); }
+void f_004F3D80_lifted(Ctx& c);
+void f_004F3D80(Ctx& c) { f_004F3D80_lifted(c); }
+void f_004F3F00_lifted(Ctx& c);
+void f_004F3F00(Ctx& c) { f_004F3F00_lifted(c); }
+void f_004F4090_lifted(Ctx& c);
+void f_004F4090(Ctx& c) { f_004F4090_lifted(c); }
+void f_004F41C0_lifted(Ctx& c);
+void f_004F41C0(Ctx& c) { f_004F41C0_lifted(c); }
+void f_004F4260_lifted(Ctx& c);
+void f_004F4260(Ctx& c) { f_004F4260_lifted(c); }
+void f_004F44A0_lifted(Ctx& c);
+void f_004F44A0(Ctx& c) { f_004F44A0_lifted(c); }
+void f_004F4560_lifted(Ctx& c);
+void f_004F4560(Ctx& c) { f_004F4560_lifted(c); }
+void f_004F4850_lifted(Ctx& c);
+void f_004F4850(Ctx& c) { f_004F4850_lifted(c); }
+void f_004F5D50_lifted(Ctx& c);
+void f_004F5D50(Ctx& c) { f_004F5D50_lifted(c); }
+void f_004F6380_lifted(Ctx& c);
+void f_004F6380(Ctx& c) { f_004F6380_lifted(c); }
+void f_004F66C0_lifted(Ctx& c);
+void f_004F66C0(Ctx& c) { f_004F66C0_lifted(c); }
+void f_004F6A40_lifted(Ctx& c);
+void f_004F6A40(Ctx& c) { f_004F6A40_lifted(c); }
+void f_004F6D70_lifted(Ctx& c);
+void f_004F6D70(Ctx& c) { f_004F6D70_lifted(c); }
+void f_004F70F0_lifted(Ctx& c);
+void f_004F70F0(Ctx& c) { f_004F70F0_lifted(c); }
+void f_004F73D0_lifted(Ctx& c);
+void f_004F73D0(Ctx& c) { f_004F73D0_lifted(c); }
+void f_004F76B0_lifted(Ctx& c);
+void f_004F76B0(Ctx& c) { f_004F76B0_lifted(c); }
+void f_004F7950_lifted(Ctx& c);
+void f_004F7950(Ctx& c) { f_004F7950_lifted(c); }
+void f_004F7C30_lifted(Ctx& c);
+void f_004F7C30(Ctx& c) { f_004F7C30_lifted(c); }
+void f_004F7D00_lifted(Ctx& c);
+void f_004F7D00(Ctx& c) { f_004F7D00_lifted(c); }
+void f_004F8C20_lifted(Ctx& c);
+void f_004F8C20(Ctx& c) { f_004F8C20_lifted(c); }
+void f_004FC4E0_lifted(Ctx& c);
+void f_004FC4E0(Ctx& c) { f_004FC4E0_lifted(c); }
+void f_004FC960_lifted(Ctx& c);
+void f_004FC960(Ctx& c) { f_004FC960_lifted(c); }
+void f_004FCA50_lifted(Ctx& c);
+void f_004FCA50(Ctx& c) { f_004FCA50_lifted(c); }
+void f_004FCAE0_lifted(Ctx& c);
+void f_004FCAE0(Ctx& c) { f_004FCAE0_lifted(c); }
+void f_004FCE80_lifted(Ctx& c);
+void f_004FCE80(Ctx& c) { f_004FCE80_lifted(c); }
+void f_00500A60_lifted(Ctx& c);
+void f_00500A60(Ctx& c) { f_00500A60_lifted(c); }
+void f_00500F20_lifted(Ctx& c);
+void f_00500F20(Ctx& c) { f_00500F20_lifted(c); }
+void f_00507F40_lifted(Ctx& c);
+void f_00507F40(Ctx& c) { f_00507F40_lifted(c); }
+void f_005082D0_lifted(Ctx& c);
+void f_005082D0(Ctx& c) { f_005082D0_lifted(c); }
+void f_005086A0_lifted(Ctx& c);
+void f_005086A0(Ctx& c) { f_005086A0_lifted(c); }
+void f_00509500_lifted(Ctx& c);
+void f_00509500(Ctx& c) { f_00509500_lifted(c); }
 // Native in the game (src/render_backend.cpp): the lifted renderer code
 // reaches them.
 void f_004C9250_lifted(Ctx& c);
@@ -843,6 +1166,44 @@ void n_004A9A30(Ctx& c);
 void n_004A9A90(Ctx& c);
 void n_004AD860(Ctx& c);
 void n_00447CA0(Ctx& c);
+void n_004DE950(Ctx& c);
+void n_004DEA40(Ctx& c);
+void n_004DEAE0(Ctx& c);
+void n_004DED10(Ctx& c);
+void n_004DEE20(Ctx& c);
+void n_004DA0C0(Ctx& c);
+void n_004C8AA0(Ctx& c);
+void n_004C8C40(Ctx& c);
+void n_004C8C90(Ctx& c);
+void n_004CEC10(Ctx& c);
+void n_004DB370(Ctx& c);
+void n_004DF5F0(Ctx& c);
+void n_004DF600(Ctx& c);
+void n_004F8C20(Ctx& c);
+void n_004DF810(Ctx& c);
+void n_004D3ED0(Ctx& c);
+void n_004D4A60(Ctx& c);
+void n_004D4B40(Ctx& c);
+void n_004D4B70(Ctx& c);
+void n_004D4BB0(Ctx& c);
+void n_004D4BC0(Ctx& c);
+void n_004D5D30(Ctx& c);
+void n_004D5D60(Ctx& c);
+void n_004ADAD0(Ctx& c);
+void n_004ADAF0(Ctx& c);
+void n_004ADB10(Ctx& c);
+void n_004D41A0(Ctx& c);
+void n_004A97B0(Ctx& c);
+void n_004D0870(Ctx& c);
+void n_004F8D50(Ctx& c);
+void n_004DF740(Ctx& c);
+void n_004A70A0(Ctx& c);
+void n_004D4680(Ctx& c);
+void n_004CD1F0(Ctx& c);
+void n_004AD480(Ctx& c);
+void n_004ACB20(Ctx& c);
+void n_004ACDD0(Ctx& c);
+void n_004AD5C0(Ctx& c);
 // The stubs.
 #define COD1_STUB(va) \
   void f_##va(Ctx& c) { StubFor(c, 0x##va); }
@@ -877,6 +1238,18 @@ COD1_STUB(00508A50)
 COD1_STUB(0050AA80)
 COD1_STUB(0050A890)
 COD1_STUB(0050AE10)
+COD1_STUB(004CEA70)
+COD1_STUB(004CB3B0)
+COD1_STUB(004CB710)
+COD1_STUB(004CBBE0)
+COD1_STUB(004ADC20)
+COD1_STUB(004ADEC0)
+COD1_STUB(004ACF50)
+COD1_STUB(004D6400)
+COD1_STUB(004D0700)
+COD1_STUB(004815E0)
+COD1_STUB(004FC1B0)
+COD1_STUB(004E59D0)
 #undef COD1_STUB
 // The zeroed allocation: a block of the heap.
 void f_0042A480(Ctx& c) {
@@ -900,7 +1273,9 @@ void f_0052AB6F(Ctx& c) {
 
 void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
   if (target == kAlloc || target == kFree) {
+    const uint32_t ecx = c.ecx, ret = Rd(c.esp);
     Stub(c, target == kAlloc ? kAllocPtr : kFreePtr, 0, 1);
+    if (ret == 0x4DF633) c.ecx = ecx;
     if (target == kAlloc) {
       const uint32_t size = Rd(c.esp);
       if (size > kHeapSize - (g_heap_top - kHeap)) {
@@ -959,6 +1334,18 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
     Stub(c, target == kGetLastError ? kGetLastErrorPtr : target == kTlsGetValue ? kTlsGetValuePtr : kSetLastErrorPtr, 0, n);
     c.eax = target == kTlsGetValue ? kThreadData : 0;
     c.esp += 4 * uint32_t(n);
+    return;
+  }
+  if (target >= kPtrTargets && target < kPtrTargets + 0x10 * std::size(kPtrs)) {
+    const uint32_t ecx = c.ecx;
+    const PtrInfo& p = kPtrs[(target - kPtrTargets) / 0x10];
+    Stub(c, p.ptr, 0, p.args);
+    if (!p.cdecl) c.esp += 4 * uint32_t(p.args);
+    if (p.ptr == 0x153483C) c.eax = g_calls.size() % 4 ? 0 : g_calls.size() % 8 == 4 ? 1 : 0x500 + uint32_t(g_calls.size()) % 6;
+    // The pending frees' callees keep ECX (as a C function may): what
+    // 0x4DF600 leaves there shows.
+    if (p.ptr == 0x1549650) c.ecx = ecx;
+    if (p.ptr == 0x1549694) c.eax = g_font;
     return;
   }
   // BoxOnPlaneSide's jump through its table of cases.
@@ -1081,6 +1468,25 @@ const Entry kEntries[] = {
     COD1_ENTRY(004AC780, "corner list insertion"), COD1_ENTRY(004A9C30, "corner's lights found"),
     COD1_ENTRY(004A9A30, "point light reaches"), COD1_ENTRY(004A9A90, "sun's traces"),
     COD1_ENTRY(004AD860, "debug text queued"),   COD1_ENTRY(00447CA0, "StatMon_UpdateEntry"),
+    COD1_ENTRY(004DE950, "scene firsts"), COD1_ENTRY(004DEA40, "polygon added"),
+    COD1_ENTRY(004DEAE0, "RE_AddPolysToScene"), COD1_ENTRY(004DED10, "dlight added"),
+    COD1_ENTRY(004DEE20, "corona added"), COD1_ENTRY(004DA0C0, "far distance set"),
+    COD1_ENTRY(004C8AA0, "fog set"), COD1_ENTRY(004C8C40, "fogs saved"),
+    COD1_ENTRY(004C8C90, "fogs restored"), COD1_ENTRY(004CEC10, "free list cleared"),
+    COD1_ENTRY(004DB370, "r_smc_flush"), COD1_ENTRY(004DF5F0, "pending frees cleared"),
+    COD1_ENTRY(004DF600, "pending frees"), COD1_ENTRY(004F8C20, "model bounds"),
+    COD1_ENTRY(004DF810, "texture memory"), COD1_ENTRY(004D3ED0, "frame counters"),
+    COD1_ENTRY(004D4A60, "frame end"), COD1_ENTRY(004D4B40, "command 9"),
+    COD1_ENTRY(004D4B70, "command 10"), COD1_ENTRY(004D4BB0, "stats"),
+    COD1_ENTRY(004D4BC0, "trace surface names"), COD1_ENTRY(004D5D30, "font height"),
+    COD1_ENTRY(004D5D60, "text"), COD1_ENTRY(004ADAD0, "client debug text"),
+    COD1_ENTRY(004ADAF0, "client debug lines"), COD1_ENTRY(004ADB10, "number at a point"),
+    COD1_ENTRY(004D41A0, "commands run"), COD1_ENTRY(004A97B0, "light grid settings"),
+    COD1_ENTRY(004D0870, "world surface a frame"), COD1_ENTRY(004F8D50, "model surface a frame"),
+    COD1_ENTRY(004DF740, "r_textureMode"), COD1_ENTRY(004A70A0, "r_nv_fogdist_mode"),
+    COD1_ENTRY(004D4680, "RE_BeginFrame"), COD1_ENTRY(004CD1F0, "image upload"),
+    COD1_ENTRY(004AD480, "numbers at points"), COD1_ENTRY(004ACB20, "debug polygons drawn"),
+    COD1_ENTRY(004ACDD0, "debug lines drawn"), COD1_ENTRY(004AD5C0, "back end debug draws"),
 };
 #undef COD1_ENTRY
 constexpr int kNumEntries = sizeof(kEntries) / sizeof(kEntries[0]);
@@ -1142,6 +1548,7 @@ uint32_t ScrubDepth(uint32_t fn) {
     case 0x4CAB80: return 0x4000;
     case 0x4CB210: case 0x4CB270: case 0x4DEEC0: return 0x90000;
     case 0x4AC7E0: return 0x40;  // the key's last two bytes
+    case 0x4D4BC0: return 0x80;  // the trace's results
     default: return 0;
   }
 }
@@ -1224,6 +1631,18 @@ void DebugQueues() {
   Wr(kDebugCvar + 0x20, kRadius[g() % 5]);
 }
 
+// The scene's and the frame's entries whose EAX, ECX and EDX are compared
+// (as the originals leave them; FINDINGS.md, layer 13).
+const std::set<uint32_t> kFrameEax = {0x4DE950, 0x4DEA40, 0x4DEAE0, 0x4DED10, 0x4DEE20, 0x4DA0C0, 0x4C8AA0, 0x4C8C40,
+                                      0x4C8C90, 0x4CEC10, 0x4DB370, 0x4DF600, 0x4F8C20, 0x4D4B40, 0x4D4B70, 0x4D4BB0,
+                                      0x4D4BC0, 0x4D5D30, 0x4D5D60, 0x4ADAD0, 0x4ADAF0, 0x4ADB10, 0x4D41A0, 0x4A97B0};
+const std::set<uint32_t> kFrameEcx = {0x4DE950, 0x4DEA40, 0x4DEAE0, 0x4DED10, 0x4DEE20, 0x4DA0C0, 0x4C8AA0,
+                                      0x4C8C40, 0x4C8C90, 0x4CEC10, 0x4DB370, 0x4DF600, 0x4F8C20, 0x4D4B40,
+                                      0x4D4B70, 0x4D4BB0, 0x4D5D60, 0x4ADAD0, 0x4ADAF0, 0x4ADB10, 0x4D41A0, 0x4A97B0};
+const std::set<uint32_t> kFrameEdx = {0x4DE950, 0x4DEA40, 0x4DEAE0, 0x4DED10, 0x4DEE20, 0x4DA0C0, 0x4C8AA0,
+                                      0x4C8C40, 0x4C8C90, 0x4CEC10, 0x4DB370, 0x4DF600, 0x4F8C20, 0x4D4B40,
+                                      0x4D4B70, 0x4D4BB0, 0x4D5D60, 0x4ADAD0, 0x4ADAF0, 0x4ADB10, 0x4D41A0, 0x4A97B0};
+
 // Runs one call through the lifted original and the native code from the
 // same memory and compares; the original's result stays (the next case's
 // starting state). With RENDER_ORACLE_FAIL_FAST set the first mismatch ends
@@ -1239,7 +1658,7 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
   // entities' surfaces, and the heap of the cache entries' vertices.
   if (k.fn == 0x4CB0C0 || k.fn == 0x4CB210 || k.fn == 0x4CB270 || k.fn == 0x4DEEC0 ||
       k.fn == 0x4CAB80 || k.fn == 0x4CAFC0 || k.fn == 0x4FA790 || k.fn == 0x4DA9F0 ||
-      k.fn == 0x4DA330 || k.fn == 0x4DA220 || k.fn == 0x4DA1B0 || k.fn == 0x4DA0F0) {
+      k.fn == 0x4DA330 || k.fn == 0x4DA220 || k.fn == 0x4DA1B0 || k.fn == 0x4DA0F0 || k.fn == 0x4DB370) {
     w.push_back({kModelCache, 8 * 0x1C8});
     w.push_back({kModelCache + 0xE400, 0x38});
     w.push_back({kHeap, 0x10000});
@@ -1306,13 +1725,14 @@ void Run(const Call& k, std::vector<Window> w, std::mt19937& g, Stats& s, const 
                    k.fn == 0x4AACB0 || k.fn == 0x4268B0 || k.fn == 0x427CB0 || k.fn == 0x427E80 ||
                    k.fn == 0x429800 || k.fn == 0x429650 || k.fn == 0x5008B0 || k.fn == 0x4A9EC0 ||
                    k.fn == 0x426610 || k.fn == 0x429710 || k.fn == 0x427590 || k.fn == 0x4A9880 ||
-                   k.fn == 0x4AC7E0 || k.fn == 0x4AC780 || k.fn == 0x4A9C30 || k.fn == 0x4A9A30;
+                   k.fn == 0x4AC7E0 || k.fn == 0x4AC780 || k.fn == 0x4A9C30 || k.fn == 0x4A9A30 ||
+                   kFrameEax.count(k.fn);
   // The vector helpers' ECX and EDX where the originals leave them (and
   // R_PointInLeaf's leaf in ECX).
   const bool ecx = k.fn == 0x427CB0 || k.fn == 0x4290E0 || k.fn == 0x5008B0 || k.fn == 0x426610 ||
-                   k.fn == 0x429710 || k.fn == 0x427590;
+                   k.fn == 0x429710 || k.fn == 0x427590 || kFrameEcx.count(k.fn);
   const bool edx = k.fn == 0x427CB0 || k.fn == 0x429070 || k.fn == 0x5008B0 || k.fn == 0x426610 ||
-                   k.fn == 0x429710 || k.fn == 0x427590;
+                   k.fn == 0x429710 || k.fn == 0x427590 || kFrameEdx.count(k.fn);
   // AL alone (whether a light reaches a point).
   const bool al = k.fn == 0x4A99C0;
   // A result on the x87 stack: its register.
@@ -4955,6 +5375,692 @@ void DebugCase(Arena& a, std::mt19937& g, Stats& s) {
   }
 }
 
+
+// ---- the scene's and the frame's entry points ----------------------------------
+
+// A cvar of the arena at the global va (0x24 bytes: +4 its string, +0x14
+// modified, +0x1C its float, +0x20 its integer).
+uint32_t FrameCvar(Arena& a, std::mt19937& g, uint32_t va, uint32_t value, uint32_t modified = 0, uint32_t str = 0) {
+  const uint32_t cv = a.Alloc(0x24);
+  for (uint32_t k = 0; k < 0x24; k += 4) Wr(cv + k, g());
+  Wr(cv + 4, str);
+  Wr(cv + 0x14, modified);
+  WrF(cv + 0x1C, float(int32_t(value)));
+  Wr(cv + 0x20, value);
+  Wr(va, cv);
+  return cv;
+}
+// A copy of the guest's string at va in the arena, its letters' case
+// changed now and then.
+uint32_t FrameStr(Arena& a, std::mt19937& g, uint32_t va) {
+  const bool flip = g() % 2;
+  uint32_t n = 0;
+  while (g_mem.read<uint8_t>(va + n)) n++;
+  const uint32_t s = a.Alloc(n + 1);
+  for (uint32_t i = 0; i <= n; i++) {
+    const uint8_t ch = g_mem.read<uint8_t>(va + i);
+    g_mem.write<uint8_t>(s + i, flip && std::isalpha(ch) && g() % 2 ? uint8_t(ch ^ 0x20) : ch);
+  }
+  return s;
+}
+// One of the names at vas (as FrameStr), another word or none.
+uint32_t FrameName(Arena& a, std::mt19937& g, std::initializer_list<uint32_t> vas) {
+  if (g() % 8 == 0) return 0;
+  if (g() % 6 == 0) {
+    const uint32_t s = a.Alloc(8);
+    for (uint32_t i = 0; i < 8; i++) g_mem.write<uint8_t>(s + i, i < 7 ? uint8_t('A' + g() % 26) : 0);
+    return s;
+  }
+  return FrameStr(a, g, *(vas.begin() + g() % vas.size()));
+}
+// The command buffer: the back end's data put so that its commands (0x40000
+// bytes) are a block of the arena, the used offset mostly below 0x10000,
+// now and then about the end; windows over its start, the used offset's
+// place and the counter.
+void FrameCommands(Arena& a, std::mt19937& g, std::vector<Window>& win) {
+  const uint32_t blk = a.Alloc(0x40010, 16);
+  const uint32_t used = g() % 4 ? (g() % 0x10000) & ~3u : 0x3FFE8 + 4 * (g() % 6);
+  Wr(0x1549698, blk - 0x24D700);
+  Wr(blk + 0x40000, used);
+  for (uint32_t k = 0; k < 0x10; k += 4) Wr(blk + k, g());
+  for (uint32_t k = 0; k < 0x10 && used + k < 0x40000; k += 4) Wr(blk + used + k, g());
+  win.push_back({blk, 0x10});
+  win.push_back({blk + used, std::min(0x10u, 0x40004 - used)});
+  win.push_back({blk + 0x40000, 4});
+}
+// The images (0x153A51C of them at 0x153A520; 0x70 bytes each): sizes
+// (+0x48; now and then about 2^24, past 0x1400000 in sum), types (+0x50; 3
+// now and then), the other sum's +0x4C, the frame they were last used at
+// (+0x5C: the frame 0x1535A24, the one before or another), the mipmap flag
+// (+0x64 bit 0) and target (+0x54).
+void FrameImages(Arena& a, std::mt19937& g) {
+  const uint32_t n = g() % 8 ? g() % 9 : uint32_t(Pick(g, {0, -1})), frame = Rd(0x1535A24);
+  Wr(0x153A51C, n);
+  for (uint32_t i = 0; i < 8; i++) {
+    const uint32_t img = a.Alloc(0x70);
+    for (uint32_t k = 0; k < 0x70; k += 4) Wr(img + k, g());
+    Wr(img + 0x48, g() % 4 ? g() % 0x100000 : 0x800000 + g() % 0x1000000);
+    Wr(img + 0x4C, g() % 4 ? g() % 0x100000 : 0x800000 + g() % 0x1000000);
+    Wr(img + 0x50, g() % 3 ? 3 : g() % 8);
+    Wr(img + 0x5C, uint32_t(Pick(g, {0, 0, -1, -1, 1, 2})) + frame);
+    Wr(0x153A520 + 4 * i, img);
+  }
+}
+// The world surfaces 0x4D0870 walks: a world (0x1535A34) of up to 12
+// references (12 bytes: +4 a pointer whose +0x18C is passed on, +8 the
+// surface: type 0x1A mostly, +0x44 a count of up to 6 (or negative) 16-bit
+// indexes from +0x48), the cursor 0x1538514 below the count; now and then
+// no world.
+void FrameWorld(Arena& a, std::mt19937& g) {
+  const uint32_t world = a.Alloc(0x128), n = 1 + g() % 12, refs = a.Alloc(12 * n);
+  Wr(0x1535A34, g() % 16 ? world : 0);
+  Wr(world + 0x9C, n);
+  Wr(world + 0xA0, refs);
+  for (uint32_t i = 0; i < n; i++) {
+    const uint32_t surf = a.Alloc(0x48 + 2 * 8), sh = a.Alloc(0x190);
+    Wr(sh + 0x18C, g());
+    Wr(refs + 12 * i, g());
+    Wr(refs + 12 * i + 4, sh);
+    Wr(refs + 12 * i + 8, surf);
+    Wr(surf, g() % 3 ? 0x1A : g() % 0x20);
+    Wr(surf + 0x44, g() % 8 ? g() % 7 : uint32_t(Pick(g, {-1, 0, 1})));
+    for (uint32_t k = 0; k < 8; k++) g_mem.write<uint16_t>(surf + 0x48 + 2 * k, uint16_t(g() % 4 ? g() % 64 : g()));
+  }
+  Wr(0x1538514, g() % n);
+}
+// The models 0x4F8D50 walks: 0x15384F8 of them (up to 8, now and then 0
+// or negative, the start then 0), each with an XModel (+0x54) mostly:
+// its +4's levels (16-bit count +0x64, 1-3, now and then 0 or negative;
+// from +0x14, 0x14 bytes each: +4 a block with a 16-bit count of up to 4
+// surfaces +4 (now and then 0 or negative; at least 2 at the first level:
+// the walk starts each model at its second surface and, as the original,
+// never ends when no model has one) and their pointers +8); the
+// cursors 0x15384FC, 0x1538500 (within the current model's levels) and
+// 0x1538504.
+void FrameModels(Arena& a, std::mt19937& g) {
+  const int32_t n = g() % 8 ? int32_t(1 + g() % 8) : Pick(g, {0, -1});
+  Wr(0x15384F8, uint32_t(n));
+  for (uint32_t i = 0; i < 8; i++) {
+    const uint32_t model = a.Alloc(0x58), xm = a.Alloc(8), x = a.Alloc(0x68);
+    Wr(0x15364F8 + 4 * i, model);
+    Wr(model + 0x54, g() % 4 ? xm : 0);
+    Wr(xm + 4, x);
+    const uint32_t levels = g() % 8 ? 1 + g() % 3 : uint32_t(Pick(g, {0, -1}));
+    g_mem.write<uint16_t>(x + 0x64, uint16_t(levels));
+    for (uint32_t l = 0; l < 3; l++) {
+      const uint32_t h = a.Alloc(8), s = a.Alloc(12), surfs = a.Alloc(16);
+      Wr(x + 0x14 + 0x14 * l, h);
+      Wr(h + 4, s);
+      g_mem.write<uint16_t>(s + 4, uint16_t(!l ? 2 + g() % 3 : g() % 8 ? g() % 5 : uint32_t(Pick(g, {0, -1, -0x8000}))));
+      Wr(s + 8, surfs);
+      for (uint32_t k = 0; k < 16; k += 4) Wr(surfs + k, g());
+    }
+  }
+  const uint32_t start = n > 0 ? g() % uint32_t(n) : 0, xm = Rd(Rd(0x15364F8 + 4 * start) + 0x54);
+  Wr(0x15384FC, start);
+  const int32_t levels = xm ? int16_t(g_mem.read<uint16_t>(Rd(xm + 4) + 0x64)) : 0;
+  Wr(0x1538500, levels > 0 ? g() % uint32_t(levels) : 0);
+  Wr(0x1538504, g() % 4 ? g() % 5 : uint32_t(Pick(g, {-1, -2, 0x7FFF})));
+}
+// The light grid's cvars for 0x4A97B0: r_diffuseSunQuality (0x15344D4)
+// and r_diffuseSunSteps (0x153471C) about their ranges (modified now and
+// then: the corner cache cleared), r_maxEntLights (0x1534480) and its
+// limit 0x153475C.
+void FrameGrid(Arena& a, std::mt19937& g, std::vector<Window>& win) {
+  FrameCvar(a, g, 0x15344D4, uint32_t(Pick(g, {-1, 0, 1, 2, 3, INT32_MIN, 0x7FFFFFFF})));
+  const bool modified = g() % 8 == 0;
+  FrameCvar(a, g, 0x153471C, uint32_t(Pick(g, {-1, 0, 1, 2, 3, 4, 5, 6, INT32_MIN})), modified ? 1 : 0);
+  FrameCvar(a, g, 0x1534480, uint32_t(Pick(g, {-1, 0, 1, 2, 3, 4, 8, 16, 0x7FFFFFFF})));
+  Wr(0x153475C, uint32_t(Pick(g, {0, 1, 2, 3, 8, -1})));
+  win.push_back({0x15364BC, 0x10});
+  if (modified) {
+    for (uint32_t k = 0; k < 0x40; k += 4) Wr(0xC952C8 + 0x200000 - 0x40 + k, g());
+    win.push_back({0xC952C8, 0x200000});
+  }
+}
+// The fog's re-enabling after a debug draw: 0x1549B50, the state bits
+// 0x1534630, r_fog (0x15347F4), 0x15496EC's bit 8, the fogs 0x1535890 and
+// 0x13F9CF8.
+void FrameFog(Arena& a, std::mt19937& g, std::vector<Window>& win) {
+  Wr(0x1549B50, g() % 4 ? 0 : 1);
+  Wr(0x1534630, g() & ~0x200000u | (g() % 2 ? 0x200000 : 0));
+  FrameCvar(a, g, 0x15347F4, g() % 4 ? 1 : 0);
+  g_mem.write<uint8_t>(0x15496EC, uint8_t(g()));
+  Wr(0x1535890, g() % 3 ? 0 : g());
+  Wr(0x13F9CF8, g() % 3 ? 0 : g());
+  win.push_back({0x1534630, 4});
+}
+// The texture memory's check and its warning icon (0x4DF810): the frame
+// counted (0x11D0C5C) the frame or not, com_statmon (0x14E43EC), the time
+// base taken or not (0x13F9DB0), the icon's image registered or not, the
+// count 0x8D5A98 about 7.
+void FrameTextures(Arena& a, std::mt19937& g, std::vector<Window>& win) {
+  Wr(0x1535A24, g() % 4 ? g() : uint32_t(Pick(g, {0, 1, -1})));
+  FrameImages(a, g);
+  Wr(0x11D0C5C, g() % 4 ? Rd(0x1535A24) - 1 : Rd(0x1535A24));
+  for (uint32_t va : {0x11D0C58u, 0x11D4D60u, 0x11D4D68u}) Wr(va, g() % 0x2000000);
+  // Now and then the +0x4C sum exactly about 0x1400000 (one image used).
+  if (g() % 6 == 0) {
+    for (uint32_t i = 0; i < 8; i++) Wr(Rd(0x153A520 + 4 * i) + 0x5C, Rd(0x1535A24) + 5);
+    Wr(0x153A51C, 1 + g() % 8);
+    Wr(Rd(0x153A520) + 0x5C, Rd(0x1535A24));
+    Wr(Rd(0x153A520) + 0x4C, uint32_t(0x1400000 + Pick(g, {-1, 0, 0, 1})));
+  }
+  FrameCvar(a, g, 0x14E43EC, g() % 4 ? 1 : 0);
+  Wr(0x13F9DB0, g() % 4 ? 1 : 0);
+  Wr(0x15342A0, g());
+  Wr(0x8D58C8, g());
+  Wr(0x8D58CC, g() % 2 ? 0 : g());
+  Wr(0x1439370, g() % 4 ? 1 : 0);
+  Wr(0x8D5A98, uint32_t(Pick(g, {0, 5, 6, 7, 8, -1})));
+  for (uint32_t va : {0x11D0C58u, 0x11D0C5Cu, 0x11D4D60u, 0x11D4D68u, 0x13F9DB0u, 0x15342A0u, 0x8D5A98u, 0x1535A24u})
+    win.push_back({va, 4});
+  win.push_back({0x8D58C8, 8});
+}
+// The frame's counters (0x4D3ED0): r_speeds 0-7 or -1, the stats 0x15364F4
+// (none or a block of the arena), the counts 0x15364A0, 0x15364CC-0x15364EC
+// and 0x1549B04-0x1549B30 (any; 0x1549B20 now and then 0), the overdraw sum
+// 0x1549B1C, the screen 0x15347C8 x 0x15347C4 (0 now and then).
+void FrameCounters(Arena& a, std::mt19937& g, std::vector<Window>& win) {
+  FrameTextures(a, g, win);
+  FrameCvar(a, g, 0x15346E0, uint32_t(Pick(g, {0, 1, 1, 2, 3, 4, 4, 5, 6, 6, 7, -1})));
+  const uint32_t stats = a.Alloc(0x24);
+  for (uint32_t k = 0; k < 0x24; k += 4) Wr(stats + k, g());
+  Wr(0x15364F4, g() % 2 ? stats : 0);
+  Wr(0x15364A0, g());
+  for (uint32_t k = 0; k < 0x24; k += 4) Wr(0x15364CC + k, g() % 4 ? g() % 1000 : g());
+  for (uint32_t k = 0; k < 0x34; k += 4) Wr(0x1549B04 + k, g() % 4 ? g() % 100000 : g());
+  if (g() % 4 == 0) Wr(0x1549B20, 0);
+  WrF(0x1549B1C, Value(g, 0, 1e6f, 16));
+  Wr(0x15347C8, g() % 8 ? 320 + g() % 1600 : g() % 2);
+  Wr(0x15347C4, g() % 8 ? 240 + g() % 1200 : g());
+  // Now and then a sum and a screen whose quotient and product by the
+  // reciprocal round apart as floats (constructed: the quotient within
+  // 2^-52 of a float's midpoint).
+  static const uint32_t kApart[][2] = {
+      {0x4B4050C9, 1645685534}, {0x4B2D8E3C, 1852917042}, {0x4B4B68CE, 1926419005}, {0x4B30D351, 1666338537}};
+  if (g() % 4 == 0) {
+    const auto& t = kApart[g() % 4];
+    Wr(0x1549B1C, t[0]);
+    Wr(0x15347C8, t[1]);
+    Wr(0x15347C4, 1);
+  }
+  Wr(0x154D70C, g() % 0x800);
+  win.push_back({0x15364A0, 4});
+  win.push_back({0x15364CC, 0x24});
+  win.push_back({0x15364F4, 4});
+  win.push_back({0x1549B04, 0x34});
+}
+
+// The scene's and the frame's entries alone: their globals about their
+// limits, NaNs, -0 and integral floats where floats are compared, the back
+// end's data put so that what they write lands in the arena, the GL and
+// refimport calls recorded.
+void FrameCase(Arena& a, std::mt19937& g, Stats& s) {
+  a.Reset();
+  std::vector<Window> win;
+  const uint32_t rnd[6] = {uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g())};
+  for (uint32_t i = 0; i < std::size(kPtrs); i++) Wr(kPtrs[i].ptr, kPtrTargets + 0x10 * i);
+  Wr(0x1535A20, g() % 8 ? (g() % 4 ? 1 : 0x10001) : 0);
+  auto vec = [&](uint32_t n, float lo, float hi, uint32_t special) {
+    const uint32_t v = a.Alloc(4 * n);
+    for (uint32_t k = 0; k < 4 * n; k += 4) WrF(v + k, Value(g, lo, hi, special));
+    return v;
+  };
+  auto bytes = [&](uint32_t n) {
+    const uint32_t v = a.Alloc(n);
+    for (uint32_t k = 0; k < n; k += 4) Wr(v + k, g());
+    return v;
+  };
+  auto counts = [&] {
+    for (uint32_t k = 0; k < 0x28; k += 4) Wr(0x154D70C + k, g() % 4 ? g() % 64 : g());
+    win.push_back({0x154D70C, 0x28});
+  };
+  switch (g() % 38) {
+    case 0:
+      counts();
+      Run({0x4DE950, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    case 1:
+    case 2: {
+      // A polygon, or polygons: the vertices and polygons counts about
+      // their limits (0x15344F8, 0x1534504), a vertex count 0-8 or one
+      // whose bytes wrap to 0; the default shader for a handle of 0; the
+      // printf for none (polygons).
+      counts();
+      const uint32_t polys = g() % 16, first = g() % 0x80, num = g() % 8 ? g() % 6 + (g() % 4 == 0) : 0;
+      const uint32_t n = g() % 8 ? g() % 9 : 0x08000000;
+      Wr(0x154D730, polys);
+      Wr(0x154D71C, first);
+      const uint32_t verts = first + n * std::max(num, 1u);
+      Wr(0x15344F8, g() % 4 ? uint32_t(int32_t(verts) + Pick(g, {-int32_t(n), -1, 0, 1, int32_t(n)})) : g() % 2 ? 0x7FFFFFFF : g());
+      Wr(0x1534504, g() % 4 ? polys + uint32_t(Pick(g, {0, 1, 2, 3, 8})) : g() % 2 ? 0x7FFFFFFF : uint32_t(Pick(g, {0, -1})));
+      const uint32_t blk = a.Alloc(0x14000), sh = a.Alloc(0x48);
+      Wr(sh + 0x44, g());
+      Wr(0x1535AE8, sh);
+      Wr(0x1549698, blk - 0x1FD700 - 16 * polys);
+      for (uint32_t k = 0; k < 16 * 8; k += 4) Wr(blk + 16 * polys + k, g());
+      const uint32_t v = blk - 16 * polys + 0x10000 + 32 * first, src = bytes(32 * 8);
+      win.push_back({blk + 16 * polys, 16 * 8});
+      if (n < 9) win.push_back({v, 32 * n * std::max(num, 1u)});
+      const uint32_t shader = g() % 4 ? g() : 0;
+      if (g() % 2)
+        Run({0x4DEA40, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {shader, n, src}}, win, g, s, "random");
+      else
+        Run({0x4DEAE0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {shader, n, src, g() % 8 ? num : uint32_t(Pick(g, {-1, INT32_MIN}))}},
+            win, g, s, "random");
+      break;
+    }
+    case 3: {
+      // A dlight: the count about 32, intensities of any sign, 0, -0, NaN.
+      counts();
+      const uint32_t n = g() % 4 ? g() % 32 : uint32_t(Pick(g, {31, 32, 33, -1})), blk = bytes(0x88);
+      Wr(0x154D714, n);
+      Wr(0x1549698, blk - 0x80000 - 0x88 * n);
+      WrF(0x1536290, Value(g, 0, 4, 32));
+      win.push_back({blk, 0x88});
+      win.push_back({0x1536290, 4});
+      const float i = g() % 4 ? Value(g, -500, 500, 64) : g() % 2 ? 0.0f : -0.0f;
+      uint32_t args[5] = {vec(3, -1000, 1000, 16), std::bit_cast<uint32_t>(i), std::bit_cast<uint32_t>(Value(g, 0, 1, 32)),
+                          std::bit_cast<uint32_t>(Value(g, 0, 1, 32)), std::bit_cast<uint32_t>(Value(g, 0, 1, 32))};
+      // Now and then a scale, intensity and component whose products round
+      // apart (as floats) by their grouping (searched).
+      static const uint32_t kApart[][3] = {
+          {0x400080B2, 0x43DBF9E8, 0x3EE63E88}, {0x3F51D1B7, 0x43C435FA, 0x3F66184C}, {0x403D56EA, 0x42EFE5E6, 0x3F4E8D94}};
+      if (g() % 4 == 0) {
+        const auto& t = kApart[g() % 3];
+        Wr(0x1536290, t[0]);
+        args[1] = t[1];
+        args[2 + g() % 3] = t[2];
+      }
+      Run({0x4DED10, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {args[0], args[1], args[2], args[3], args[4]}}, win, g,
+          s, "random");
+      break;
+    }
+    case 4: {
+      // A corona: the count about 32, ids about 0 and 0x800.
+      counts();
+      const uint32_t n = g() % 4 ? g() % 32 : uint32_t(Pick(g, {31, 32, 33, -1})), blk = bytes(0x30);
+      Wr(0x154D710, n);
+      Wr(0x1549698, blk - 0x81100 - 0x30 * n);
+      win.push_back({blk, 0x30});
+      const uint32_t id = g() % 4 ? g() % 0x800 : uint32_t(Pick(g, {-1, 0, 0x7FF, 0x800, INT32_MIN, 0x7FFFFFFF}));
+      Run({0x4DEE20, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5],
+           {vec(3, -1000, 1000, 16), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), id, uint32_t(g())}},
+          win, g, s, "random");
+      break;
+    }
+    case 5: {
+      win.push_back({0x11BEB84, 4});
+      const float d = g() % 4 ? Value(g, -4096, 4096, 128) : g() % 2 ? 0.0f : -0.0f;
+      Run({0x4DA0C0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {std::bit_cast<uint32_t>(d)}}, win, g, s, "random");
+      break;
+    }
+    case 6:
+    case 7: {
+      // A fog set: fogs 0-7 (the times 0 and 0 now and then, beyond 2^24,
+      // negative; densities about 1, NaN); the fog 8's modes 0-8 (3 clears),
+      // the fogs' set flags and the fog now's, the time 0 or not.
+      for (uint32_t k = 0; k < 0x240; k += 4) Wr(0x15357E0 + k, g());
+      for (uint32_t f = 0; f < 9; f++) Wr(0x15357E0 + 64 * f + 0x30, g() % 2 ? 1 : g() % 2 ? 0 : g());
+      Wr(0x1536360, g());
+      win.push_back({0x15357E0, 0x240});
+      win.push_back({0x13F9CF8, 4});
+      if (g() % 2) {
+        auto t = [&]() -> uint32_t { return g() % 4 ? uint32_t(g() % 100000) : uint32_t(Pick(g, {0, 0x1000001, -1, INT32_MIN})); };
+        const bool zero = g() % 6 == 0;
+        const float density = g() % 4 ? Value(g, 0, 2, 64) : float(Pick(g, {1, 0, 2}));
+        Run({0x4C8AA0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5],
+             {uint32_t(g() % 8), zero ? 0 : t(), zero ? 0 : t(), uint32_t(g()), uint32_t(g()), uint32_t(g()), std::bit_cast<uint32_t>(density)}},
+            win, g, s, "random");
+      } else {
+        Run({0x4C8AA0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {8, uint32_t(g() % 3 ? g() % 9 : 3), g() % 3 ? 0 : uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g()), uint32_t(g())}},
+            win, g, s, "random");
+      }
+      break;
+    }
+    case 8: {
+      for (uint32_t k = 0; k < 0x240; k += 4) Wr(0x15357E0 + k, g());
+      const uint32_t buf = bytes(0x244);
+      win.push_back({0x15357E0, 0x240});
+      win.push_back({0x13F9CF8, 4});
+      win.push_back(a.All());
+      const uint32_t size = g() % 2 ? 0x244 : uint32_t(Pick(g, {0x243, 0x245, 0, -1, 0x1000}));
+      Run({g() % 2 ? 0x4C8C40u : 0x4C8C90u, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {buf, size}}, win, g, s, "random");
+      break;
+    }
+    case 9:
+      for (uint32_t k = 0; k < 0x2604; k += 4) Wr(0x154B100 + k, g());
+      for (uint32_t va : {0x154B0ECu, 0x13F9CF4u, 0x11CE828u, 0x11CE82Cu, 0x11CE830u}) Wr(va, g());
+      win.push_back({0x154B0EC, 4});
+      win.push_back({0x154B100, 0x2604});
+      win.push_back({0x13F9CF4, 4});
+      win.push_back({0x11CE828, 0xC});
+      Run({0x4CEC10, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    case 10:
+      ModelCache(a, g, 0, 0);
+      win.push_back(a.All());
+      Run({0x4DB370, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    case 11:
+    case 12: {
+      // The pending frees: up to 8 of kinds 0, 1 or others.
+      const uint32_t n = g() % 8 ? g() % 9 : uint32_t(Pick(g, {0, -1}));
+      Wr(0x13F9CE8, n);
+      for (uint32_t i = 0; i < 9; i++) {
+        Wr(0x11D0A58 + 8 * i, g() % 4 ? g() % 2 : uint32_t(Pick(g, {2, 3, -1})));
+        Wr(0x11D0A5C + 8 * i, g());
+      }
+      win.push_back({0x13F9CE8, 4});
+      win.push_back({0x11D0A58, 8 * 9});
+      Run({g() % 8 ? 0x4DF600u : 0x4DF5F0u, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    }
+    case 13: {
+      // A model's bounds: a brush model or none; mins and maxs in the arena,
+      // now and then over the model's +0x4C (read again for each component)
+      // with a second brush model's address where it lands.
+      const uint32_t h = g() % 8, model = bytes(0x60), b1 = bytes(0x18), b2 = bytes(0x18);
+      Wr(0x15364F8 + 4 * h, model);
+      Wr(model + 0x4C, g() % 4 ? b1 : 0);
+      uint32_t mins = bytes(12), maxs = bytes(12);
+      if (g() % 4 == 0) {
+        const uint32_t k = g() % 3;
+        if (g() % 2) mins = model + 0x4C - 4 * k; else maxs = model + 0x4C - 4 * k;
+        Wr(b1 + 4 * k + (mins == model + 0x4C - 4 * k ? 0 : 0xC), b2);
+      }
+      win.push_back(a.All());
+      Run({0x4F8C20, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {h, mins, maxs}}, win, g, s, "random");
+      break;
+    }
+    case 14: {
+      // The texture memory alone: its outs any of 0, the arena, or the
+      // globals it sums into.
+      FrameTextures(a, g, win);
+      auto out = [&] {
+        return g() % 4 ? bytes(4) : uint32_t(Pick(g, {0, 0x11D0C58, 0x11D4D60, 0x11D4D68}));
+      };
+      const uint32_t o0 = out(), o1 = out(), o2 = out();
+      win.push_back(a.All());
+      Run({0x4DF810, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {o0, o1, o2}}, win, g, s, "random");
+      break;
+    }
+    case 15:
+      FrameCounters(a, g, win);
+      win.push_back(a.All());
+      Run({0x4D3ED0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    case 16: {
+      // The frame's end: its counters', the commands (r_skipBackEnd on or
+      // off), the times 0x15364F0 and 0x1549B34 to outs or none.
+      FrameCounters(a, g, win);
+      FrameCommands(a, g, win);
+      FrameCvar(a, g, 0x153455C, g() % 4 ? 0 : 1);
+      counts();
+      Wr(0x15364F0, g());
+      win.push_back({0x15364F0, 4});
+      const uint32_t front = g() % 4 ? bytes(4) : 0, back = g() % 4 ? bytes(4) : 0;
+      win.push_back(a.All());
+      Run({0x4D4A60, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {front, back}}, win, g, s, "random");
+      break;
+    }
+    case 17:
+    case 18: {
+      // Commands 9 and 10: the used offset about the end; now and then the
+      // back end's data put so that the command's address is 0 (its counter
+      // then low in the first page).
+      const uint32_t fn = g() % 2 ? 0x4D4B40 : 0x4D4B70, size = fn == 0x4D4B40 ? 4 : 8;
+      if (g() % 8 == 0) {
+        const uint32_t used = 0x3FFF8 - size - 4 * (g() % 4), next = used + size;
+        const uint32_t bed = 0u - (next + 0x24D700 - size), counter = bed + 0x28D700;
+        Wr(0x1549698, bed);
+        Wr(counter, used);
+        win.push_back({counter, 4});
+      } else if (g() % 8 == 0) {
+        // A used offset whose sum passes 2^31 (refused: unsigned).
+        const uint32_t counter = a.Alloc(4);
+        Wr(0x1549698, counter - 0x28D700);
+        Wr(counter, 0x80000000u - 4 * (g() % 4));
+        win.push_back({counter, 4});
+      } else {
+        FrameCommands(a, g, win);
+      }
+      Run({fn, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {g() % 4 ? uint32_t(g()) : uint32_t(Pick(g, {0, 1, -1}))}}, win, g, s, "random");
+      break;
+    }
+    case 19:
+      win.push_back({0x15364F4, 4});
+      Run({0x4D4BB0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {uint32_t(g())}}, win, g, s, "random");
+      break;
+    case 20:
+    case 21: {
+      // A trace's surface names: the trace's answers from its stub (a name
+      // or none, inside a solid or not, any flags and contents); outs of
+      // 1-128 bytes (a guard byte before each).
+      const uint32_t size = g() % 4 ? 8 + g() % 121 : uint32_t(Pick(g, {1, 2, 3, 4, 5}));
+      // Start and dir now and then NaNs in the same component (FADD's
+      // memory operand: a QNaN on the stack beats a memory SNaN).
+      auto out = [&] { return bytes(size + 8) + 4; };
+      const uint32_t start = vec(3, -4096, 4096, 16), dir = vec(3, -1, 1, 16), o0 = out(), o1 = out(), o2 = out();
+      if (g() % 4 == 0) {
+        const uint32_t k = 4 * (g() % 3);
+        Wr(start + k, 0x7F800001u | (g() & 0x803FFFFEu));
+        Wr(dir + k, 0x7FC00000u | (g() & 0x803FFFFFu));
+      }
+      win.push_back(a.All());
+      Run({0x4D4BC0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {start, dir, o0, o1, o2, size}}, win, g, s, "random");
+      break;
+    }
+    case 22: {
+      g_font = bytes(0x5008);
+      WrF(g_font + 0x5004, Value(g, 0, 64, 64));
+      Run({0x4D5D30, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {uint32_t(g()), std::bit_cast<uint32_t>(Value(g, 0, 4, 64))}}, win,
+          g, s, "random");
+      break;
+    }
+    case 23: {
+      std::vector<uint32_t> args;
+      for (int k = 0; k < 9; k++) args.push_back(g());
+      Run({0x4D5D60, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], args}, win, g, s, "random");
+      break;
+    }
+    case 24:
+      win.push_back({0x15495B0, 8});
+      Run({g() % 2 ? 0x4ADAD0u : 0x4ADAF0u, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {uint32_t(g()), uint32_t(g())}}, win, g, s,
+          "random");
+      break;
+    case 25: {
+      // A number at a point: the block missing now and then (made on the
+      // heap at the limit's size), the count at, below or past the limit.
+      const uint32_t limit = g() % 4 ? 1 + g() % 16 : uint32_t(Pick(g, {0, 1, 64}));
+      const uint32_t n = g() % 4 ? g() % (limit + 1) : uint32_t(Pick(g, {0, int32_t(limit), int32_t(limit) + 1}));
+      const uint32_t region = bytes(40 * 2);
+      const bool missing = g() % 8 == 0;
+      Wr(0x15495BC, limit);
+      Wr(0x15495B8, n);
+      Wr(0x15495C0, missing ? 0 : region - 40 * n);
+      Wr(0x1536360, g());
+      win.push_back({0x15495B8, 0xC});
+      if (missing) win.push_back({kHeap, ((limit * 40 + 15) & ~15u) + 0x400});
+      win.push_back(a.All());
+      Run({0x4ADB10, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {vec(3, -100, 100, 16), uint32_t(g()), vec(3, 0, 1, 16), uint32_t(g())}},
+          win, g, s, "random");
+      break;
+    }
+    case 26:
+    case 27: {
+      // The numbers at points: up to 8, their times past, at and before
+      // their durations (and their halves), negative, durations of 0;
+      // the axis 0x1536348 and huge times now and then (FSIN's range).
+      const uint32_t n = g() % 8 ? g() % 9 : uint32_t(Pick(g, {0, -1})), block = bytes(40 * 8), now = g();
+      Wr(0x15495B8, n);
+      Wr(0x15495C0, block);
+      Wr(0x1536360, now);
+      for (uint32_t k = 0; k < 3; k++) WrF(0x1536348 + 4 * k, Value(g, -1, 1, 32));
+      for (uint32_t i = 0; i < 8; i++) {
+        const uint32_t e = block + 40 * i, d = g() % 8 ? g() % 4000 : uint32_t(Pick(g, {0, 1, 2, 0x7FFFFFFF}));
+        const uint32_t t = uint32_t(Pick(g, {0, 1, int32_t(d / 2), int32_t(d / 2 + 1), int32_t(d), int32_t(d + 1), -1, int32_t(g() % 4000),
+                                             int32_t(g() % 0x40000000)}));
+        for (uint32_t k = 0; k < 0x18; k += 4) WrF(e + k, Value(g, -1000, 1000, 16));
+        Wr(e + 0x1C, g());
+        Wr(e + 0x20, now - t);
+        // Now and then a height that nearly cancels the rise t x 0.064
+        // (where the order of the three terms shows).
+        if (g() % 4 == 0) WrF(e + 8, -float(double(int32_t(t)) * double(0.064f)) * (g() % 2 ? 1.0f : 1.0000001f));
+        Wr(e + 0x24, d);
+      }
+      win.push_back({0x15495B8, 4});
+      win.push_back({0x1536348, 0xC});
+      win.push_back(a.All());
+      Run({0x4AD480, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    }
+    case 28: {
+      FrameCvar(a, g, 0x153455C, g() % 4 ? 0 : 1);
+      FrameCommands(a, g, win);
+      Run({0x4D41A0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    }
+    case 29:
+      FrameGrid(a, g, win);
+      for (uint32_t va : {0xC951A4u, 0xC951A8u, 0xC952C0u, 0xC952C4u}) Wr(va, g());
+      win.push_back(a.All());
+      Run({0x4A97B0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    case 30:
+      FrameWorld(a, g);
+      win.push_back({0x1538514, 4});
+      win.push_back(a.All());
+      Run({0x4D0870, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    case 31:
+      FrameModels(a, g);
+      win.push_back({0x15384FC, 0xC});
+      win.push_back(a.All());
+      Run({0x4F8D50, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {uint32_t(g())}}, win, g, s, "random");
+      break;
+    case 32: {
+      // r_textureMode: one of the six modes' names (any case), another word
+      // or none; the images.
+      FrameImages(a, g);
+      const uint32_t name = FrameName(a, g, {Rd(0x564308), Rd(0x564314), Rd(0x564320), Rd(0x56432C), Rd(0x564338), Rd(0x564344)});
+      win.push_back({0x5642FC, 8});
+      win.push_back(a.All());
+      Run({0x4DF740, name, rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    }
+    case 33:
+      FrameCvar(a, g, 0x1534558, 0, 0, FrameName(a, g, {0x54E4BC, 0x54E4AC, 0x54E498}));
+      win.push_back({0x1534798, 4});
+      win.push_back(a.All());
+      Run({0x4A70A0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {}}, win, g, s, "random");
+      break;
+    case 34:
+    case 35: {
+      // RE_BeginFrame: r_measureOverdraw on (with too few stencil bits or
+      // cg_shadows 2) or off, each cvar it applies modified or not (their
+      // names any of theirs, others or none), the PN triangles' and the
+      // fog distance's entries there or not, the per-frame surfaces on or
+      // off, glGetError checked or not, stereo frames 0-3 with stereo on
+      // or off, r_drawBuffer GL_FRONT or another.
+      auto bit = [&](uint32_t n) { return g() % n == 0 ? 1u : 0u; };
+      FrameCvar(a, g, 0x15343EC, bit(3), bit(3));
+      Wr(0x1534768, uint32_t(Pick(g, {0, 3, 4, 8})));
+      FrameCvar(a, g, 0x15343D8, uint32_t(Pick(g, {0, 1, 2, 3})));
+      Wr(0x1534628, g());
+      Wr(0x1535A2C, g());
+      FrameCvar(a, g, 0x1534414, 0, bit(4), FrameName(a, g, {Rd(0x564308), Rd(0x564314), Rd(0x564338)}));
+      FrameImages(a, g);
+      FrameGrid(a, g, win);
+      if (g() % 3 == 0) Wr(0x15348C0, 0);
+      FrameCvar(a, g, 0x1534428, uint32_t(Pick(g, {0, 3, 7, 8, 9, -1})), bit(2));
+      WrF(Rd(0x1534428) + 0x1C, g() % 8 ? float(int32_t(Rd(Rd(0x1534428) + 0x20))) : Value(g, 0, 10, 256));
+      Wr(0x15347AC, uint32_t(Pick(g, {0, 7, 8})));
+      FrameCvar(a, g, 0x15344BC, 0, bit(2), FrameName(a, g, {0x5427E4, 0x54DFE4}));
+      FrameCvar(a, g, 0x15344B4, 0, bit(2), FrameName(a, g, {0x5427E4, 0x54E008}));
+      Wr(0x1534794, bit(2));
+      FrameCvar(a, g, 0x1534558, 0, bit(2), FrameName(a, g, {0x54E4BC, 0x54E4AC, 0x54E498}));
+      FrameCvar(a, g, 0x15343F8, 0, bit(4));
+      Wr(0x1534788, bit(2));
+      FrameCvar(a, g, 0x15346BC, bit(2));
+      FrameWorld(a, g);
+      FrameModels(a, g);
+      FrameCvar(a, g, 0x1534690, bit(3));
+      FrameCvar(a, g, 0x153455C, bit(4));
+      Wr(0x15347D8, bit(3));
+      FrameCvar(a, g, 0x15344E8, 0, 0, FrameName(a, g, {0x54C9C4}));
+      FrameCommands(a, g, win);
+      for (uint32_t va : {0x1535A24u, 0x1534628u, 0x1535A2Cu, 0x15347B4u, 0x15347B0u, 0x1534798u, 0x1538514u}) win.push_back({va, 4});
+      win.push_back({0x5642FC, 8});
+      win.push_back({0x15384FC, 0xC});
+      win.push_back(a.All());
+      Run({0x4D4680, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {uint32_t(Pick(g, {0, 0, 1, 2, 3, -1}))}}, win, g, s, "random");
+      break;
+    }
+    case 36: {
+      // An image uploaded: its size the columns and rows or not, changed or
+      // not.
+      const uint32_t n = g() % 16, img = bytes(0x60), cols = g() % 4 ? 1 + g() % 512 : g(), rows = g() % 4 ? 1 + g() % 512 : g();
+      Wr(0x1535A3C + 4 * n, img);
+      g_mem.write<uint16_t>(img + 0x40, uint16_t(g() % 2 ? cols : g()));
+      g_mem.write<uint16_t>(img + 0x42, uint16_t(g() % 2 ? rows : g()));
+      win.push_back(a.All());
+      Run({0x4CD1F0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {uint32_t(g()), uint32_t(g()), cols, rows, uint32_t(g()), n, g() % 3 ? 1u : 0u}},
+          win, g, s, "random");
+      break;
+    }
+    default: {
+      // The back end's debug draws, or the polygons or lines alone: the
+      // queues (DebugQueues; the line count any, negative now and then),
+      // the client's arrays' state (0x153465C 3 or not, the NV range
+      // 0x153479C 0-2, 0x15347B8), the lock entries there or not, culling's
+      // state 0x153462C, the fog's; the numbers at points as above but
+      // fewer.
+      DebugQueues();
+      g_debug_ready = true;
+      FrameFog(a, g, win);
+      Wr(0x153465C, g() % 2 ? 3 : g() % 4);
+      Wr(0x153479C, g() % 2 ? 0 : g() % 3);
+      Wr(0x15347B8, g() % 2);
+      Wr(0x17F0C60, g());
+      Wr(0x16E8C40, g());
+      Wr(0x1535AC4, g());
+      Wr(0x153462C, g() % 2 ? 2 : g() % 4);
+      if (g() % 4 == 0) Wr(0x1534DDC, 0);
+      if (g() % 4 == 0) Wr(0x1534C2C, 0);
+      if (g() % 4 == 0) Wr(0x1549584, uint32_t(Pick(g, {0, -1, 1})));
+      for (uint32_t va : {0x15495C4u, 0x15495C8u, 0x15495E8u}) Wr(va, g());
+      for (uint32_t va : {0x153465C, 0x153462C, 0x1549584, 0x15495C4, 0x15495C8, 0x15495E8}) win.push_back({va, 4});
+      win.push_back({0x15495D8, 4});
+      const uint32_t lines = bytes(0x2C * 8);
+      for (uint32_t i = 0; i < 8; i++) {
+        for (uint32_t k = 0x18; k < 0x28; k += 4) WrF(lines + 0x2C * i + k, Value(g, -0.5f, 1.5f, 64));
+        Wr(lines + 0x2C * i + 0x28, g() % 2 ? 0 : g());
+      }
+      const uint32_t n = g() % 8 ? g() % 9 : uint32_t(Pick(g, {0, -1}));
+      const uint32_t fn = uint32_t(Pick(g, {0x4AD5C0, 0x4ACB20, 0x4ACDD0, 0x4ACDD0}));
+      if (fn == 0x4AD5C0) {
+        Wr(0x15495A8, n);
+        Wr(0x15495AC, lines);
+        Wr(0x15495B0, g() % 9);
+        Wr(0x15495B4, lines);
+        Wr(0x15495B8, g() % 3);
+        Wr(0x15495C0, bytes(40 * 2));
+        for (uint32_t i = 0; i < 2; i++) {
+          Wr(Rd(0x15495C0) + 40 * i + 0x20, Rd(0x1536360) - g() % 50);
+          Wr(Rd(0x15495C0) + 40 * i + 0x24, g() % 100);
+        }
+        win.push_back({0x15495A8, 4});
+        win.push_back({0x15495B8, 4});
+      }
+      win.push_back(a.All());
+      Run({fn, n, rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], {fn == 0x4ACDD0 ? lines : uint32_t(g())}}, win, g, s, "random");
+      break;
+    }
+  }
+}
+
 // ---- the vector helpers -----------------------------------------------------------
 
 // A float NaN of either sign, quiet or signalling, of any payload.
@@ -5390,6 +6496,7 @@ int main(int argc, char** argv) {
   Wr(kSetLastErrorPtr, kSetLastError);
   Wr(kTimeGetTimePtr, kTimeGetTime);
   Wr(kRegisterPtr, kRegister);
+  for (uint32_t i = 0; i < std::size(kPtrs); i++) Wr(kPtrs[i].ptr, kPtrTargets + 0x10 * i);
   // The reference: the x87 model's exact arithmetic throughout.
   recomp::x87::run::g_doubles = false;
 
@@ -5397,6 +6504,13 @@ int main(int argc, char** argv) {
   Stats s;
   Arena a;
   World w;
+  // RENDER_ORACLE_FRAMES=1 runs the scene's and the frame's entries alone
+  // (FrameCase; for their mutants: no other case reaches them).
+  if (std::getenv("RENDER_ORACLE_FRAMES")) {
+    for (int i = 0; i < 60000; i++) FrameCase(a, g, s);
+    std::printf("%d cases (frame entries only; %d calls out): %d mismatched\n", s.cases, s.calls, s.failures);
+    return s.failures ? 1 : 0;
+  }
   for (int world = 0; world < 9000; world++) {
     const uint32_t special = world < 3000 ? 0 : world < 6000 ? 4 : 48;
     NewWorld(a, g, w, special);
@@ -5420,6 +6534,7 @@ int main(int argc, char** argv) {
   for (int i = 0; i < 63000; i++) LightCase(a, g, s);
   for (int i = 0; i < 52000; i++) HelperCase(a, g, s);
   for (int i = 0; i < 36000; i++) DebugCase(a, g, s);
+  for (int i = 0; i < 60000; i++) FrameCase(a, g, s);
   const int random = s.cases;
   for (int i = 2; i < argc; i++)
     if (!RunCaptures(argv[i], g, s)) return 1;

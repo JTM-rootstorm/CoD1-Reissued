@@ -45,7 +45,7 @@ speed.
   the target's once ended or without a transition, at once between
   GL_EXP and GL_LINEAR, else colour, start, end and density lerped by
   the time 0x1536360 passed, clamped to 1; a linear fog's end nearer than
-  the far clip becomes it; debug level 5 (0x15346E0) prints through
+  the far clip becomes it; r_speeds 5 (0x15346E0) prints through
   ri.Printf with doubles from an 8-aligned frame), the far clip 0x4C9B90
   (2048 for the refdef flag 1, the cvar 0x15343F0, 2^19 for 0), the
   projection 0x4C9C00 (FPTAN keeps 64 bits: done on the x87 model, on the
@@ -193,6 +193,12 @@ speed.
   2.043-2.214 ms (main) and 1.965-2.148 ms, p95 2.8-3.1 and 2.7-3.1, p99
   3.2-3.7 and 3.1-3.6: not worse; errors 3; the walks end at (4346,
   -4852).
+  With layer 13 (out/fe13): 13 of 13 shared, 46 and 47 of 1640 in-level
+  identical against the two runs of main (a second run of this build 47
+  and 46; the two runs of main 46, this build's two 46); with four mutant
+  oracles running throughout, mean 1.866-2.076 ms (main) and 1.777-2.013
+  ms, p95 2.6-3.1 and 2.5-3.2, p99 2.7-4.1 and 2.7-3.6: no difference
+  measurable; errors 3; the frame runs end at (4346, -4852).
 - Layer 4, the cell walk (2026-11-09): a polygon's clip 0x4D7F30 (ECX
   plane; stack points, &count, out: distances z + x + y less the plane's,
   behind below -0.001, in front above 0.001; none in front: count 0, EAX
@@ -1159,6 +1165,232 @@ speed.
   0x1F00) and a negative parent's byte; round 2 added strncpy's count
   0x5E, caught; logs mut19_round1-2.log and mut19_final.log in the
   session's scratchpad.
+- Layer 13, the refexport's per-frame entries and the back end's debug
+  draws (2026-11-18): the refexport table 0xC950B8 (filled by 0x4A94C0;
+  the client copies its 0x3B dwords to 0x1426D60, so slot s is called
+  through 0x1426D60 + s - 0xC950B8). Names only where the binary gives
+  them: RE_AddPolysToScene 0x4DEAE0 and RE_BeginFrame 0x4D4680 (their
+  own error strings), the command r_smc_flush 0x4DB370 (its registration
+  through the refimport's command add at 0x4A8C81), the cvars by their
+  registrations (r_speeds 0x15346E0, com_statmon 0x14E43EC, r_skipBackEnd
+  0x153455C, r_measureOverdraw 0x15343EC, cg_shadows 0x15343D8,
+  r_textureMode 0x1534414, r_ati_truform_tess, _pointmode and
+  _normalmode 0x1534428, 0x15344BC, 0x15344B4, r_nv_fogdist_mode
+  0x1534558, r_gamma 0x15343F8, r_vbo_paranoia 0x15346BC,
+  r_ignoreGLErrors 0x1534690, r_drawBuffer 0x15344E8,
+  r_diffuseSunQuality 0x15344D4, r_diffuseSunSteps 0x153471C,
+  r_maxEntLights 0x1534480, r_fog 0x15347F4). The scene's counts:
+  entities 0x154D70C, coronas 0x154D710, dlights 0x154D714, polygon
+  vertices 0x154D71C, polygons 0x154D730, their firsts 0x154D72C,
+  0x154D728, 0x154D718 and 0x154D720; the back end's buffer 0x1549698
+  holds dlights at +0x80000 (0x88 bytes), coronas at +0x81100 (0x30),
+  polygons at +0x1FD700 (16) and their vertices at +0x20D700 (32). The
+  scene: the firsts set to the counts 0x4DE950; a polygon 0x4DEA40
+  (shader, 0 for the default shader's +0x44; vertex count; vertices:
+  when registered (0x1535A20) and unless the vertices pass 0x15344F8 or
+  the polygons reach 0x1534504, both signed: type 2, shader, count, its
+  vertices' place, rep movs of count << 5 bytes, which wraps to 0 at a
+  count of 2^27); RE_AddPolysToScene (a null shader warns through
+  ri.Printf code 2; each polygon as 0x4DEA40 adds one, the vertex limit
+  checked against the counts at the call plus the vertices so far); a
+  dlight 0x4DED10 (origin, intensity, r, g, b: below 32 and an intensity
+  not at or below 0, NaN passing: type 2, the intensity's bits at +0x74,
+  its square x 1/32 at +0x10 (kept unrounded), that x the scale
+  0x1536290 x each component at +0x24-0x2C, the origin at +0x44, ones at
+  +0x20/+0x30/+0x40/+0x50/+0x68, 0.001 at +0x60, a cone of 180 at +0x70);
+  a corona 0x4DEE20 (origin, colour, scale, id, flags; below 32; an id
+  outside 0-0x7FF warns through ri.Printf code 1); the cull's far
+  distance 0x4DA0C0 (0x11BEB84: the argument above 0 or NaN, else 0); a
+  fog set 0x4C8AA0 (64-byte fogs at 0x15357E0, of which layer 1's fog
+  now, its start and its target are fogs 5, 6 and 7: for a fog other than
+  8 the times as floats (FILD, FSTP), the colour, exponential (0x800)
+  below a density of 1 (NaN too), else linear with a density of 1, start
+  and end of 0 clearing the set flag +0x30; fog 8 changes the fog now:
+  mode 3 clears it (and fog 3) and 0x13F9CF8, another fog that is set
+  becomes 0x13F9CF8 and the target, starting from the fog now (or itself
+  without one), at once without a time); the fogs saved and restored
+  0x4C8C40/0x4C8C90 (0x240 bytes and 0x13F9CF8; ri.Error "couldn't
+  save/restore fog settings" for a buffer below 0x244, unsigned; EAX
+  0x244); 128 entries of 0x4C bytes at 0x154B100 cleared and linked free
+  (head 0x154D700) 0x4CEC10; the pending frees 0x4DF5F0 (cleared) and
+  0x4DF600 (8-byte entries from 0x11D0A58, last first: kind 0 through the
+  refimport's 0x1549650, kind 1 its 0x154961C, others nothing); a
+  model's bounds 0x4F8C20 (its brush model's, the model's +0x4C read
+  again for each component, zeros without); r_smc_flush (each model
+  cache entry in use, from the list's last: freed by 0x4DA0F0 from the
+  root, unlinked, its first block appended to the free list of level 0);
+  an image of 0x1535A3C uploaded 0x4CD1F0 (bound; at its 16-bit size and
+  changed glTexSubImage2D, at another the size stored and glTexImage2D
+  with linear filters and edge clamping). The frame: the commands so far
+  run 0x4D41A0 (the list's end, 0x4CEA70 without r_skipBackEnd; ECX
+  unchanged); RE_BeginFrame (the frame count; r_measureOverdraw's
+  stencil set up, or refused with a warning and ri.Cvar_Set "0" for fewer
+  than 4 stencil bits (0x1534768) or cg_shadows 2; r_textureMode through
+  0x4DF740 (the six modes of 0x564308 by Q_stricmpn, "bad filter name"
+  through ri.Printf, each mipmapped image bound and given both filters);
+  the light grid's settings 0x4A97B0; with the PN triangles entry
+  0x15348C0 each modified truform cvar (the tess level lowered to
+  0x15347AC through va("%d"); a point mode that is neither LINEAR nor
+  CUBIC is set to LINEAR but CUBIC (0x87F6) is used, as in the original);
+  with 0x1534794 r_nv_fogdist_mode through 0x4A70A0 (by name into
+  0x1534798 and glFogi; another name set to GL_EYE_RADIAL_NV); r_gamma
+  through 0x4E59D0; with 0x1534788 and r_vbo_paranoia a world surface
+  (0x4D0870), 0x4FC1B0(3) and a model surface (0x4F8D50) a frame;
+  glGetError unless r_ignoreGLErrors; the draw buffer command 8 (8
+  bytes): stereo (0x15347D8) takes frames 1 and 2 (GL_BACK_LEFT/RIGHT,
+  else ri.Error and no buffer), mono errors for a frame other than 0 and
+  takes GL_FRONT for r_drawBuffer "GL_FRONT", else GL_BACK); the light
+  grid's settings 0x4A97B0 (r_diffuseSunQuality clamped to 0-2 into
+  0x15364C0, r_diffuseSunSteps to 1-5 into 0x15364C4 (layers 10-12's
+  grid size) and 0.5 over its square into 0x15364C8, r_maxEntLights
+  between 0x15364C0 + 1 and 0x153475C into 0x15364BC (the light limit);
+  the steps' cvar modified clears the corner cache's 2 MB and counters;
+  ECX ends the square, popped from the slot of the ECX it saved); a world
+  surface a frame 0x4D0870 (from the cursor 0x1538514, wrapping at the
+  world's count +0x9C and stopping at the cursor, the next of type 0x1A
+  gets 0x4D0700: ESI the surface, its reference's +4 +0x18C and its least
+  16-bit index of +0x44 from +0x48, x 32); a model surface a frame
+  0x4F8D50 (cursors 0x15384FC model, 0x1538500 level, 0x1538504 surface,
+  over the XModels +0x54 as the DObj accessors read them: the surface is
+  incremented before its test and reset to 0 at a new level or model, so
+  a level's first surface is passed over, and the search restarts from
+  each model it moves to, never ending when no model reached has a level
+  with two surfaces: the original's); the frame's end 0x4D4A60 (swap
+  command 11 at the used offset, unchecked; the list's end; the counters
+  0x4D3ED0; the commands run without r_skipBackEnd; the used offset and
+  the scene's counts and firsts cleared; the times 0x15364F0 and
+  0x1549B34 handed out and cleared); the counters 0x4D3ED0 (with
+  com_statmon the texture memory 0x4DF810; with the stats 0x15364F4 (set
+  by 0x4D4BB0) its counts, texture memory, the overdraw per pixel
+  (0x1549B1C over 0x15347C8 x 0x15347C4) and entities; r_speeds 1 the
+  counts, triangles / 3, texture memory x 2^-20 as doubles and the
+  overdraw, 2 the patches', 3 the view cluster 0x15364A0, 4 the dlights'
+  (with surfaces), 6 the flares'; then 0x15364CC-0x15364EF and
+  0x1549B04-0x1549B37 cleared); the texture memory 0x4DF810 (once a
+  frame: the sizes +0x48 of the images (0x153A51C at 0x153A520) used
+  this frame or the last (+0x5C) into 0x11D4D60, of type 3 (+0x50) also
+  into 0x11D0C58, their +0x4C into 0x11D4D68; above 0x1400000 with
+  com_statmon StatMon_UpdateEntry's entry 6 inlined,
+  "gfx/2d/warning@textures.jpg"; the outs from the sums read before
+  any is written); commands 9 0x4D4B40 (4 bytes) and 10 0x4D4B70 (8, for
+  an argument above 0); the stats 0x4D4BB0; a trace's surface names
+  0x4D4BC0 (start, dir, three outs, size: CM_Trace from the start to
+  start + dir x 262144 (stored), mask 0xF83FFF7; EAX 0 from inside a
+  solid (+0x2F), with +0x2E, at a fraction of exactly 1 (NaN goes on),
+  without a name (+0x24) or when an out ends full; else 1: the name
+  copied, the material ((flags +0x1C >> 20) & 0x1F, 1-0x16 from 0x5646C0,
+  else "^1default^7"), "solid" or "^3nonsolid^7" by contents bit 1, then
+  each surface parameter of the table 0x564830 whose surface flag or
+  content matches, after a space; the first out's length kept in the
+  dir's argument slot); a font's height at a scale 0x4D5D30 (the
+  refimport's 0x1549694 with both, its +0x5004 x the scale, _ftol); text
+  0x4D5D60 (0x4D6400 with -1 and 0 after the sixth argument); the
+  client's debug text and lines 0x4ADAD0/0x4ADAF0 (0x15495A0/0x154959C,
+  0x15495B4/0x15495B0); a number shown at a point for a while 0x4ADB10
+  (40-byte entries at 0x15495C0, made at the limit 0x15495BC by 0x42A480
+  when missing, the count 0x15495B8 compared equal to the limit only).
+  The back end's debug draws 0x4AD5C0 (from RB_SwapBuffers): the numbers
+  0x4AD480 (each past its duration or negative replaced by the last;
+  else alpha 1, 2 - 2t/d over the second half, queued as text (0x4AD860,
+  scale 0.5, va("%i")) at the point moved by 4 sin(t x 0x55B890 + index)
+  along 0x1536348 and up by t x 0.064 (FSIN on the x87 model, the point
+  in the frame at e - 0xC)), the polygons 0x4ACB20 (client arrays to
+  plain ones, the white image, 0x4CBBE0(0x400), the view's matrices, fog
+  off, points locked, culling off; each polygon at state 0x165, then
+  0x1100 at depth range 0..0; counts cleared, fog back), the lines
+  0x4ACDD0 (the queue's and the client's: the immediate-mode batch per
+  line at state 0x100 with the flag, else 0x10100, colour bytes by _ftol
+  of x 255, unclamped), the text 0x4ACF50 (the queue's and the client's;
+  native in the back end). GL calls go through their qgl pointers
+  (CallPtr), as the originals make them: the back end's host entry points
+  lack glTexImage2D, glTexParameter, the stencil mask and clear,
+  glGetError and these extensions, and the pointers keep the GL error
+  checks' wrappers in the path. Every call site and data pointer checked
+  (CoDSP.exe; the game DLLs reach the refexport only through the client's
+  syscalls): the cgame and UI syscall exits (0x403DF5, 0x410D5x-0x41102C)
+  clear EAX or return it as the syscall's result (0x4D4BC0's and
+  0x4D5D30's EAX reach cgame so); the fogs' save and restore callers
+  (0x4048EC, 0x44A2AE, 0x40491C) read EAX; no site reads ECX or EDX. The
+  natives leave EAX, ECX and EDX as the originals do anyway, but for
+  0x4D3ED0, 0x4D4A60, RE_BeginFrame and the functions only it calls,
+  0x4DF810, 0x4D5D30 (_ftol's EDX), 0x4D4BC0 (EAX only), 0x4CD1F0 and the
+  debug draws, whose callers read none; AX of 0x4DED10, 0x4DA0C0 and
+  0x4C8AA0 holds FNSTSW's status word, made on the x87 model (its sticky
+  exception bits are the model's, as everywhere). 0x4DEA40's and
+  0x4DED10's callers in the exe include forwarding thunks (0x48F470,
+  0x48F4A0; 0x485680 in the table at 0x54F994) whose callers were not
+  traced: the natives' EAX, ECX and EDX are the originals' for those
+  two. Left lifted under the layer: 0x4E59D0 (r_gamma's colour mappings
+  and the gamma ramp: display setup), 0x4FC1B0 (181 instructions of
+  vertex buffer uploads through GL), 0x4D0700 and 0x4815E0 (a world's
+  and a model surface's vertex buffer uploads), Q_stricmpn 0x4406F0, va,
+  strncpy, the zeroed allocation, and natives elsewhere (CM_Trace, the
+  back end's). Not ported (optional, not reached): 0x4AC370, 0x4AC550,
+  0x4AC0A0.
+- Layer 13 oracle and mutations: FrameCase (60000 cases, about 1600 an
+  entry): the GL entry points and the refimport's functions the entries
+  call through pointers point at recorders (kPtrs: arguments compared,
+  stdcall popped; glGetError answers 0 or now and then an error, the font
+  call the case's font); new stubs the back end's command loop 0x4CEA70,
+  GL_Bind, GL_State, the client arrays 0x4CBBE0, the batch's begin and
+  vertex, its text draw 0x4ACF50, the text command 0x4D6400, 0x4D0700,
+  0x4815E0, 0x4FC1B0 and 0x4E59D0; CM_Trace's stub also answers +0x2E and
+  a surface name (or none) under 0x4D4BC0. The lifter follows replaced
+  functions too, so 0x4CEA70's lifted body brings the whole back end and
+  image loading into the oracle: 100 functions native in the game get
+  forwarders to their lifted bodies, never run (render_backend_oracle
+  six more). Fixtures: counts about each limit (31-33, 0x7FF and 0x800,
+  used offsets about 0x3FFF8, the command at address 0), intensities and
+  densities 0, -0, 1 and NaN, fog times past 2^24 and negative, fog
+  modes 0-8, buffers of 0x243-0x245 bytes, aliasing outs (the bounds over
+  the model's +0x4C, the texture memory's outs on its sums), cvar names in
+  any case and others, numbers at the edges of their durations and
+  halves, world and model walks over every kind of entry (the model
+  walk's first levels given two surfaces, so that it ends), stereo frames
+  0-3; values searched or constructed where an order shows only through a
+  float's rounding (a dlight's scale, intensity and component whose
+  products round apart by their grouping; an overdraw sum and screen
+  whose quotient and product by the reciprocal round apart, the quotient
+  within 2^-52 of a float's midpoint; heights that nearly cancel the
+  numbers' rise). The back end loop's stub leaves a time in 0x1549B34;
+  the pending frees' callees keep ECX. RENDER_ORACLE_FRAMES=1 runs
+  FrameCase alone (0.6 s; no other case reaches these natives), which
+  the mutants use. Results: render_oracle 967478 random cases, 4.33M
+  calls out, 0 mismatched, 33 s, peak 142 MB; ctest 68 of 68. 516
+  mutants: 494 caught (11 by crashing or hanging the oracle: wild
+  command, list and table pointers, a walk without its end); 22 survive,
+  all equivalent: the return addresses of calls into callees that are
+  not stubs (0x4DA0F0 from r_smc_flush, 0x4D3ED0 from the frame's end,
+  strncpy, Q_stricmpn twice: five), whose slots are below ESP and unread,
+  and r_smc_flush's frees pushed at an ESP 4 lower (nothing reads that
+  frame); Q_stricmpn's count 9999 for 99999 (the names end long before)
+  and its strings swapped (case-blind equality is symmetric, only its 0
+  is tested); r_smc_flush's unlinking from the entry rather than the
+  list's last read again (0x4DA0F0 touches only the blocks' free lists,
+  never the list in use, so the last is the entry); RE_AddPolysToScene's
+  vertex limit against the global count plus the vertices (it equals the
+  local sum: only the loop changes it); a dlight's radius i x (i x 1/32)
+  (a power of two scales exactly); r_speeds' MB by dividing by 2^20 (the
+  constant is 2^-20, both exact); the numbers' fade t / (d x 0.5) (the
+  same exact quotient as 2t / d); 0x4D0870's `>=` for `>` (an equal index
+  replaces an equal value); the texture modes' null name test dropped and
+  the fog distance mode's `continue` for `break` on no name (the table's
+  six names are all there; with no name every mode is skipped all the
+  same); the frame's end's second clear of the used offset (the list's
+  end cleared it at the same address and neither 0x4D3ED0 nor the back
+  end's loop writes it); 0x4DF600's EAX set to the block before a free of
+  kind 1 (read again after it; the cdecl callee does not read EAX); the
+  trace names' first and last bytes of the first out cleared (strncpy
+  over all size bytes follows at once); the polygon's bytes as n x 32 (the
+  same value). The first round (frames and the whole oracle, 40
+  survivors) missed every out allocated after the arena's window was
+  taken (the texture memory's, the frame's end's, the trace names'), the
+  rise's, products' and quotient's roundings (until the values above),
+  the texture limit's 0x1400000 exactly, NaNs in the trace's start and
+  dir together, the corner cache's tail, the stores of 0x1534628 and
+  0x1535A2C over zeros, cg_shadows 3, glGetError's 1, the frees'
+  callees' ECX and the back end's time; logs mut20_round1-4.log and
+  mut20_final.log in the session's scratchpad.
 - The oracle's time (2026-11-15): three quarters of a run went to the
   harness, not the code under test: each case's compared windows saved
   three times into newly grown vectors and compared a byte at a time.

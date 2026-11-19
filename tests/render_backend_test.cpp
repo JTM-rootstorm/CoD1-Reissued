@@ -330,6 +330,21 @@ void f_00427590(Ctx& c) { f_00427590_lifted(c); }
 // lifted bodies reach it.
 void f_004AD860_lifted(Ctx& c);
 void f_004AD860(Ctx& c) { f_004AD860_lifted(c); }
+// The pending frees, the debug draws' polygons, lines and numbers at
+// points, and the frame's counters and texture memory, native in the game
+// (src/render.cpp): here only lifted bodies reach them.
+void f_004DF600_lifted(Ctx& c);
+void f_004DF600(Ctx& c) { f_004DF600_lifted(c); }
+void f_004ACB20_lifted(Ctx& c);
+void f_004ACB20(Ctx& c) { f_004ACB20_lifted(c); }
+void f_004ACDD0_lifted(Ctx& c);
+void f_004ACDD0(Ctx& c) { f_004ACDD0_lifted(c); }
+void f_004AD480_lifted(Ctx& c);
+void f_004AD480(Ctx& c) { f_004AD480_lifted(c); }
+void f_004D3ED0_lifted(Ctx& c);
+void f_004D3ED0(Ctx& c) { f_004D3ED0_lifted(c); }
+void f_004DF810_lifted(Ctx& c);
+void f_004DF810(Ctx& c) { f_004DF810_lifted(c); }
 // The originals...
 void f_004C89D0_lifted(Ctx& c);
 void f_004C8A20_lifted(Ctx& c);
